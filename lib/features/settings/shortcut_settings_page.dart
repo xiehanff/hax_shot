@@ -1,23 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'autostart_service.dart';
-
-/// The GNOME custom shortcut location installed by
-/// scripts/install-gnome-shortcut.sh.
-final class ShortcutSettings {
-  static const mediaKeysSchema = 'org.gnome.settings-daemon.plugins.media-keys';
-  static const keyPath =
-      '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/hax-shot/';
-  static const bindingSchema =
-      'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$keyPath';
-  static const name = 'Hax Shot Capture';
-
-  const ShortcutSettings._();
-}
+import 'gnome_shortcut_service.dart';
 
 class ShortcutSettingsPage extends StatefulWidget {
   const ShortcutSettingsPage({required this.onClose, super.key});
@@ -55,15 +42,10 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   Future<void> _loadBinding() async {
     try {
-      final result = await _runGsettings([
-        'get',
-        ShortcutSettings.bindingSchema,
-        'binding',
-      ]);
-      final binding = _parseGvariantString(result.stdout.toString());
+      final binding = await GnomeShortcutService.instance.readBinding();
       if (!mounted) return;
       setState(() {
-        _binding = binding.isEmpty ? null : binding;
+        _binding = binding;
         _loading = false;
       });
     } on Object catch (error) {
@@ -118,7 +100,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     }
   }
 
-  Future<void> _startRecording() async {
+  void _startRecording() {
     setState(() {
       _recording = true;
       _message = '请按下新的快捷键（至少包含一个修饰键）';
@@ -129,7 +111,6 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
   }
 
   void _cancelRecording() {
-    if (!mounted) return;
     setState(() {
       _recording = false;
       _message = null;
@@ -177,18 +158,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     });
 
     try {
-      await _ensureCustomKeybindingIsActive();
-      await _setGsettings(
-        ShortcutSettings.bindingSchema,
-        'name',
-        ShortcutSettings.name,
-      );
-      await _setGsettings(
-        ShortcutSettings.bindingSchema,
-        'command',
-        _captureCommand,
-      );
-      await _setGsettings(ShortcutSettings.bindingSchema, 'binding', binding);
+      await GnomeShortcutService.instance.saveBinding(binding);
       if (!mounted) return;
       setState(() {
         _binding = binding;
@@ -213,10 +183,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     });
 
     try {
-      // Keep the relocatable GSettings entry in the collection, but clear its
-      // binding. This makes recording a new key later work without requiring
-      // the installer script to run again.
-      await _setGsettings(ShortcutSettings.bindingSchema, 'binding', '');
+      await GnomeShortcutService.instance.clearBinding();
       if (!mounted) return;
       setState(() {
         _binding = null;
@@ -230,51 +197,6 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
         _message = '删除快捷键失败：$error';
       });
     }
-  }
-
-  Future<void> _ensureCustomKeybindingIsActive() async {
-    final result = await _runGsettings([
-      'get',
-      ShortcutSettings.mediaKeysSchema,
-      'custom-keybindings',
-    ]);
-    final current = _parseGvariantArray(result.stdout.toString());
-    if (current.contains(ShortcutSettings.keyPath)) return;
-
-    current.add(ShortcutSettings.keyPath);
-    final value = '[${current.map(_quoteGvariantString).join(', ')}]';
-    await _runGsettings([
-      'set',
-      ShortcutSettings.mediaKeysSchema,
-      'custom-keybindings',
-      value,
-    ]);
-  }
-
-  Future<ProcessResult> _runGsettings(List<String> arguments) async {
-    final result = await Process.run('gsettings', arguments);
-    if (result.exitCode != 0) {
-      final error = result.stderr.toString().trim();
-      throw StateError(
-        error.isEmpty ? 'gsettings exited ${result.exitCode}' : error,
-      );
-    }
-    return result;
-  }
-
-  Future<void> _setGsettings(String schema, String key, String value) async {
-    await _runGsettings(['set', schema, key, value]);
-  }
-
-  String get _captureCommand {
-    final executable = Platform.resolvedExecutable;
-    // Process.run does not invoke a shell, but GNOME later parses this value
-    // as a command line. Quote paths containing spaces for that later parse.
-    final escaped = executable.replaceAll('"', '\\"');
-    final command = executable.contains(' ')
-        ? '"$escaped" --capture'
-        : '$executable --capture';
-    return command;
   }
 
   List<_ShortcutModifier> _pressedModifiers() {
@@ -359,28 +281,6 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     final label = key.keyLabel.trim();
     if (label.length == 1) return label.toUpperCase();
     return label.isEmpty ? '按键' : label;
-  }
-
-  String _parseGvariantString(String output) {
-    var value = output.trim();
-    if (value.startsWith('@s ')) value = value.substring(3).trim();
-    if (value == "''" || value == '""') return '';
-    if (value.length >= 2 &&
-        ((value.startsWith("'") && value.endsWith("'")) ||
-            (value.startsWith('"') && value.endsWith('"')))) {
-      value = value.substring(1, value.length - 1);
-    }
-    return value.replaceAll(r"\'", "'").replaceAll(r'\"', '"');
-  }
-
-  List<String> _parseGvariantArray(String output) {
-    return RegExp(
-      r'''['"]([^'"]*)['"]''',
-    ).allMatches(output).map((match) => match.group(1)!).toList();
-  }
-
-  String _quoteGvariantString(String value) {
-    return "'${value.replaceAll("'", r"\'")}'";
   }
 
   @override
