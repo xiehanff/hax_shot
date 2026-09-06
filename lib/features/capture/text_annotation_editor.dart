@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:hugeicons/hugeicons.dart';
 
 import 'annotation.dart';
 
@@ -208,8 +209,8 @@ final class _MoveHandle extends StatelessWidget {
     required this.onMoveEnd,
   });
 
-  static const width = 42.0;
-  static const height = 20.0;
+  static const width = 22.0;
+  static const height = 22.0;
 
   final VoidCallback onMoveStart;
   final ValueChanged<Offset> onMoveUpdate;
@@ -227,12 +228,17 @@ final class _MoveHandle extends StatelessWidget {
         onPanEnd: (_) => onMoveEnd(),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.86),
-            borderRadius: BorderRadius.circular(999),
+            color: Colors.black.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
             border: Border.all(color: Colors.white70),
           ),
           child: const Center(
-            child: Icon(Icons.drag_handle, size: 16, color: Colors.white),
+            child: HugeIcon(
+              icon: HugeIcons.strokeRoundedMove,
+              color: Colors.white,
+              size: 16,
+              strokeWidth: 1.5,
+            ),
           ),
         ),
       ),
@@ -263,7 +269,14 @@ final class _CloseButton extends StatelessWidget {
           child: const SizedBox(
             width: size,
             height: size,
-            child: Icon(Icons.close, size: 14, color: Colors.white),
+            child: Center(
+              child: HugeIcon(
+                icon: HugeIcons.strokeRoundedCancel01,
+                color: Colors.white,
+                size: 14,
+                strokeWidth: 1.5,
+              ),
+            ),
           ),
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hugeicons/hugeicons.dart';
 import 'package:hax_shot/features/capture/annotation.dart';
 import 'package:hax_shot/features/capture/text_annotation_editor.dart';
 
@@ -44,6 +45,7 @@ void main() {
     );
 
     expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(HugeIcon), findsNWidgets(2));
     for (final handle in TextResizeHandle.values) {
       expect(
         find.byKey(ValueKey('text-resize-${handle.name}')),
