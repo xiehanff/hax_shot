@@ -151,9 +151,11 @@ final class CaptureSession {
     final draft = draftAnnotation;
     _dragStart = null;
     draftAnnotation = null;
-    final isLargeEnough = draft == null
-        ? false
-        : draft.tool == CaptureTool.arrow
+    if (draft == null) {
+      return '请拖动绘制一个更大的标注';
+    }
+
+    final isLargeEnough = draft.tool == CaptureTool.arrow
         ? (draft.end - draft.start).distance >= 4
         : draft.rect.shortestSide >= 4;
     if (!isLargeEnough) {
