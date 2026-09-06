@@ -230,7 +230,7 @@ Hax Shot MVP 只保留：
 
 ## 6. 标注模型和绘制
 
-虽然 Hax Shot MVP 暂不实现标注，仍需要了解 Reticle 的模型边界。
+Reticle 的模型边界仍然值得参考；Hax Shot MVP1 暂不实现标注，而当前 MVP2 已在 Flutter 中实现矩形、箭头和文字标注。
 
 关键文件：
 

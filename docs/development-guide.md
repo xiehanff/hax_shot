@@ -463,7 +463,30 @@ build/linux/x64/debug/bundle/hax_shot --capture
 pkill -x hax_shot
 ```
 
-## 11. 已知限制和未完成项
+## 11. CI 与 GitHub Release
+
+GitHub Actions 配置位于 `.github/workflows/build-rpm.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布。
+
+发布前本地执行：
+
+```bash
+fvm flutter analyze
+fvm flutter test
+fvm flutter build linux --release
+cargo fmt --manifest-path rust/Cargo.toml --check
+cargo check --manifest-path rust/Cargo.toml
+cargo test --manifest-path rust/Cargo.toml
+```
+
+tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
+
+```text
+version: 1.2.0+9  →  git push origin v1.2.0
+```
+
+推送 tag 后，工作流会重新执行 Dart/Rust 检查，构建 Fedora x86_64 RPM，保存 Actions artifact，并把 RPM 上传到对应 GitHub Release。不要为普通开发 commit 创建 `v*` tag；完整操作见 [`ci-release.md`](./ci-release.md)。
+
+## 12. 已知限制和未完成项
 
 - 仅支持 GNOME + Wayland；
 - 仅支持 primary monitor，暂不处理多显示器和混合 DPI；
@@ -476,7 +499,7 @@ pkill -x hax_shot
 - system GStreamer/PipeWire 依赖不会随 Rust `.so` 一起分发；
 - 关闭或杀掉 tray 宿主后，GNOME 自定义快捷键仍可能指向旧的 release 路径，需要重新安装快捷键。
 
-## 12. 给后续 Agent 的最短交接信息
+## 13. 给后续 Agent 的最短交接信息
 
 如果任务是调整捕获 UI：只改 `lib/features/capture/`，保持 `_capture()` 完成后再 `windowManager.show()`。
 

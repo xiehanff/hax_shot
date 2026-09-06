@@ -1,6 +1,6 @@
-# Hax Shot Flutter + Rust MVP
+# Hax Shot Flutter + Rust MVP1 方案
 
-> 参考源码阅读报告：[`docs/README.md`](docs/README.md)。实现前先阅读 `docs/reference-decisions.md`。
+> 本文记录基础截图链路的 MVP1 方案和历史验收标准。当前 MVP2 已增加自启动、矩形、箭头和文字标注；发布 RPM 的流程见 [`docs/ci-release.md`](docs/ci-release.md)。参考源码阅读报告见 [`docs/README.md`](docs/README.md)，实现前先阅读 `docs/reference-decisions.md`。
 
 ## 1. 目标
 
@@ -274,13 +274,13 @@ Ready
 - [ ] 快捷键设置页可以展示当前快捷键、删除快捷键并录制新快捷键；
 - [ ] 全流程不需要 root 权限。
 
-### 暂不验收
+### MVP1 暂不验收
 
 - [ ] X11；
 - [ ] 多显示器；
 - [ ] 滚动截图；
 - [ ] 截图贴图；
-- [ ] 标注工具；
+- [ ] 标注工具（MVP2 已实现矩形、箭头和文字标注）；
 - [ ] OCR；
 - [ ] 录屏；
 - [ ] 截图历史；

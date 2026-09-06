@@ -205,7 +205,7 @@ Undo/Redo 使用 `AnnotationSnapshot` 保存完整标注数组和 badge counter�
 
 `ToolPanelView.swift` 构造底部工具栏和右侧操作面板，操作包括 Copy、Save、Close。
 
-但 Hax Shot 当前 MVP **不实现标注**。保留这个报告是为了未来增加标注时明确参考点，不应因为参考项目有标注就把 MVP 范围扩大。
+这份报告记录的是 Hax Shot MVP1 阶段的范围，当时**不实现标注**。当前 MVP2 已在 Flutter 中实现矩形、箭头和文字标注；本报告保留为参考项目的行为分析，不应据此把 Hax Shot 扩展成完整图片编辑器。
 
 ## 7. 导出和剪贴板
 
@@ -254,7 +254,7 @@ Hax Shot Linux 版本不能使用 Flutter 文本 Clipboard API 代替图片剪�
 4. 重绘所有标注；
 5. 返回最终图片。
 
-Hax Shot 当前没有标注，因此最终图像只是选区裁剪结果；未来增加标注时也应只有一个统一合成出口。
+Hax Shot MVP1 没有标注，因此当时的最终图像只是选区裁剪结果。当前 MVP2 已将矩形、箭头和文字接入同一个 `CapturePage._renderSelection()` 合成出口，保存和复制继续共享同一份 PNG。
 
 ## 8. 未接通代码和阅读边界
 

@@ -1,25 +1,54 @@
-name: Build Fedora RPM
+name: Build and Release Fedora RPM
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - 'v*'
 
+concurrency:
+  group: hax-shot-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
+env:
+  FLUTTER_VERSION: '3.44.8'
+
 jobs:
-  build-rpm:
+  build-and-release:
+    name: Build and publish RPM
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout
+      - name: Checkout tagged source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches pubspec version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          pubspec_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)"
+          app_version="${pubspec_version%%+*}"
+          if [[ -z "${pubspec_version}" || "${tag_version}" != "${app_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} must match pubspec version ${app_version}." >&2
+            echo "The build metadata (+N) becomes the Fedora RPM release number." >&2
+            exit 1
+          fi
+          echo "Building Hax Shot ${tag_version} (pubspec ${pubspec_version})."
 
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
             patchelf \
             rpm \
             libgtk-3-dev \
@@ -31,36 +60,64 @@ jobs:
             libwayland-dev \
             libxkbcommon-dev
 
-      - name: Install Flutter SDK used by the project
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.8'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
-      - name: Install Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
 
-      - name: Install FVM and resolve the pinned SDK
+      - name: Install FVM and resolve pinned SDK
+        shell: bash
         run: |
           dart pub global activate fvm
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
           fvm install
           fvm flutter --version
+          fvm flutter pub get
 
-      - name: Build RPM
+      - name: Run Dart checks
+        run: |
+          fvm flutter analyze
+          fvm flutter test
+
+      - name: Run Rust checks
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --check
+          cargo check --manifest-path rust/Cargo.toml
+          cargo test --manifest-path rust/Cargo.toml
+
+      - name: Build Fedora RPM
         run: ./scripts/build_linux_rpm.sh
 
-      - name: Upload RPM artifact
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hax-shot-rpm
+          name: hax-shot-rpm-${{ github.ref_name }}
           path: build/linux/x64/release/hax-shot-*.rpm
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Attach RPM to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build/linux/x64/release/hax-shot-*.rpm
-          generate_release_notes: true
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          rpm_file=(build/linux/x64/release/hax-shot-*.rpm)
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${rpm_file[@]}" --clobber
+          else
+            gh release create "$tag" "${rpm_file[@]}" \
+              --title "Hax Shot ${tag}" \
+              --generate-notes \
+              --verify-tag
+          fi

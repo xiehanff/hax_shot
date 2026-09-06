@@ -179,7 +179,7 @@ Rust image：top-left / y-down / pixel
 桥接处只做一次 point → pixel 转换
 ```
 
-即使当前 MVP 没有标注，也要按这个规则计算选区裁剪，否则高 DPI 或非 100% 缩放时 PNG 内容会偏移。
+即使当前 MVP2 已有标注，也要按这个规则计算选区裁剪，否则高 DPI 或非 100% 缩放时 PNG 内容会偏移。
 
 ## 6. 标注模型和统一 flatten
 
@@ -235,7 +235,7 @@ Annotation
 
 PNG、剪贴板、OCR、Pin、PDF、PPTX 都复用 flatten 结果。
 
-这是 Hax Shot 后续增加标注时必须保留的原则：**原图和标注模型分离，最终保存和复制共享同一个渲染出口**。当前 MVP 没有标注时，可以把“选区裁剪后的 PNG”作为这个出口。
+这是 Hax Shot 当前必须保留的原则：**原图和标注模型分离，最终保存和复制共享同一个渲染出口**。MVP2 的矩形、箭头和文字已经通过 `CapturePage._renderSelection()` 统一合成。
 
 ## 7. 保存和剪贴板
 

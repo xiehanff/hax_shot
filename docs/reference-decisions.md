@@ -10,7 +10,7 @@
 
 ## 2. Hax Shot MVP1 的最终边界
 
-MVP1 定义基础截图链路；MVP2 的自启动、矩形和箭头标注实现见 [`mvp2.md`](./mvp2.md)。
+MVP1 定义基础截图链路；MVP2 的自启动、矩形、箭头和文字标注实现见 [`mvp2.md`](./mvp2.md)。
 
 ```text
 GNOME 系统快捷键 Alt+Z
@@ -32,11 +32,11 @@ GNOME 系统快捷键 Alt+Z
 - PNG 图片剪贴板；
 - 截图失败、权限失败和超时提示；
 - Hax Shot 原创图标的 GNOME 托盘集成；应用常驻托盘，不显示主应用窗口；
-- MVP2 的矩形、箭头标注使用 Flutter 统一预览和导出，不将标注逻辑放入 Rust 截图后端。
+- MVP2 的矩形、箭头和文字标注使用 Flutter 统一预览和导出，不将标注逻辑放入 Rust 截图后端。
 
 ### 明确不实现
 
-- 标注；
+- MVP1 不实现标注（MVP2 已加入矩形、箭头和文字标注）；
 - 贴图窗口；
 - 多显示器；
 - 窗口截图；
@@ -143,7 +143,7 @@ pixelRect.height = logicalRect.height × scaleY
 - clamp 到冻结图边界；
 - 使用物理像素裁剪；
 - 不在 Dart 和 Rust 两边重复翻转 Y 轴；
-- 后续增加标注时也使用选区本地坐标。
+- 当前和后续标注都使用选区本地坐标，并在保存/复制前统一转换为图片像素。
 
 ## 6. 原生能力边界
 
@@ -182,7 +182,7 @@ macOS 参考项目将 overlay 窗口 ID 从 ScreenCaptureKit 捕获内容中排�
 
 ### 单一输出真源
 
-SnapShotKit 的 `PDFExporter.flatten` 让 PNG、剪贴板、Pin 和导出共用同一份最终图。Hax Shot MVP 当前没有标注，但保存和复制必须都使用同一份裁剪后的 PNG 字节，不能分别生成两份结果。
+SnapShotKit 的 `PDFExporter.flatten` 让 PNG、剪贴板、Pin 和导出共用同一份最终图。Hax Shot MVP2 已有矩形、箭头和文字标注，保存和复制必须继续共用同一份带标注的裁剪 PNG，不能分别生成两份结果。
 
 ### 错误不能静默
 

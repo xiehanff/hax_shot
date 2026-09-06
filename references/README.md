@@ -9,4 +9,4 @@
 | `screenshot` | https://github.com/tyypgzl/screenshot | 轻量菜单栏截图、快捷键和 AppKit 组织方式 | 当前仓库未发现 LICENSE，先不复制代码 |
 | `snapclip` | https://github.com/gitoffmylibrary/snapclip | GNOME Wayland 的 Mutter ScreenCast + PipeWire 无快门声单帧捕获 | 仅参考架构，不复制 Python/GTK 代码 |
 
-当前 MVP 的主参考是 `reticle` 和 `snapclip`：前者提供冻结画面/框选流程，后者解决 GNOME Wayland 截图快门声问题。本项目使用 Flutter + Rust 重写，不移植 Swift/AppKit/Python/GTK 实现。
+当前 MVP2 的主参考是 `reticle` 和 `snapclip`：前者提供冻结画面/框选/标注交互参考，后者解决 GNOME Wayland 截图快门声问题。本项目使用 Flutter + Rust 重写，不移植 Swift/AppKit/Python/GTK 实现。发布流程见 [`docs/ci-release.md`](../docs/ci-release.md)。
