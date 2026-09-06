@@ -27,7 +27,7 @@ final class TextAnnotationEditor extends StatelessWidget {
   static const horizontalInset = 20.0;
 
   /// Space above the text box for the close button and move handle.
-  static const topInset = 56.0;
+  static const topInset = 72.0;
 
   /// Extra height reserved for the bottom corner handles.
   static const bottomInset = 20.0;

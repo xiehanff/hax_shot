@@ -19,7 +19,7 @@ void main() {
         home: Scaffold(
           body: SizedBox(
             width: 240,
-            height: 120,
+            height: 180,
             child: TextAnnotationEditor(
               annotation: const ScreenshotAnnotation(
                 tool: CaptureTool.text,
