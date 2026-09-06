@@ -127,7 +127,7 @@ final class TextAnnotationEditor extends StatelessWidget {
           ),
           Positioned(
             left: boxLeft + (rect.width - _MoveHandle.width) / 2,
-            top: boxTop - _MoveHandle.height - 10,
+            top: _CloseButton.size + _TopControls.gap,
             child: _MoveHandle(
               onMoveStart: onMoveStart,
               onMoveUpdate: onMoveUpdate,
@@ -200,6 +200,12 @@ final class _ResizeHandle extends StatelessWidget {
       ),
     );
   }
+}
+
+final class _TopControls {
+  const _TopControls._();
+
+  static const gap = 10.0;
 }
 
 final class _MoveHandle extends StatelessWidget {
