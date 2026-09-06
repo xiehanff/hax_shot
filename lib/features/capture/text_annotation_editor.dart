@@ -4,8 +4,9 @@ import 'annotation.dart';
 
 /// Interactive editing surface for the text annotation currently being typed.
 ///
-/// The editor is an overlay only. Its border and corner handles are never
-/// painted by [ScreenshotCanvas], so they cannot leak into the exported PNG.
+/// The editor is an overlay only. Its border, external corner handles, move
+/// handle and close button are never painted by [ScreenshotCanvas], so they
+/// cannot leak into the exported PNG.
 final class TextAnnotationEditor extends StatelessWidget {
   const TextAnnotationEditor({
     required this.annotation,
@@ -14,8 +15,21 @@ final class TextAnnotationEditor extends StatelessWidget {
     required this.onResizeStart,
     required this.onResizeUpdate,
     required this.onResizeEnd,
+    required this.onMoveStart,
+    required this.onMoveUpdate,
+    required this.onMoveEnd,
+    required this.onDelete,
     super.key,
   });
+
+  /// Extra width reserved for the corner handles outside the text box.
+  static const horizontalInset = 20.0;
+
+  /// Space above the text box for the close button and move handle.
+  static const topInset = 56.0;
+
+  /// Extra height reserved for the bottom corner handles.
+  static const bottomInset = 20.0;
 
   final ScreenshotAnnotation annotation;
   final TextEditingController controller;
@@ -23,14 +37,25 @@ final class TextAnnotationEditor extends StatelessWidget {
   final ValueChanged<TextResizeHandle> onResizeStart;
   final void Function(TextResizeHandle handle, Offset delta) onResizeUpdate;
   final ValueChanged<TextResizeHandle> onResizeEnd;
+  final VoidCallback onMoveStart;
+  final ValueChanged<Offset> onMoveUpdate;
+  final VoidCallback onMoveEnd;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
+    final rect = annotation.rect;
     final showFrame = annotation.text.isNotEmpty;
+    final boxLeft = horizontalInset;
+    final boxTop = topInset;
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Positioned.fill(
+        Positioned(
+          left: boxLeft,
+          top: boxTop,
+          width: rect.width,
+          height: rect.height,
           child: DecoratedBox(
             decoration: BoxDecoration(
               border: showFrame
@@ -67,33 +92,51 @@ final class TextAnnotationEditor extends StatelessWidget {
           ),
         ),
         if (showFrame) ...[
-          _Handle(
+          _ResizeHandle(
             handle: TextResizeHandle.topLeft,
-            alignment: Alignment.topLeft,
+            left: boxLeft - _ResizeHandle.size,
+            top: boxTop - _ResizeHandle.size,
             onResizeStart: onResizeStart,
             onResizeUpdate: onResizeUpdate,
             onResizeEnd: onResizeEnd,
           ),
-          _Handle(
+          _ResizeHandle(
             handle: TextResizeHandle.topRight,
-            alignment: Alignment.topRight,
+            left: boxLeft + rect.width,
+            top: boxTop - _ResizeHandle.size,
             onResizeStart: onResizeStart,
             onResizeUpdate: onResizeUpdate,
             onResizeEnd: onResizeEnd,
           ),
-          _Handle(
+          _ResizeHandle(
             handle: TextResizeHandle.bottomLeft,
-            alignment: Alignment.bottomLeft,
+            left: boxLeft - _ResizeHandle.size,
+            top: boxTop + rect.height,
             onResizeStart: onResizeStart,
             onResizeUpdate: onResizeUpdate,
             onResizeEnd: onResizeEnd,
           ),
-          _Handle(
+          _ResizeHandle(
             handle: TextResizeHandle.bottomRight,
-            alignment: Alignment.bottomRight,
+            left: boxLeft + rect.width,
+            top: boxTop + rect.height,
             onResizeStart: onResizeStart,
             onResizeUpdate: onResizeUpdate,
             onResizeEnd: onResizeEnd,
+          ),
+          Positioned(
+            left: boxLeft + (rect.width - _MoveHandle.width) / 2,
+            top: boxTop - _MoveHandle.height - 10,
+            child: _MoveHandle(
+              onMoveStart: onMoveStart,
+              onMoveUpdate: onMoveUpdate,
+              onMoveEnd: onMoveEnd,
+            ),
+          ),
+          Positioned(
+            left: boxLeft + (rect.width - _CloseButton.size) / 2,
+            top: 0,
+            child: _CloseButton(onPressed: onDelete),
           ),
         ],
       ],
@@ -101,42 +144,126 @@ final class TextAnnotationEditor extends StatelessWidget {
   }
 }
 
-final class _Handle extends StatelessWidget {
-  const _Handle({
+final class _ResizeHandle extends StatelessWidget {
+  const _ResizeHandle({
     required this.handle,
-    required this.alignment,
+    required this.left,
+    required this.top,
     required this.onResizeStart,
     required this.onResizeUpdate,
     required this.onResizeEnd,
   });
 
+  static const size = 18.0;
+
   final TextResizeHandle handle;
-  final Alignment alignment;
+  final double left;
+  final double top;
   final ValueChanged<TextResizeHandle> onResizeStart;
   final void Function(TextResizeHandle handle, Offset delta) onResizeUpdate;
   final ValueChanged<TextResizeHandle> onResizeEnd;
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: alignment,
-      child: GestureDetector(
-        key: ValueKey('text-resize-${handle.name}'),
-        behavior: HitTestBehavior.opaque,
-        onPanStart: (_) => onResizeStart(handle),
-        onPanUpdate: (details) => onResizeUpdate(handle, details.delta),
-        onPanEnd: (_) => onResizeEnd(handle),
-        child: Container(
-          width: 18,
-          height: 18,
-          alignment: Alignment.center,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.black54, width: 1),
+    final cursor = switch (handle) {
+      TextResizeHandle.topLeft => SystemMouseCursors.resizeUpLeft,
+      TextResizeHandle.topRight => SystemMouseCursors.resizeUpRight,
+      TextResizeHandle.bottomLeft => SystemMouseCursors.resizeDownLeft,
+      TextResizeHandle.bottomRight => SystemMouseCursors.resizeDownRight,
+    };
+    return Positioned(
+      left: left,
+      top: top,
+      child: MouseRegion(
+        cursor: cursor,
+        child: GestureDetector(
+          key: ValueKey('text-resize-${handle.name}'),
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (_) => onResizeStart(handle),
+          onPanUpdate: (details) => onResizeUpdate(handle, details.delta),
+          onPanEnd: (_) => onResizeEnd(handle),
+          child: Container(
+            width: size,
+            height: size,
+            alignment: Alignment.center,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.black54, width: 1),
+              ),
+              child: const SizedBox.square(dimension: 8),
             ),
-            child: const SizedBox.square(dimension: 8),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _MoveHandle extends StatelessWidget {
+  const _MoveHandle({
+    required this.onMoveStart,
+    required this.onMoveUpdate,
+    required this.onMoveEnd,
+  });
+
+  static const width = 42.0;
+  static const height = 20.0;
+
+  final VoidCallback onMoveStart;
+  final ValueChanged<Offset> onMoveUpdate;
+  final VoidCallback onMoveEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.move,
+      child: GestureDetector(
+        key: const ValueKey('text-move-handle'),
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) => onMoveStart(),
+        onPanUpdate: (details) => onMoveUpdate(details.delta),
+        onPanEnd: (_) => onMoveEnd(),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.86),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white70),
+          ),
+          child: const Center(
+            child: Icon(Icons.drag_handle, size: 16, color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _CloseButton extends StatelessWidget {
+  const _CloseButton({required this.onPressed});
+
+  static const size = 22.0;
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '删除文字标注',
+      child: GestureDetector(
+        key: const ValueKey('text-delete-button'),
+        onTap: onPressed,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white70),
+          ),
+          child: const SizedBox(
+            width: size,
+            height: size,
+            child: Icon(Icons.close, size: 14, color: Colors.white),
           ),
         ),
       ),

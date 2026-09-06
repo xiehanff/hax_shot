@@ -10,6 +10,8 @@ void main() {
     addTearDown(controller.dispose);
     addTearDown(focusNode.dispose);
     final resizeDeltas = <Offset>[];
+    final moveDeltas = <Offset>[];
+    var deleted = false;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -31,6 +33,10 @@ void main() {
               onResizeStart: (_) {},
               onResizeUpdate: (_, delta) => resizeDeltas.add(delta),
               onResizeEnd: (_) {},
+              onMoveStart: () {},
+              onMoveUpdate: moveDeltas.add,
+              onMoveEnd: () {},
+              onDelete: () => deleted = true,
             ),
           ),
         ),
@@ -50,5 +56,14 @@ void main() {
       const Offset(20, 10),
     );
     expect(resizeDeltas, isNotEmpty);
+
+    await tester.drag(
+      find.byKey(const ValueKey('text-move-handle')),
+      const Offset(12, 8),
+    );
+    expect(moveDeltas, isNotEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('text-delete-button')));
+    expect(deleted, isTrue);
   });
 }

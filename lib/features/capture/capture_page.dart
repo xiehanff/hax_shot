@@ -41,6 +41,8 @@ class _CapturePageState extends State<CapturePage> {
   ScreenshotAnnotation? _textResizeStart;
   TextResizeHandle? _textResizeHandle;
   Offset _textResizePointer = Offset.zero;
+  ScreenshotAnnotation? _textMoveStart;
+  Offset _textMoveOffset = Offset.zero;
 
   @override
   void initState() {
@@ -138,25 +140,43 @@ class _CapturePageState extends State<CapturePage> {
     required Rect bounds,
   }) {
     final measured = _measureText(text, fontSize, bounds.width);
-    final width = math.min(math.max(measured.width + 4, 24), bounds.width);
+    final width = math.min(
+      math.max(measured.width + 4, 24).toDouble(),
+      bounds.width,
+    );
     final height = math.min(
-      math.max(measured.height + 4, fontSize + 8),
+      math.max(measured.height + 4, fontSize + 8).toDouble(),
       bounds.height,
     );
-    final left = requestedStart.dx.clamp(
-      bounds.left,
-      math.max(bounds.left, bounds.right - width),
-    );
-    final top = requestedStart.dy.clamp(
-      bounds.top,
-      math.max(bounds.top, bounds.bottom - height),
-    );
+    final limits = _textPositionLimits(bounds, Size(width, height));
+    final left = requestedStart.dx.clamp(limits.left, limits.right);
+    final top = requestedStart.dy.clamp(limits.top, limits.bottom);
     return Rect.fromLTWH(
       left.toDouble(),
       top.toDouble(),
       width.toDouble(),
       height.toDouble(),
     );
+  }
+
+  Rect _textPositionLimits(Rect bounds, Size textSize) {
+    final canReserveHorizontal =
+        bounds.width >=
+        textSize.width + TextAnnotationEditor.horizontalInset * 2;
+    final minLeft = canReserveHorizontal
+        ? bounds.left + TextAnnotationEditor.horizontalInset
+        : bounds.left;
+    final maxLeft =
+        bounds.right -
+        textSize.width -
+        (canReserveHorizontal ? TextAnnotationEditor.horizontalInset : 0);
+    final canReserveTop =
+        bounds.height >= textSize.height + TextAnnotationEditor.topInset;
+    final minTop = canReserveTop
+        ? bounds.top + TextAnnotationEditor.topInset
+        : bounds.top;
+    final maxTop = bounds.bottom - textSize.height;
+    return Rect.fromLTRB(minLeft, minTop, maxLeft, maxTop);
   }
 
   void _handleTextChanged() {
@@ -226,6 +246,8 @@ class _CapturePageState extends State<CapturePage> {
     _textFocusNode.unfocus();
     _textResizeStart = null;
     _textResizeHandle = null;
+    _textMoveStart = null;
+    _textMoveOffset = Offset.zero;
     _textAutoSizing = false;
     if (!mounted) return;
     setState(() {
@@ -319,6 +341,50 @@ class _CapturePageState extends State<CapturePage> {
     if (_textResizeHandle != handle) return;
     _textResizeStart = null;
     _textResizeHandle = null;
+  }
+
+  void _startTextMove() {
+    final draft = _textDraft;
+    if (draft == null || draft.text.isEmpty) return;
+    _textMoveStart = draft;
+    _textMoveOffset = Offset.zero;
+  }
+
+  void _updateTextMove(Offset delta) {
+    final start = _textMoveStart;
+    final bounds = _selection;
+    if (start == null || bounds == null) return;
+
+    _textMoveOffset += delta;
+    final desired = start.rect.shift(_textMoveOffset);
+    final limits = _textPositionLimits(bounds, desired.size);
+    final left = desired.left.clamp(limits.left, limits.right).toDouble();
+    final top = desired.top.clamp(limits.top, limits.bottom).toDouble();
+    final rect = Rect.fromLTWH(left, top, desired.width, desired.height);
+    setState(() {
+      _textDraft = start.copyWith(start: rect.topLeft, end: rect.bottomRight);
+    });
+  }
+
+  void _finishTextMove() {
+    _textMoveStart = null;
+    _textMoveOffset = Offset.zero;
+  }
+
+  void _deleteTextDraft() {
+    if (_textDraft == null) return;
+    _suppressTextListener = true;
+    _textController.clear();
+    _suppressTextListener = false;
+    _textFocusNode.unfocus();
+    _textResizeStart = null;
+    _textResizeHandle = null;
+    _textMoveStart = null;
+    _textMoveOffset = Offset.zero;
+    _textAutoSizing = false;
+    if (mounted) {
+      setState(() => _textDraft = null);
+    }
   }
 
   Offset _clampToSelection(ScreenshotLayout layout, Offset point) {
@@ -655,10 +721,17 @@ class _CapturePageState extends State<CapturePage> {
                   ),
                   if (_textDraft != null)
                     Positioned(
-                      left: _textDraft!.rect.left,
-                      top: _textDraft!.rect.top,
-                      width: _textDraft!.rect.width,
-                      height: _textDraft!.rect.height,
+                      left:
+                          _textDraft!.rect.left -
+                          TextAnnotationEditor.horizontalInset,
+                      top: _textDraft!.rect.top - TextAnnotationEditor.topInset,
+                      width:
+                          _textDraft!.rect.width +
+                          TextAnnotationEditor.horizontalInset * 2,
+                      height:
+                          _textDraft!.rect.height +
+                          TextAnnotationEditor.topInset +
+                          TextAnnotationEditor.bottomInset,
                       child: TextAnnotationEditor(
                         annotation: _textDraft!,
                         controller: _textController,
@@ -666,6 +739,10 @@ class _CapturePageState extends State<CapturePage> {
                         onResizeStart: _startTextResize,
                         onResizeUpdate: _updateTextResize,
                         onResizeEnd: _finishTextResize,
+                        onMoveStart: _startTextMove,
+                        onMoveUpdate: _updateTextMove,
+                        onMoveEnd: _finishTextMove,
+                        onDelete: _deleteTextDraft,
                       ),
                     ),
                   if (_selection == null && _message == null)
