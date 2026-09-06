@@ -3,7 +3,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import '../../native/native_bridge.dart';
 import 'annotation.dart';
 import 'screenshot_canvas.dart';
 
@@ -66,7 +65,7 @@ final class ScreenshotExporter {
     final data = await cropped.toByteData(format: ui.ImageByteFormat.png);
     cropped.dispose();
     if (data == null) {
-      throw const NativeBridgeException('PNG 编码失败');
+      throw StateError('PNG 编码失败');
     }
     return data.buffer.asUint8List();
   }
