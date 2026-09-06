@@ -9,8 +9,10 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
 import 'annotation.dart';
+import 'capture_session.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
+import 'screenshot_exporter.dart';
 import 'selection_toolbar_placement.dart';
 import 'text_annotation_editor.dart';
 
@@ -22,19 +24,15 @@ class CapturePage extends StatefulWidget {
 }
 
 class _CapturePageState extends State<CapturePage> {
+  final CaptureSession _session = CaptureSession();
+  final TextEditingController _textController = TextEditingController();
+  final FocusNode _textFocusNode = FocusNode(debugLabel: 'capture-text');
+
   ui.Image? _image;
-  Offset? _dragStart;
-  Rect? _selection;
   String? _message;
   bool _loading = true;
   bool _busy = false;
-  bool _selectionCommitted = false;
-  CaptureTool _activeTool = CaptureTool.selection;
-  Color _selectedColor = annotationColors.first;
-  List<ScreenshotAnnotation> _annotations = const [];
-  ScreenshotAnnotation? _draftAnnotation;
-  final TextEditingController _textController = TextEditingController();
-  final FocusNode _textFocusNode = FocusNode(debugLabel: 'capture-text');
+
   ScreenshotAnnotation? _textDraft;
   bool _textAutoSizing = false;
   bool _suppressTextListener = false;
@@ -98,26 +96,44 @@ class _CapturePageState extends State<CapturePage> {
   }
 
   void _selectTool(CaptureTool tool) {
-    if (_busy || !mounted) return;
-    if (_activeTool == CaptureTool.text && tool != CaptureTool.text) {
+    if (_busy) return;
+    if (_session.activeTool == CaptureTool.text && tool != CaptureTool.text) {
       _commitTextDraft();
     }
     setState(() {
-      _activeTool = tool;
-      _dragStart = null;
-      _draftAnnotation = null;
+      _session.selectTool(tool);
       _message = null;
     });
   }
 
   void _selectColor(Color color) {
-    if (!mounted) return;
     setState(() {
-      _selectedColor = color;
+      _session.selectColor(color);
       final draft = _textDraft;
       if (draft != null) {
         _textDraft = draft.copyWith(color: color);
       }
+    });
+  }
+
+  void _startCanvasGesture(ScreenshotLayout layout, Offset point) {
+    if (_session.isTextTool) return;
+    setState(() {
+      _session.startGesture(layout, point);
+      _message = null;
+    });
+  }
+
+  void _updateCanvasGesture(ScreenshotLayout layout, Offset point) {
+    if (_session.isTextTool) return;
+    setState(() => _session.updateGesture(layout, point));
+  }
+
+  void _finishCanvasGesture() {
+    if (_session.isTextTool) return;
+    setState(() {
+      final message = _session.finishGesture();
+      if (message != null) _message = message;
     });
   }
 
@@ -185,7 +201,7 @@ class _CapturePageState extends State<CapturePage> {
     if (draft == null) return;
 
     var updated = draft.copyWith(text: _textController.text);
-    final selection = _selection;
+    final selection = _session.selection;
     if (_textAutoSizing && selection != null) {
       final rect = _textRectForInput(
         requestedStart: draft.start,
@@ -198,40 +214,25 @@ class _CapturePageState extends State<CapturePage> {
     setState(() => _textDraft = updated);
   }
 
-  int? _textAnnotationIndexAt(Offset point) {
-    for (var index = _annotations.length - 1; index >= 0; index--) {
-      final annotation = _annotations[index];
-      if (annotation.tool == CaptureTool.text &&
-          annotation.text.isNotEmpty &&
-          annotation.rect.contains(point)) {
-        return index;
-      }
-    }
-    return null;
-  }
-
-  void _editTextAnnotation(int index) {
-    final annotation = _annotations[index];
-    final remaining = [..._annotations]..removeAt(index);
+  void _setTextController(String text) {
     _suppressTextListener = true;
     _textController.value = TextEditingValue(
-      text: annotation.text,
-      selection: TextSelection.collapsed(offset: annotation.text.length),
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
     );
     _suppressTextListener = false;
+  }
+
+  void _resetTextInteraction() {
     _textResizeStart = null;
     _textResizeHandle = null;
+    _textResizePointer = Offset.zero;
     _textMoveStart = null;
     _textMoveOffset = Offset.zero;
+    _textAutoSizing = false;
+  }
 
-    setState(() {
-      _annotations = remaining;
-      _activeTool = CaptureTool.text;
-      _selectedColor = annotation.color;
-      _textAutoSizing = false;
-      _textDraft = annotation;
-      _message = null;
-    });
+  void _focusTextEditor() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _textDraft == null) return;
       _textFocusNode.requestFocus();
@@ -241,49 +242,54 @@ class _CapturePageState extends State<CapturePage> {
     });
   }
 
+  void _editTextAnnotation(ScreenshotAnnotation annotation) {
+    _setTextController(annotation.text);
+    _resetTextInteraction();
+
+    setState(() {
+      _session.selectTool(CaptureTool.text);
+      _session.selectColor(annotation.color);
+      _textDraft = annotation;
+      _message = null;
+    });
+    _focusTextEditor();
+  }
+
   void _createTextInput(ScreenshotLayout layout, Offset point) {
-    final selection = _selection;
+    final selection = _session.selection;
     if (selection == null) return;
-    final start = _clampToSelection(layout, point);
+    final start = _session.clampToSelection(layout, point);
     final rect = _textRectForInput(
       requestedStart: start,
       text: '',
       fontSize: 24,
       bounds: selection,
     );
-    _suppressTextListener = true;
-    _textController.clear();
-    _suppressTextListener = false;
+    _setTextController('');
+    _resetTextInteraction();
 
     setState(() {
-      _activeTool = CaptureTool.text;
+      _session.selectTool(CaptureTool.text);
       _textAutoSizing = true;
       _textDraft = ScreenshotAnnotation(
         tool: CaptureTool.text,
         start: rect.topLeft,
         end: rect.bottomRight,
-        color: _selectedColor,
+        color: _session.selectedColor,
         fontSize: 24,
       );
       _message = null;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _textDraft == null) return;
-      _textFocusNode.requestFocus();
-      _textController.selection = TextSelection.collapsed(
-        offset: _textController.text.length,
-      );
-    });
+    _focusTextEditor();
   }
 
   void _beginTextInput(ScreenshotLayout layout, Offset point) {
-    final selection = _selection;
-    if (selection == null || !_selectionCommitted) return;
+    if (!_session.hasCommittedSelection) return;
 
     _commitTextDraft();
-    final existingIndex = _textAnnotationIndexAt(point);
-    if (existingIndex != null) {
-      _editTextAnnotation(existingIndex);
+    final existing = _session.takeTextAnnotationAt(point);
+    if (existing != null) {
+      _editTextAnnotation(existing);
       return;
     }
     _createTextInput(layout, point);
@@ -294,20 +300,13 @@ class _CapturePageState extends State<CapturePage> {
     if (draft == null) return;
     final text = _textController.text;
     final committed = text.isEmpty ? null : draft.copyWith(text: text);
-    _suppressTextListener = true;
-    _textController.clear();
-    _suppressTextListener = false;
+    _setTextController('');
     _textFocusNode.unfocus();
-    _textResizeStart = null;
-    _textResizeHandle = null;
-    _textMoveStart = null;
-    _textMoveOffset = Offset.zero;
-    _textAutoSizing = false;
-    if (!mounted) return;
+    _resetTextInteraction();
     setState(() {
       _textDraft = null;
       if (committed != null) {
-        _annotations = [..._annotations, committed];
+        _session.addAnnotation(committed);
       }
     });
   }
@@ -342,7 +341,7 @@ class _CapturePageState extends State<CapturePage> {
   void _updateTextResize(TextResizeHandle handle, Offset delta) {
     final start = _textResizeStart;
     final activeHandle = _textResizeHandle;
-    final bounds = _selection;
+    final bounds = _session.selection;
     if (start == null || activeHandle != handle || bounds == null) return;
 
     _textResizePointer += delta;
@@ -406,7 +405,7 @@ class _CapturePageState extends State<CapturePage> {
 
   void _updateTextMove(Offset delta) {
     final start = _textMoveStart;
-    final bounds = _selection;
+    final bounds = _session.selection;
     if (start == null || bounds == null) return;
 
     _textMoveOffset += delta;
@@ -427,188 +426,16 @@ class _CapturePageState extends State<CapturePage> {
 
   void _deleteTextDraft() {
     if (_textDraft == null) return;
-    _suppressTextListener = true;
-    _textController.clear();
-    _suppressTextListener = false;
+    _setTextController('');
     _textFocusNode.unfocus();
-    _textResizeStart = null;
-    _textResizeHandle = null;
-    _textMoveStart = null;
-    _textMoveOffset = Offset.zero;
-    _textAutoSizing = false;
-    if (mounted) {
-      setState(() => _textDraft = null);
-    }
-  }
-
-  Offset _clampToSelection(ScreenshotLayout layout, Offset point) {
-    final selected = _selection;
-    if (selected == null) return layout.clampToImage(point);
-    final clampedToImage = layout.clampToImage(point);
-    return Offset(
-      clampedToImage.dx.clamp(selected.left, selected.right).toDouble(),
-      clampedToImage.dy.clamp(selected.top, selected.bottom).toDouble(),
-    );
-  }
-
-  void _startSelection(ScreenshotLayout layout, Offset point) {
-    final start = layout.clampToImage(point);
-    setState(() {
-      _dragStart = start;
-      _selection = null;
-      _selectionCommitted = false;
-      _activeTool = CaptureTool.selection;
-      _annotations = const [];
-      _draftAnnotation = null;
-      _message = null;
-    });
-  }
-
-  void _updateSelection(ScreenshotLayout layout, Offset point) {
-    final start = _dragStart;
-    if (start == null) return;
-    final current = layout.clampToImage(point);
-    setState(() {
-      // Keep the rectangle visible while dragging, but do not show action
-      // buttons until onPanEnd commits this selection.
-      _selection = Rect.fromPoints(start, current);
-      _selectionCommitted = false;
-    });
-  }
-
-  void _finishSelection() {
-    final selection = _selection;
-    _dragStart = null;
-    if (selection == null || selection.width < 4 || selection.height < 4) {
-      setState(() {
-        _selection = null;
-        _selectionCommitted = false;
-        _message = '请拖动选择一个更大的区域';
-      });
-      return;
-    }
-
-    setState(() {
-      _activeTool = CaptureTool.selection;
-      _selectionCommitted = true;
-    });
-  }
-
-  void _startAnnotation(ScreenshotLayout layout, Offset point) {
-    final selected = _selection;
-    if (selected == null || !_selectionCommitted) return;
-    final start = _clampToSelection(layout, point);
-    setState(() {
-      _dragStart = start;
-      _draftAnnotation = ScreenshotAnnotation(
-        tool: _activeTool,
-        start: start,
-        end: start,
-        color: _selectedColor,
-      );
-      _message = null;
-    });
-  }
-
-  void _updateAnnotation(ScreenshotLayout layout, Offset point) {
-    final start = _dragStart;
-    if (start == null || _activeTool == CaptureTool.selection) return;
-    final current = _clampToSelection(layout, point);
-    setState(() {
-      _draftAnnotation = ScreenshotAnnotation(
-        tool: _activeTool,
-        start: start,
-        end: current,
-        color: _selectedColor,
-      );
-    });
-  }
-
-  void _finishAnnotation() {
-    final draft = _draftAnnotation;
-    _dragStart = null;
-    _draftAnnotation = null;
-    final isLargeEnough = draft == null
-        ? false
-        : draft.tool == CaptureTool.arrow
-        ? (draft.end - draft.start).distance >= 4
-        : draft.rect.shortestSide >= 4;
-    if (!isLargeEnough) {
-      setState(() => _message = '请拖动绘制一个更大的标注');
-      return;
-    }
-    setState(() => _annotations = [..._annotations, draft]);
-  }
-
-  Future<Uint8List> _renderSelection(
-    ScreenshotLayout layout,
-    Rect selection,
-  ) async {
-    final image = _image;
-    if (image == null) {
-      throw const NativeBridgeException('截图图片尚未准备好');
-    }
-
-    final source = layout.toPixelRect(selection);
-    final width = source.width.round().clamp(1, image.width);
-    final height = source.height.round().clamp(1, image.height);
-    final destination = Rect.fromLTWH(
-      0,
-      0,
-      width.toDouble(),
-      height.toDouble(),
-    );
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    canvas.drawImageRect(
-      image,
-      Rect.fromLTWH(
-        source.left,
-        source.top,
-        width.toDouble(),
-        height.toDouble(),
-      ),
-      destination,
-      Paint()..filterQuality = FilterQuality.high,
-    );
-
-    // Convert the overlay's logical coordinates to the cropped image's pixel
-    // coordinates. Save and copy therefore use exactly the same annotation
-    // geometry that the user saw on the frozen screenshot.
-    final cropOrigin = Offset(
-      layout.imageRect.left + source.left * layout.scale,
-      layout.imageRect.top + source.top * layout.scale,
-    );
-    canvas.save();
-    canvas.clipRect(destination);
-    for (final annotation in _annotations) {
-      final pixelAnnotation = annotation.translatedAndScaled(
-        origin: cropOrigin,
-        scale: layout.scale,
-      );
-      paintScreenshotAnnotation(
-        canvas,
-        pixelAnnotation,
-        lineWidth: 3 / layout.scale,
-        arrowHeadLength: 14 / layout.scale,
-      );
-    }
-    canvas.restore();
-
-    final picture = recorder.endRecording();
-    final cropped = await picture.toImage(width, height);
-    picture.dispose();
-    final data = await cropped.toByteData(format: ui.ImageByteFormat.png);
-    cropped.dispose();
-    if (data == null) {
-      throw const NativeBridgeException('PNG 编码失败');
-    }
-    return data.buffer.asUint8List();
+    _resetTextInteraction();
+    setState(() => _textDraft = null);
   }
 
   Future<void> _save(ScreenshotLayout layout) async {
-    final selection = _selection;
-    if (selection == null || _busy) return;
+    final selection = _session.selection;
+    final image = _image;
+    if (selection == null || image == null || _busy) return;
     _commitTextDraft();
 
     setState(() {
@@ -617,7 +444,12 @@ class _CapturePageState extends State<CapturePage> {
     });
 
     try {
-      final png = await _renderSelection(layout, selection);
+      final png = await ScreenshotExporter.renderPng(
+        image: image,
+        layout: layout,
+        selection: selection,
+        annotations: _session.annotations,
+      );
       final home = Platform.environment['HOME'];
       final location = await getSaveLocation(
         acceptedTypeGroups: const [
@@ -651,8 +483,9 @@ class _CapturePageState extends State<CapturePage> {
   }
 
   Future<void> _copy(ScreenshotLayout layout) async {
-    final selection = _selection;
-    if (selection == null || _busy) return;
+    final selection = _session.selection;
+    final image = _image;
+    if (selection == null || image == null || _busy) return;
     _commitTextDraft();
 
     setState(() {
@@ -661,7 +494,12 @@ class _CapturePageState extends State<CapturePage> {
     });
 
     try {
-      final png = await _renderSelection(layout, selection);
+      final png = await ScreenshotExporter.renderPng(
+        image: image,
+        layout: layout,
+        selection: selection,
+        annotations: _session.annotations,
+      );
       await NativeBridge.instance.copyPngToClipboard(png);
       await _closeCapture();
     } on Object catch (error) {
@@ -733,44 +571,22 @@ class _CapturePageState extends State<CapturePage> {
                   ScreenshotCanvas(
                     image: image,
                     layout: layout,
-                    selection: _selection,
-                    annotations: _annotations,
-                    draftAnnotation: _draftAnnotation,
+                    selection: _session.selection,
+                    annotations: _session.annotations,
+                    draftAnnotation: _session.draftAnnotation,
                   ),
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTapUp: (details) {
-                      if (_activeTool == CaptureTool.text) {
+                      if (_session.isTextTool) {
                         _beginTextInput(layout, details.localPosition);
                       }
                     },
-                    onPanStart: (details) {
-                      if (_activeTool == CaptureTool.text) return;
-                      if (_activeTool == CaptureTool.selection ||
-                          _selection == null) {
-                        _startSelection(layout, details.localPosition);
-                      } else {
-                        _startAnnotation(layout, details.localPosition);
-                      }
-                    },
-                    onPanUpdate: (details) {
-                      if (_activeTool == CaptureTool.text) return;
-                      if (_activeTool == CaptureTool.selection ||
-                          _selection == null) {
-                        _updateSelection(layout, details.localPosition);
-                      } else {
-                        _updateAnnotation(layout, details.localPosition);
-                      }
-                    },
-                    onPanEnd: (_) {
-                      if (_activeTool == CaptureTool.text) return;
-                      if (_activeTool == CaptureTool.selection ||
-                          _selection == null) {
-                        _finishSelection();
-                      } else {
-                        _finishAnnotation();
-                      }
-                    },
+                    onPanStart: (details) =>
+                        _startCanvasGesture(layout, details.localPosition),
+                    onPanUpdate: (details) =>
+                        _updateCanvasGesture(layout, details.localPosition),
+                    onPanEnd: (_) => _finishCanvasGesture(),
                     child: const SizedBox.expand(),
                   ),
                   if (_textDraft != null)
@@ -799,7 +615,7 @@ class _CapturePageState extends State<CapturePage> {
                         onDelete: _deleteTextDraft,
                       ),
                     ),
-                  if (_selection == null && _message == null)
+                  if (_session.selection == null && _message == null)
                     const IgnorePointer(
                       child: Align(
                         alignment: Alignment.topCenter,
@@ -840,17 +656,16 @@ class _CapturePageState extends State<CapturePage> {
                         ),
                       ),
                     ),
-                  if (_selectionCommitted && _selection != null)
+                  if (_session.hasCommittedSelection)
                     Positioned.fill(
                       child: CustomSingleChildLayout(
                         delegate: CaptureToolbarLayoutDelegate(
-                          selection: _selection!,
+                          selection: _session.selection!,
                         ),
                         child: CaptureToolbar(
-                          enabled: true,
                           busy: _busy,
-                          activeTool: _activeTool,
-                          selectedColor: _selectedColor,
+                          activeTool: _session.activeTool,
+                          selectedColor: _session.selectedColor,
                           onToolSelected: _selectTool,
                           onColorSelected: _selectColor,
                           onCancel: _cancel,
