@@ -93,11 +93,18 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       ),
                       const _ToolbarDivider(),
                       _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedRectangular,
+                        icon: HugeIcons.strokeRoundedCursorRectangleSelection01,
                         tooltip: '框选截图区域',
                         selected: widget.activeTool == CaptureTool.selection,
                         onPressed: () =>
                             widget.onToolSelected(CaptureTool.selection),
+                      ),
+                      _ToolbarIconButton(
+                        icon: HugeIcons.strokeRoundedRectangular01,
+                        tooltip: '标注矩形',
+                        selected: widget.activeTool == CaptureTool.rectangle,
+                        onPressed: () =>
+                            widget.onToolSelected(CaptureTool.rectangle),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedArrowDownLeft01,

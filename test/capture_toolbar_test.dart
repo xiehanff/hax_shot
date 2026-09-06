@@ -11,6 +11,7 @@ void main() {
     var cancelled = false;
     var saved = false;
     var copied = false;
+    CaptureTool? selectedTool;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -21,7 +22,7 @@ void main() {
               busy: false,
               activeTool: CaptureTool.selection,
               selectedColor: annotationColors.first,
-              onToolSelected: (_) {},
+              onToolSelected: (tool) => selectedTool = tool,
               onColorSelected: (_) {},
               onCancel: () => cancelled = true,
               onSave: () => saved = true,
@@ -34,7 +35,11 @@ void main() {
 
     // A decoration paint failure can hide every control despite a valid layout.
     expect(tester.takeException(), isNull);
-    expect(find.byType(HugeIcon), findsNWidgets(9));
+    expect(find.byType(HugeIcon), findsNWidgets(10));
+    await tester.tap(find.byTooltip('标注矩形'));
+    expect(selectedTool, CaptureTool.rectangle);
+    await tester.tap(find.byTooltip('标注箭头'));
+    expect(selectedTool, CaptureTool.arrow);
     await tester.tap(find.byTooltip('取消 (Esc)'));
     await tester.tap(find.byTooltip('保存 PNG'));
     await tester.tap(find.byTooltip('复制到剪贴板'));
