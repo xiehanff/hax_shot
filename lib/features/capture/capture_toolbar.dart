@@ -5,9 +5,8 @@ import 'package:hugeicons/hugeicons.dart';
 
 import 'annotation.dart';
 
-class CaptureToolbar extends StatefulWidget {
+class CaptureToolbar extends StatelessWidget {
   const CaptureToolbar({
-    required this.enabled,
     required this.busy,
     required this.activeTool,
     required this.selectedColor,
@@ -19,7 +18,6 @@ class CaptureToolbar extends StatefulWidget {
     super.key,
   });
 
-  final bool enabled;
   final bool busy;
   final CaptureTool activeTool;
   final Color selectedColor;
@@ -29,11 +27,6 @@ class CaptureToolbar extends StatefulWidget {
   final VoidCallback onSave;
   final VoidCallback onCopy;
 
-  @override
-  State<CaptureToolbar> createState() => _CaptureToolbarState();
-}
-
-class _CaptureToolbarState extends State<CaptureToolbar> {
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -89,41 +82,37 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedCancel01,
                         tooltip: '取消 (Esc)',
-                        onPressed: widget.busy ? null : widget.onCancel,
+                        onPressed: busy ? null : onCancel,
                       ),
                       const _ToolbarDivider(),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedCursorRectangleSelection01,
                         tooltip: '框选截图区域',
-                        selected: widget.activeTool == CaptureTool.selection,
-                        onPressed: () =>
-                            widget.onToolSelected(CaptureTool.selection),
+                        selected: activeTool == CaptureTool.selection,
+                        onPressed: () => onToolSelected(CaptureTool.selection),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedRectangular01,
                         tooltip: '标注矩形',
-                        selected: widget.activeTool == CaptureTool.rectangle,
-                        onPressed: () =>
-                            widget.onToolSelected(CaptureTool.rectangle),
+                        selected: activeTool == CaptureTool.rectangle,
+                        onPressed: () => onToolSelected(CaptureTool.rectangle),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedArrowDownLeft01,
                         tooltip: '标注箭头',
-                        selected: widget.activeTool == CaptureTool.arrow,
-                        onPressed: () =>
-                            widget.onToolSelected(CaptureTool.arrow),
+                        selected: activeTool == CaptureTool.arrow,
+                        onPressed: () => onToolSelected(CaptureTool.arrow),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedText,
                         tooltip: '标注文字',
-                        selected: widget.activeTool == CaptureTool.text,
-                        onPressed: () =>
-                            widget.onToolSelected(CaptureTool.text),
+                        selected: activeTool == CaptureTool.text,
+                        onPressed: () => onToolSelected(CaptureTool.text),
                       ),
                       const _ToolbarDivider(),
                       _ToolbarColorPalette(
-                        selectedColor: widget.selectedColor,
-                        onSelected: widget.onColorSelected,
+                        selectedColor: selectedColor,
+                        onSelected: onColorSelected,
                       ),
                       const _ToolbarDivider(),
                       const _AiPlaceholderGroup(),
@@ -131,18 +120,14 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       _ToolbarTextButton(
                         icon: HugeIcons.strokeRoundedSave,
                         tooltip: '保存 PNG',
-                        onPressed: !widget.enabled || widget.busy
-                            ? null
-                            : widget.onSave,
+                        onPressed: busy ? null : onSave,
                       ),
                       const SizedBox(width: 4),
                       _ToolbarTextButton(
                         icon: HugeIcons.strokeRoundedCopy01,
                         tooltip: '复制到剪贴板',
-                        busy: widget.busy,
-                        onPressed: !widget.enabled || widget.busy
-                            ? null
-                            : widget.onCopy,
+                        busy: busy,
+                        onPressed: busy ? null : onCopy,
                       ),
                     ],
                   ),

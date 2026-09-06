@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -18,6 +19,7 @@ final class NativeBridge {
     );
   }
 
+  static const _textBufferCapacity = 4096;
   static final NativeBridge instance = NativeBridge._();
 
   final DynamicLibrary _library;
@@ -25,24 +27,35 @@ final class NativeBridge {
   late final _CopyPngDart _copyPng;
   late final _LastErrorDart _lastError;
 
-  Future<String> captureScreen() async {
-    final buffer = calloc<Uint8>(4096);
+  /// Runs the blocking Mutter/GStreamer capture call on a worker isolate.
+  Future<String> captureScreen() {
+    return Isolate.run(() => NativeBridge.instance._captureScreenSync());
+  }
+
+  /// Runs the blocking wl-copy process on a worker isolate.
+  Future<void> copyPngToClipboard(Uint8List pngBytes) {
+    if (pngBytes.isEmpty) {
+      throw const NativeBridgeException('PNG 数据为空');
+    }
+    return Isolate.run(
+      () => NativeBridge.instance._copyPngToClipboardSync(pngBytes),
+    );
+  }
+
+  String _captureScreenSync() {
+    final buffer = calloc<Uint8>(_textBufferCapacity);
     try {
-      final result = _captureScreen(buffer, 4096);
+      final result = _captureScreen(buffer, _textBufferCapacity);
       if (result != 0) {
         throw NativeBridgeException(_readLastError());
       }
-      return _readCString(buffer);
+      return _readCString(buffer, _textBufferCapacity);
     } finally {
       calloc.free(buffer);
     }
   }
 
-  Future<void> copyPngToClipboard(Uint8List pngBytes) async {
-    if (pngBytes.isEmpty) {
-      throw const NativeBridgeException('PNG 数据为空');
-    }
-
+  void _copyPngToClipboardSync(Uint8List pngBytes) {
     final buffer = calloc<Uint8>(pngBytes.length);
     try {
       buffer.asTypedList(pngBytes.length).setAll(0, pngBytes);
@@ -56,23 +69,21 @@ final class NativeBridge {
   }
 
   String _readLastError() {
-    final buffer = calloc<Uint8>(4096);
+    final buffer = calloc<Uint8>(_textBufferCapacity);
     try {
-      _lastError(buffer, 4096);
-      final message = _readCString(buffer);
+      _lastError(buffer, _textBufferCapacity);
+      final message = _readCString(buffer, _textBufferCapacity);
       return message.isEmpty ? 'Rust 原生操作失败' : message;
     } finally {
       calloc.free(buffer);
     }
   }
 
-  static String _readCString(Pointer<Uint8> pointer) {
+  static String _readCString(Pointer<Uint8> pointer, int capacity) {
     final bytes = <int>[];
-    for (var index = 0; index < 1024 * 1024; index++) {
+    for (var index = 0; index < capacity; index++) {
       final value = pointer[index];
-      if (value == 0) {
-        break;
-      }
+      if (value == 0) break;
       bytes.add(value);
     }
     return utf8.decode(bytes, allowMalformed: true);
