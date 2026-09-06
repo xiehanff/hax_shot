@@ -3,10 +3,9 @@ use gst::prelude::*;
 use gstreamer as gst;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
@@ -135,11 +134,10 @@ async fn start_mutter_screencast() -> Result<(Connection, OwnedObjectPath, u32),
     .map_err(|error| format!("failed to connect to Mutter ScreenCast: {error}"))?;
 
     let session_options: HashMap<&str, Value<'_>> = HashMap::new();
-    let session_path: OwnedObjectPath =
-        screen_cast
-            .call("CreateSession", &session_options)
-            .await
-            .map_err(|error| format!("Mutter ScreenCast session creation failed: {error}"))?;
+    let session_path: OwnedObjectPath = screen_cast
+        .call("CreateSession", &session_options)
+        .await
+        .map_err(|error| format!("Mutter ScreenCast session creation failed: {error}"))?;
 
     let session = Proxy::new(
         &connection,
@@ -391,40 +389,4 @@ pub extern "C" fn hax_shot_last_error(buffer: *mut u8, capacity: usize) -> usize
         .map(|error| error.clone())
         .unwrap_or_else(|_| "native error state is unavailable".to_owned());
     write_bytes_to_buffer(message.as_bytes(), buffer, capacity)
-}
-
-/// Remove a temporary capture file created by `hax_shot_capture_screen`.
-#[no_mangle]
-pub extern "C" fn hax_shot_remove_file(path: *const u8) -> i32 {
-    if path.is_null() {
-        set_last_error("file path pointer is null".to_owned());
-        return -1;
-    }
-
-    // SAFETY: the pointer is expected to reference a valid NUL-terminated UTF-8 path
-    // created by this library's capture function.
-    let path_bytes = unsafe { std::ffi::CStr::from_ptr(path.cast()) };
-    let path_string = match path_bytes.to_str() {
-        Ok(value) => value,
-        Err(_) => {
-            set_last_error("file path is not valid UTF-8".to_owned());
-            return -1;
-        }
-    };
-
-    if !Path::new(path_string)
-        .extension()
-        .is_some_and(|extension| extension == OsStr::new("png"))
-    {
-        set_last_error("refusing to remove a non-PNG path".to_owned());
-        return -1;
-    }
-
-    match fs::remove_file(path_string) {
-        Ok(()) => 0,
-        Err(error) => {
-            set_last_error(format!("failed to remove temporary screenshot: {error}"));
-            -1
-        }
-    }
 }
