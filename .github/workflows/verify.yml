@@ -1,0 +1,67 @@
+name: Verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hax-shot-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.44.8'
+
+jobs:
+  verify:
+    name: Analyze and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Resolve pinned Flutter SDK
+        shell: bash
+        run: |
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+          fvm install
+          fvm flutter pub get
+
+      - name: Run Dart checks
+        run: |
+          fvm flutter analyze
+          fvm flutter test
+
+      - name: Run Rust checks
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --check
+          cargo check --manifest-path rust/Cargo.toml
+          cargo test --manifest-path rust/Cargo.toml
