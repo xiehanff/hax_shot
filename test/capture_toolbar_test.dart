@@ -1,7 +1,7 @@
-import 'package:hax_shot/features/capture/annotation.dart';
-import 'package:hax_shot/features/capture/capture_toolbar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hax_shot/features/capture/annotation.dart';
+import 'package:hax_shot/features/capture/capture_toolbar.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 void main() {
@@ -18,7 +18,6 @@ void main() {
         home: Scaffold(
           body: Center(
             child: CaptureToolbar(
-              enabled: true,
               busy: false,
               activeTool: CaptureTool.selection,
               selectedColor: annotationColors.first,
