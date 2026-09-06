@@ -3,7 +3,7 @@
 ## 0. 阅读范围
 
 - 仓库：<https://github.com/bheemrc/SnapShotKit>
-- 本地路径：`/home/han/Documents/github/easy_shot/references/snapshotkit`
+- 本地路径：`/home/han/Documents/github/hax_shot/references/snapshotkit`
 - 本地浅克隆提交：`d13699b`
 - 许可证：MIT
 - 目标：研究轻量原生截图、坐标规范、统一导出和剪贴板实现。
@@ -85,7 +85,7 @@ PNG / Clipboard          背景合成
 - recents；
 - OCR、脱敏、保存和导出动作。
 
-Easy Shot MVP 不需要完整的 `AppState` 单例，可以拆成 Flutter 的页面状态和 Rust 的平台服务。
+Hax Shot MVP 不需要完整的 `AppState` 单例，可以拆成 Flutter 的页面状态和 Rust 的平台服务。
 
 ## 3. 屏幕捕获
 
@@ -121,7 +121,7 @@ bitmap：top-left / y-down / pixel
 
 窗口捕获只传递 `CGWindowID`，真正捕获时重新解析窗口，避免跨 actor 传递非 Sendable 的 `SCWindow`。
 
-这对 Easy Shot 的直接意义：桥接接口不能只返回图片，还应返回：
+这对 Hax Shot 的直接意义：桥接接口不能只返回图片，还应返回：
 
 ```text
 pixelWidth
@@ -149,7 +149,7 @@ scaleY
 - `didFinish` 保证 completion 只执行一次；
 - 先关闭 overlay，再执行捕获回调，防止 overlay 被截入截图。
 
-Easy Shot 使用 Flutter 画面模拟冻结背景，因此不需要完全复制 AppKit 的清除绘制方式，但必须保留两个原则：
+Hax Shot 使用 Flutter 画面模拟冻结背景，因此不需要完全复制 AppKit 的清除绘制方式，但必须保留两个原则：
 
 1. 交互层和截图源要有明确关系；
 2. 结束选区前不能让 overlay 自身进入最终截图。
@@ -171,7 +171,7 @@ Easy Shot 使用 Flutter 画面模拟冻结背景，因此不需要完全复制 
 
 `Annotation` 永远保存为图片像素坐标、左上角原点。只有 `PDFExporter.swift` 在导出 PDF 时进行 y-flip，其他模块不重复翻转。
 
-Easy Shot 应进一步简化为：
+Hax Shot 应进一步简化为：
 
 ```text
 Flutter UI：top-left / y-down / logical point
@@ -235,7 +235,7 @@ Annotation
 
 PNG、剪贴板、OCR、Pin、PDF、PPTX 都复用 flatten 结果。
 
-这是 Easy Shot 后续增加标注时必须保留的原则：**原图和标注模型分离，最终保存和复制共享同一个渲染出口**。当前 MVP 没有标注时，可以把“选区裁剪后的 PNG”作为这个出口。
+这是 Hax Shot 后续增加标注时必须保留的原则：**原图和标注模型分离，最终保存和复制共享同一个渲染出口**。当前 MVP 没有标注时，可以把“选区裁剪后的 PNG”作为这个出口。
 
 ## 7. 保存和剪贴板
 
@@ -258,7 +258,7 @@ AppState.copySelectedToClipboard()
     → ExportService.copyToPasteboard()
 ```
 
-Easy Shot MVP：
+Hax Shot MVP：
 
 - Flutter 用 `file_selector` 打开保存路径选择；
 - Rust/Wayland 负责图片剪贴板；
@@ -277,7 +277,7 @@ SnapShotKit 将原始 PNG 保存到：
 
 当前只保存原始图片和标题文件名，不保存标注、ID、undo/redo 状态。源码还存在一个问题：`AppState.captureWindow(id:)` 成功后没有调用 `persistRecents()`，窗口截图不会立即进入历史。
 
-Easy Shot 当前 MVP 不实现历史，但未来应使用：
+Hax Shot 当前 MVP 不实现历史，但未来应使用：
 
 ```text
 capture.png
@@ -321,7 +321,7 @@ Carbon 回调使用非 owning 指针，因此 `AppDelegate` 必须强引用 `Hot
 - 支持拖动、Esc 和关闭；
 - 控制器强引用所有窗口。
 
-Pin 不属于 Easy Shot 当前 MVP，但未来实现时要保留“管理器持有独立窗口对象”的生命周期设计。
+Pin 不属于 Hax Shot 当前 MVP，但未来实现时要保留“管理器持有独立窗口对象”的生命周期设计。
 
 ## 10. 其他功能及其取舍
 
@@ -338,7 +338,7 @@ Pin 不属于 Easy Shot 当前 MVP，但未来实现时要保留“管理器持�
 - `RecordingEngine.swift`：SCStream + AVAssetWriter，30 FPS H.264；
 - `ScrollingCaptureEngine.swift`：模拟滚轮、重复捕获、通过亮度签名查找重叠行。
 
-二者都需要额外权限和大量桌面兼容工作，不进入 Easy Shot MVP。
+二者都需要额外权限和大量桌面兼容工作，不进入 Hax Shot MVP。
 
 ## 11. 源码中发现的问题
 
@@ -350,9 +350,9 @@ Pin 不属于 Easy Shot 当前 MVP，但未来实现时要保留“管理器持�
 6. `CIPixellate` 是像素化，不是传统模糊，产品文案需要区分。
 7. README 关于“无 Dock 图标”的描述与 `LSUIElement=false`/regular activation policy 存在不一致。
 
-这些问题说明 Easy Shot MVP 不应复制完整项目，而应只抽取坐标、图像输出和状态边界。
+这些问题说明 Hax Shot MVP 不应复制完整项目，而应只抽取坐标、图像输出和状态边界。
 
-## 12. 对 Easy Shot 的直接结论
+## 12. 对 Hax Shot 的直接结论
 
 ### 推荐映射
 
@@ -395,4 +395,4 @@ HotkeyManager                 → GNOME 系统自定义快捷键
 Copyright (c) 2026 Bheema Rajulu
 ```
 
-如果未来直接复制其代码，应保留 MIT 许可证和版权声明。当前 Easy Shot 只参考架构和实现思路，不直接复制 Swift 代码。
+如果未来直接复制其代码，应保留 MIT 许可证和版权声明。当前 Hax Shot 只参考架构和实现思路，不直接复制 Swift 代码。

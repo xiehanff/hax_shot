@@ -1,10 +1,29 @@
-# Easy Shot 当前实现与后续开发指南
+# Hax Shot 当前实现与后续开发指南
 
 > 这份文档记录的是**当前代码已经实现的行为**，不是最初的设计草案。后续 Agent 开始改 UI、截图流程或 Linux 集成前，应先读本文件，再读 [`reference-decisions.md`](./reference-decisions.md) 和 [`icon-and-tray.md`](./icon-and-tray.md)。
 
+## 0. 开发工具链
+
+项目使用 FVM 固定 Flutter SDK：
+
+```text
+Flutter 3.44.8
+Dart 3.12.2
+```
+
+首次准备或切换 SDK：
+
+```bash
+fvm install
+fvm use 3.44.8
+fvm flutter --version
+```
+
+后续所有 Flutter 命令都使用 `fvm flutter`，不要直接调用系统 Flutter。
+
 ## 1. 先记住产品边界
 
-Easy Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有 GNOME 托盘图标和托盘菜单。
+Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有 GNOME 托盘图标和托盘菜单。
 
 托盘菜单目前只有：
 
@@ -21,7 +40,7 @@ Easy Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，�
 ```text
 Alt+Z / 托盘“立即截屏”
     ↓
-启动一个新的 easy_shot --capture 进程
+启动一个新的 hax_shot --capture 进程
     ↓
 窗口保持隐藏，Rust 通过 Mutter ScreenCast + PipeWire 获取一帧冻结画面
     ↓
@@ -43,7 +62,7 @@ Alt+Z / 托盘“立即截屏”
 |---|---|---|
 | `lib/main.dart` | 解析 `--capture`，配置窗口 | `skipTaskbar` 必须保持为 `true`；捕获进程必须先隐藏 |
 | `lib/app.dart` | tray-only 宿主、快捷键设置页、菜单、启动子进程 | 不要重新添加主应用窗口；设置页是按需显示的临时窗口；菜单截图通过 `Platform.resolvedExecutable --capture` 启动独立进程 |
-| `lib/features/settings/shortcut_settings_page.dart` | 读取/展示/删除/录制 GNOME 自定义快捷键 | 通过 `gsettings` 操作固定的 `easy-shot` relocatable schema，不要只改 Flutter 内存状态 |
+| `lib/features/settings/shortcut_settings_page.dart` | 读取/展示/删除/录制 GNOME 自定义快捷键 | 通过 `gsettings` 操作固定的 `hax-shot` relocatable schema，不要只改 Flutter 内存状态 |
 | `lib/features/capture/capture_page.dart` | 冻结图加载、框选、保存、复制 | `_capture()` 完成前不要显示捕获窗口；保存/复制使用同一份裁剪逻辑 |
 | `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和预留工具组 | 保持全圆角、纯白边框、BackdropFilter；颜色板只切换当前色斑的对应色边框，标注/AI 仍未接入截图绘制 |
 | `lib/features/capture/screenshot_canvas.dart` | 图片适配、遮罩、选区绘制、point→pixel 映射 | `ScreenshotLayout` 的坐标是 Flutter logical pixels，最终裁剪是物理像素 |
@@ -60,13 +79,13 @@ Alt+Z / 托盘“立即截屏”
 执行：
 
 ```bash
-flutter run -d linux
+fvm flutter run -d linux
 ```
 
 或直接运行 bundle：
 
 ```bash
-build/linux/x64/release/bundle/easy_shot
+build/linux/x64/release/bundle/hax_shot
 ```
 
 这个进程：
@@ -84,7 +103,7 @@ build/linux/x64/release/bundle/easy_shot
 因此调 UI 时如果只运行普通命令，看不到窗口是正常的。要看框选 UI，可以按 `Alt+Z`，或运行：
 
 ```bash
-flutter run -d linux -- --capture
+fvm flutter run -d linux -- --capture
 ```
 
 ### 3.2 短生命周期捕获进程
@@ -106,7 +125,7 @@ flutter run -d linux -- --capture
 
 `org.freedesktop.portal.Screenshot` 是标准授权接口，但 GNOME Wayland 的 Screenshot 路径可能播放截图闪光/相机声音。它适合普通“拍一张屏幕”的工具，不适合本项目的“先冻结、再框选”体验。
 
-GNOME Shell 自己的截图 UI 使用 Mutter 内部的 `screenshot_stage_to_content()` 获取合成器内容，再在 Shell actor 上绘制遮罩。外部应用无法直接调用这个 Shell 内部对象，所以 Easy Shot 使用 Mutter 对外的 ScreenCast D-Bus 接口复现同样的顺序。
+GNOME Shell 自己的截图 UI 使用 Mutter 内部的 `screenshot_stage_to_content()` 获取合成器内容，再在 Shell actor 上绘制遮罩。外部应用无法直接调用这个 Shell 内部对象，所以 Hax Shot 使用 Mutter 对外的 ScreenCast D-Bus 接口复现同样的顺序。
 
 ### 4.2 Rust 的实际调用顺序
 
@@ -126,7 +145,7 @@ GStreamer:
 pipewiresrc(path=node id, num-buffers=1)
     → videoconvert
     → pngenc
-    → filesink(/tmp/easy-shot-*.png)
+    → filesink(/tmp/hax-shot-*.png)
 
 Session.Stop
     → 把 PNG 路径返回给 Dart
@@ -189,14 +208,14 @@ cargo build --manifest-path rust/Cargo.toml --release
 即使 Flutter 是 debug 构建，Rust 库也放在 `rust/target/release/`，最终复制到：
 
 ```text
-build/linux/x64/<mode>/bundle/lib/libeasy_shot_native.so
+build/linux/x64/<mode>/bundle/lib/libhax_shot_native.so
 ```
 
 ### FFI 和临时文件
 
-`easy_shot_capture_screen` 返回 NUL 结尾的临时 PNG 路径，而不是把整张图片通过 FFI 复制回 Dart。Dart 读取并解码后会尝试删除文件；删除失败时只保留临时文件，不影响截图结果。
+`hax_shot_capture_screen` 返回 NUL 结尾的临时 PNG 路径，而不是把整张图片通过 FFI 复制回 Dart。Dart 读取并解码后会尝试删除文件；删除失败时只保留临时文件，不影响截图结果。
 
-`easy_shot_copy_png_to_clipboard` 通过：
+`hax_shot_copy_png_to_clipboard` 通过：
 
 ```bash
 wl-copy --type image/png
@@ -247,7 +266,7 @@ gsettings binding = <Alt>z
 快捷键不是 Flutter 内部注册的。Wayland 下普通应用不能可靠地伪造任意全局热键，所以由 GNOME 自定义快捷键执行：
 
 ```text
-easy_shot --capture
+hax_shot --capture
 ```
 
 ### `Exec` 和 desktop ID 的区别
@@ -255,26 +274,26 @@ easy_shot --capture
 脚本会写入：
 
 ```text
-~/.local/share/applications/com.example.easy_shot.desktop
+~/.local/share/applications/com.github.xiehanff.hax_shot.desktop
 ```
 
 这个文件使用：
 
 ```text
-Exec=/.../easy_shot
-Icon=com.example.easy_shot
+Exec=/.../hax_shot
+Icon=com.github.xiehanff.hax_shot
 NoDisplay=true
-StartupWMClass=com.example.easy_shot
+StartupWMClass=com.github.xiehanff.hax_shot
 ```
 
-注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `easy_shot --capture`。这样 desktop entry 才代表应用本身，同时不在应用菜单显示 tray-only 程序。
+注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `hax_shot --capture`。这样 desktop entry 才代表应用本身，同时不在应用菜单显示 tray-only 程序。
 
 桌面文件名、Wayland app ID、`StartupWMClass`、图标名必须保持一致：
 
 ```text
-com.example.easy_shot
-com.example.easy_shot.desktop
-com.example.easy_shot.png
+com.github.xiehanff.hax_shot
+com.github.xiehanff.hax_shot.desktop
+com.github.xiehanff.hax_shot.png
 ```
 
 以前 Dock 显示 Flutter 默认图标，核心风险就是这些标识不一致、旧 desktop 文件残留或图标缓存没有刷新。
@@ -297,7 +316,7 @@ com.example.easy_shot.png
 - 必须包含至少一个修饰键和一个主体按键；
 - `Esc` 取消录制；
 - 组合键转成 GNOME 格式，例如 `Alt+Z` → `<Alt>z`、`Ctrl+Shift+4` → `<Control><Shift>4`；
-- 新快捷键保存到固定 schema，并确保 `custom-keybindings` 数组包含 `easy-shot` 路径；
+- 新快捷键保存到固定 schema，并确保 `custom-keybindings` 数组包含 `hax-shot` 路径；
 - 删除只清空 `binding`，保留 relocatable schema，方便下一次录制直接恢复；
 - 设置页关闭/隐藏后不销毁托盘宿主。
 
@@ -308,10 +327,10 @@ com.example.easy_shot.png
 debug 构建中 `my_application.cc` 会把 bundle 内的图标复制到：
 
 ```text
-~/.local/share/icons/hicolor/256x256/apps/com.example.easy_shot.png
+~/.local/share/icons/hicolor/256x256/apps/com.github.xiehanff.hax_shot.png
 ```
 
-并动态生成一个带绝对路径的开发 desktop 文件，方便 `flutter run` 的窗口被 GNOME 识别。这个文件可能把 release desktop 的 `Exec` 临时改成 debug 路径。
+并动态生成一个带绝对路径的开发 desktop 文件，方便 `fvm flutter run` 的窗口被 GNOME 识别。这个文件可能把 release desktop 的 `Exec` 临时改成 debug 路径。
 
 所以在验证 GNOME 快捷键前，建议重新执行：
 
@@ -352,55 +371,49 @@ lib/features/capture/capture_page.dart
 
 ## 9. 图标更换流程
 
-当前图标来自：
+当前图标源文件是项目原创的：
 
 ```text
-/home/han/Downloads/Proton_Pass-4022f38d0f.icns
+assets/icons/hax_shot.svg
 ```
 
-使用的 skill：
-
-```text
-/home/han/Documents/gitee/my-notes/skills/icns-handle/
-```
-
-生成 Linux 图标组的命令：
+使用 ImageMagick 生成 Linux hicolor 图标组：
 
 ```bash
-python3 /home/han/Documents/gitee/my-notes/skills/icns-handle/scripts/icns_handle.py \
-  generate /home/han/Downloads/Proton_Pass-4022f38d0f.icns \
-  -o assets/generated_icons \
-  -p linux \
-  -n easy_shot
+for size in 16 24 32 48 64 128 256 512; do
+  magick -background none assets/icons/hax_shot.svg \
+    -resize "${size}x${size}" -depth 8 \
+    "linux/icons/hicolor/${size}x${size}/apps/com.github.xiehanff.hax_shot.png"
+done
 ```
 
 当前工程有两份用途不同的图标：
 
 | 路径 | 用途 |
 |---|---|
-| `assets/icons/easy_shot.png` | Flutter `tray_manager` 和 Flutter 资源 |
-| `linux/icons/hicolor/*/apps/com.example.easy_shot.png` | GNOME desktop/icon theme |
-| `linux/icons/hicolor/256x256/apps/com.example.easy_shot.png` | GTK runner 的 `data/easy_shot_icon.png` 来源 |
-| `linux/icons/easy_shot.png` | 256px 兼容副本，不是 hicolor 主来源 |
+| `assets/icons/hax_shot.png` | Flutter `tray_manager` 和 Flutter 资源 |
+| `linux/icons/hicolor/*/apps/com.github.xiehanff.hax_shot.png` | GNOME desktop/icon theme |
+| `linux/icons/hicolor/256x256/apps/com.github.xiehanff.hax_shot.png` | GTK runner 的 `data/hax_shot_icon.png` 来源 |
+| `linux/icons/hax_shot.png` | 256px 兼容副本，不是 hicolor 主来源 |
 
 更换图标后必须同时完成：
 
 ```bash
-flutter build linux --release
+fvm flutter build linux --release
 ./scripts/install-gnome-shortcut.sh
 ```
 
-正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Easy Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
+正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
 
 ## 10. 调试和验证清单
 
 ### Dart/Flutter
 
 ```bash
-flutter analyze
-flutter test
-flutter build linux --debug
-flutter build linux --release
+fvm flutter analyze
+fvm flutter test
+fvm flutter build linux --debug
+fvm flutter build linux --release
 ```
 
 ### Rust
@@ -417,14 +430,14 @@ cargo test
 
 ```bash
 desktop-file-validate \
-  packaging/easy_shot.desktop \
-  build/linux/x64/release/bundle/share/applications/com.example.easy_shot.desktop \
-  "$HOME/.local/share/applications/com.example.easy_shot.desktop"
+  packaging/hax_shot.desktop \
+  build/linux/x64/release/bundle/share/applications/com.github.xiehanff.hax_shot.desktop \
+  "$HOME/.local/share/applications/com.github.xiehanff.hax_shot.desktop"
 
 sha256sum \
-  assets/icons/easy_shot.png \
-  linux/icons/hicolor/256x256/apps/com.example.easy_shot.png \
-  build/linux/x64/release/bundle/data/easy_shot_icon.png
+  assets/icons/hax_shot.png \
+  linux/icons/hicolor/256x256/apps/com.github.xiehanff.hax_shot.png \
+  build/linux/x64/release/bundle/data/hax_shot_icon.png
 ```
 
 ### 运行时检查
@@ -432,19 +445,19 @@ sha256sum \
 普通进程应该没有 Wayland toplevel，只保留托盘图标：
 
 ```bash
-WAYLAND_DEBUG=1 build/linux/x64/debug/bundle/easy_shot
+WAYLAND_DEBUG=1 build/linux/x64/debug/bundle/hax_shot
 ```
 
 捕获进程应该在 Rust 返回 PNG 后才出现全屏 toplevel：
 
 ```bash
-build/linux/x64/debug/bundle/easy_shot --capture
+build/linux/x64/debug/bundle/hax_shot --capture
 ```
 
-不要用宽泛的 `pkill -f 'flutter run -d linux'` 清理进程，它可能误杀其他项目的 Flutter 调试会话。优先根据工作目录和 PID 判断，或者只使用：
+不要用宽泛的 `pkill -f 'fvm flutter run -d linux'` 清理进程，它可能误杀其他项目的 Flutter 调试会话。优先根据工作目录和 PID 判断，或者只使用：
 
 ```bash
-pkill -x easy_shot
+pkill -x hax_shot
 ```
 
 ## 11. 已知限制和未完成项

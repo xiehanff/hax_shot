@@ -3,7 +3,7 @@
 ## 0. 阅读范围
 
 - 仓库：<https://github.com/tyypgzl/screenshot>
-- 本地路径：`/home/han/Documents/github/easy_shot/references/screenshot`
+- 本地路径：`/home/han/Documents/github/hax_shot/references/screenshot`
 - 本地浅克隆提交：`36eb70a`
 - 技术：Swift + AppKit + ScreenCaptureKit
 - 目标：研究最小菜单栏截图工具的实际主链路。
@@ -38,7 +38,7 @@ compositeImage()
 NSPasteboard 或桌面 PNG 文件
 ```
 
-Easy Shot MVP 可以直接借鉴这条“单次截图 → 框选 → 输出”链路，但 UI 和 Linux 系统调用由 Flutter/Rust 重写。
+Hax Shot MVP 可以直接借鉴这条“单次截图 → 框选 → 输出”链路，但 UI 和 Linux 系统调用由 Flutter/Rust 重写。
 
 ## 2. AppModel 和入口
 
@@ -81,11 +81,11 @@ Easy Shot MVP 可以直接借鉴这条“单次截图 → 框选 → 输出”�
 11. 翻转 Y 轴并裁剪选区；
 12. 返回内部保留 Retina 像素的 `NSImage`。
 
-对 Easy Shot 的直接启发：截图 MVP 不需要长期保持录屏流，只获取一张冻结帧即可；但必须保留 `point/pixel/scale` 元数据。
+对 Hax Shot 的直接启发：截图 MVP 不需要长期保持录屏流，只获取一张冻结帧即可；但必须保留 `point/pixel/scale` 元数据。
 
 ### 必须处理的错误
 
-当前参考项目存在两个不足，Easy Shot 不要照搬：
+当前参考项目存在两个不足，Hax Shot 不要照搬：
 
 - `SCShareableContent.current` 失败时基本静默返回 `nil`；
 - 首帧始终不到时 continuation 可能一直等待。
@@ -133,7 +133,7 @@ Rust 版本需要：
 selecting → editing
 ```
 
-这使最小应用的交互非常直接。Easy Shot MVP 可以用 Flutter 的一个页面完成同样状态切换：
+这使最小应用的交互非常直接。Hax Shot MVP 可以用 Flutter 的一个页面完成同样状态切换：
 
 ```text
 Idle → Selecting → Ready
@@ -169,10 +169,10 @@ Idle → Selecting → Ready
 - fallback monitor 没有完善的权限提示；
 - 菜单项快捷键和 Carbon 注册可能重复触发。
 
-Easy Shot 的 GNOME Wayland MVP 不复制这套 Carbon 方案，而是由 GNOME 自定义快捷键启动：
+Hax Shot 的 GNOME Wayland MVP 不复制这套 Carbon 方案，而是由 GNOME 自定义快捷键启动：
 
 ```text
-Alt+Z → easy_shot --capture
+Alt+Z → hax_shot --capture
 ```
 
 ## 6. 标注系统
@@ -205,7 +205,7 @@ Undo/Redo 使用 `AnnotationSnapshot` 保存完整标注数组和 badge counter�
 
 `ToolPanelView.swift` 构造底部工具栏和右侧操作面板，操作包括 Copy、Save、Close。
 
-但 Easy Shot 当前 MVP **不实现标注**。保留这个报告是为了未来增加标注时明确参考点，不应因为参考项目有标注就把 MVP 范围扩大。
+但 Hax Shot 当前 MVP **不实现标注**。保留这个报告是为了未来增加标注时明确参考点，不应因为参考项目有标注就把 MVP 范围扩大。
 
 ## 7. 导出和剪贴板
 
@@ -229,7 +229,7 @@ NSImage
 - 保留 Retina 原始像素；
 - 与多数图像应用兼容。
 
-Easy Shot Linux 版本不能使用 Flutter 文本 Clipboard API 代替图片剪贴板，应由 Rust 的 Wayland clipboard service 写入 `image/png`。
+Hax Shot Linux 版本不能使用 Flutter 文本 Clipboard API 代替图片剪贴板，应由 Rust 的 Wayland clipboard service 写入 `image/png`。
 
 ### 文件保存
 
@@ -254,7 +254,7 @@ Easy Shot Linux 版本不能使用 Flutter 文本 Clipboard API 代替图片剪�
 4. 重绘所有标注；
 5. 返回最终图片。
 
-Easy Shot 当前没有标注，因此最终图像只是选区裁剪结果；未来增加标注时也应只有一个统一合成出口。
+Hax Shot 当前没有标注，因此最终图像只是选区裁剪结果；未来增加标注时也应只有一个统一合成出口。
 
 ## 8. 未接通代码和阅读边界
 
@@ -276,7 +276,7 @@ Easy Shot 当前没有标注，因此最终图像只是选区裁剪结果；未�
 
 因此，后续 Agent 应优先阅读 `OverlaySelectionWindow.swift`、`CaptureManager.swift`、`ClipboardManager.swift` 和 `ExportManager.swift`，不要把备用 Editor 当作可运行基线。
 
-## 9. 对 Easy Shot 的直接映射
+## 9. 对 Hax Shot 的直接映射
 
 ```text
 AppModel                         → Flutter CaptureController
@@ -313,5 +313,5 @@ MVP 实现顺序：
 README 声明使用 MIT License，但本地仓库没有实际 `LICENSE` 文件，版权字段也为空。结论：
 
 - 可以阅读实现思路；
-- 不应在 Easy Shot 中直接复制源码；
+- 不应在 Hax Shot 中直接复制源码；
 - 正式复用前需要从上游确认许可证并补齐版权/许可文件。

@@ -11,18 +11,18 @@
             "program": "bin/main.dart"
         },
         {
-            "name": "easy_shot",
+            "name": "hax_shot",
             "request": "launch",
             "type": "dart"
         },
         {
-            "name": "easy_shot (profile mode)",
+            "name": "hax_shot (profile mode)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile"
         },
         {
-            "name": "easy_shot (release mode)",
+            "name": "hax_shot (release mode)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "release"

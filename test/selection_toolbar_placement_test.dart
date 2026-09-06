@@ -1,4 +1,4 @@
-import 'package:easy_shot/features/capture/selection_toolbar_placement.dart';
+import 'package:hax_shot/features/capture/selection_toolbar_placement.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/widgets.dart';
 

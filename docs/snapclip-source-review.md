@@ -2,7 +2,7 @@
 
 ## 1. 为什么不能继续调用 Screenshot Portal
 
-Easy Shot 原先通过 `org.freedesktop.portal.Screenshot` 请求整屏 PNG。这个接口适合普通应用获取授权后的截图，但在 GNOME Wayland 下会经过 Mutter 的截图路径，可能出现截图闪光和相机声音。
+Hax Shot 原先通过 `org.freedesktop.portal.Screenshot` 请求整屏 PNG。这个接口适合普通应用获取授权后的截图，但在 GNOME Wayland 下会经过 Mutter 的截图路径，可能出现截图闪光和相机声音。
 
 用户体验上，快捷键触发后先听到声音、再看到框选界面，会让人误以为工具已经自动保存了一张整屏截图。这个问题不是 Flutter 加载速度造成的，而是截图后端选择造成的。
 
@@ -48,9 +48,9 @@ pipewiresrc num-buffers=1
 
 ScreenCast 是屏幕录制/共享通道，不是 Screenshot 通道，因此不会播放 GNOME 截图快门动画。snapclip 还通过 `org.gnome.Mutter.DisplayConfig.GetCurrentState` 找到主显示器 connector，保证录制的显示器与全屏 overlay 对应。
 
-## 4. Easy Shot 的落地决策
+## 4. Hax Shot 的落地决策
 
-Easy Shot 采用与 snapclip 相同的 ScreenCast 思路，但把实现放进 Rust：
+Hax Shot 采用与 snapclip 相同的 ScreenCast 思路，但把实现放进 Rust：
 
 - `zbus`：创建和停止 Mutter ScreenCast session；
 - `gstreamer`：连接 `pipewiresrc`，输出单帧 PNG；
@@ -67,7 +67,7 @@ Easy Shot 采用与 snapclip 相同的 ScreenCast 思路，但把实现放进 Ru
 
 ## 5. 与参考实现的差异
 
-| 项目 | snapclip | Easy Shot |
+| 项目 | snapclip | Hax Shot |
 |---|---|---|
 | UI | GTK4/Cairo | Flutter CustomPainter |
 | ScreenCast | Python GObject D-Bus | Rust `zbus` |
@@ -96,4 +96,4 @@ gst-inspect-1.0 pipewiresrc
 gst-inspect-1.0 pngenc
 ```
 
-一句话总结：**GNOME 原生体验的核心是先缓存 Mutter 合成器的一帧，再显示冻结遮罩；Easy Shot 用 Mutter ScreenCast + PipeWire 在外部应用中复现这一顺序。**
+一句话总结：**GNOME 原生体验的核心是先缓存 Mutter 合成器的一帧，再显示冻结遮罩；Hax Shot 用 Mutter ScreenCast + PipeWire 在外部应用中复现这一顺序。**

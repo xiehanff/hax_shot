@@ -8,13 +8,13 @@ import 'package:ffi/ffi.dart';
 final class NativeBridge {
   NativeBridge._() : _library = _openLibrary() {
     _captureScreen = _library.lookupFunction<_CaptureNative, _CaptureDart>(
-      'easy_shot_capture_screen',
+      'hax_shot_capture_screen',
     );
     _copyPng = _library.lookupFunction<_CopyPngNative, _CopyPngDart>(
-      'easy_shot_copy_png_to_clipboard',
+      'hax_shot_copy_png_to_clipboard',
     );
     _lastError = _library.lookupFunction<_LastErrorNative, _LastErrorDart>(
-      'easy_shot_last_error',
+      'hax_shot_last_error',
     );
   }
 
@@ -81,9 +81,9 @@ final class NativeBridge {
   static DynamicLibrary _openLibrary() {
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
     final candidates = <String>[
-      '$executableDirectory/lib/libeasy_shot_native.so',
-      '$executableDirectory/libeasy_shot_native.so',
-      'libeasy_shot_native.so',
+      '$executableDirectory/lib/libhax_shot_native.so',
+      '$executableDirectory/libhax_shot_native.so',
+      'libhax_shot_native.so',
     ];
 
     Object? lastError;
@@ -96,7 +96,7 @@ final class NativeBridge {
     }
 
     throw StateError(
-      '找不到 Rust 原生库 libeasy_shot_native.so。'
+      '找不到 Rust 原生库 libhax_shot_native.so。'
       '尝试路径：${candidates.join(', ')}。'
       '最后错误：$lastError',
     );

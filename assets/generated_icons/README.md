@@ -1,13 +1,13 @@
-# 图标组: easy_shot
+# Hax Shot 图标资源
 
-- 主图来源: Proton_Pass-4022f38d0f.icns 中最大表示 ic[ic10] 1024x1024
-- 生成时间: 2026-09-06 11:41:16
-- 写入前已有内容自动备份于同级 `*-backup-*` 目录
+`assets/icons/hax_shot.svg` 是本项目原创的应用图标源文件；同目录下的 Linux PNG 由它生成，按 hicolor 目录规范提供 16–512 像素尺寸。
 
-## 各平台用法
+生成示例：
 
-- **macOS**: 将 `macos/easy_shot.iconset` 打包结果 `easy_shot.icns` 放入 Xcode asset 或 .app 的 `Contents/Resources/`
-- **iOS**: 将 `ios/AppIcon.appiconset/` 整个目录拖入 Xcode 的 `Assets.xcassets`
-- **Android**: 将 `android/res/` 下各 `mipmap-*` 目录合并进项目 `app/src/main/res/` (AndroidManifest 已引用 `@mipmap/ic_launcher` 即可)
-- **Windows**: 将 `windows/app_icon.ico` 用于打包配置 (Electron `build.win.icon`、Qt `.rc` 文件、MSIX 等)
-- **Linux**: 将 `linux/icons/hicolor/` 下各尺寸 PNG 复制到 `~/.local/share/icons/hicolor/`(用户)或 `/usr/share/icons/hicolor/`(系统), 然后 `gtk-update-icon-cache`
+```bash
+for size in 16 24 32 48 64 128 256 512; do
+  magick -background none assets/icons/hax_shot.svg \
+    -resize "${size}x${size}" -depth 8 \
+    "linux/icons/hicolor/${size}x${size}/apps/com.github.xiehanff.hax_shot.png"
+done
+```

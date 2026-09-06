@@ -179,7 +179,7 @@ class _CapturePageState extends State<CapturePage> {
           ),
         ],
         initialDirectory: home == null ? null : '$home/Pictures',
-        suggestedName: 'easy-shot-${_timestamp()}.png',
+        suggestedName: 'hax-shot-${_timestamp()}.png',
         confirmButtonText: '保存',
       );
       if (location == null) {

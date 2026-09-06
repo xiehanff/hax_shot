@@ -53,11 +53,7 @@ fn unique_temp_path() -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
 
-    std::env::temp_dir().join(format!(
-        "easy-shot-{}-{}.png",
-        std::process::id(),
-        timestamp
-    ))
+    std::env::temp_dir().join(format!("hax-shot-{}-{}.png", std::process::id(), timestamp))
 }
 
 type MonitorMode = (
@@ -320,7 +316,7 @@ fn copy_png_impl(data: &[u8]) -> Result<(), String> {
 
 /// Return the native library version used by the Flutter smoke test.
 #[no_mangle]
-pub extern "C" fn easy_shot_native_version() -> u32 {
+pub extern "C" fn hax_shot_native_version() -> u32 {
     1
 }
 
@@ -330,7 +326,7 @@ pub extern "C" fn easy_shot_native_version() -> u32 {
 /// returns 0. On failure, returns -1. If the output buffer is too small,
 /// returns -2 and records an error.
 #[no_mangle]
-pub extern "C" fn easy_shot_capture_screen(out_path: *mut u8, capacity: usize) -> i32 {
+pub extern "C" fn hax_shot_capture_screen(out_path: *mut u8, capacity: usize) -> i32 {
     clear_last_error();
 
     let result = std::panic::catch_unwind(capture_screen_impl);
@@ -361,7 +357,7 @@ pub extern "C" fn easy_shot_capture_screen(out_path: *mut u8, capacity: usize) -
 
 /// Copy PNG bytes to the regular Wayland image clipboard.
 #[no_mangle]
-pub extern "C" fn easy_shot_copy_png_to_clipboard(data: *const u8, length: usize) -> i32 {
+pub extern "C" fn hax_shot_copy_png_to_clipboard(data: *const u8, length: usize) -> i32 {
     clear_last_error();
 
     if data.is_null() || length == 0 {
@@ -389,7 +385,7 @@ pub extern "C" fn easy_shot_copy_png_to_clipboard(data: *const u8, length: usize
 /// Copy the last native error into a caller-owned NUL-terminated buffer.
 /// Returns the number of bytes required, including the NUL terminator.
 #[no_mangle]
-pub extern "C" fn easy_shot_last_error(buffer: *mut u8, capacity: usize) -> usize {
+pub extern "C" fn hax_shot_last_error(buffer: *mut u8, capacity: usize) -> usize {
     let message = last_error()
         .lock()
         .map(|error| error.clone())
@@ -397,9 +393,9 @@ pub extern "C" fn easy_shot_last_error(buffer: *mut u8, capacity: usize) -> usiz
     write_bytes_to_buffer(message.as_bytes(), buffer, capacity)
 }
 
-/// Remove a temporary capture file created by `easy_shot_capture_screen`.
+/// Remove a temporary capture file created by `hax_shot_capture_screen`.
 #[no_mangle]
-pub extern "C" fn easy_shot_remove_file(path: *const u8) -> i32 {
+pub extern "C" fn hax_shot_remove_file(path: *const u8) -> i32 {
     if path.is_null() {
         set_last_error("file path pointer is null".to_owned());
         return -1;

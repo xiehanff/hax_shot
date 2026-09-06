@@ -1,7 +1,9 @@
 [package]
-name = "easy_shot_native"
+name = "hax_shot_native"
 version = "0.1.0"
 edition = "2021"
+description = "Native GNOME Wayland capture and clipboard bridge for Hax Shot."
+license = "MIT"
 rust-version = "1.87"
 
 [lib]

@@ -34,20 +34,20 @@ static void install_dev_desktop_entry(const gchar* exe_path,
   g_autofree gchar* applications_dir =
       g_build_filename(user_data_dir, "applications", nullptr);
   g_autofree gchar* desktop_path = g_build_filename(
-      applications_dir, "com.example.easy_shot.desktop", nullptr);
+      applications_dir, "com.github.xiehanff.hax_shot.desktop", nullptr);
 
   g_autofree gchar* desktop_contents = g_strdup_printf(
       "[Desktop Entry]\n"
       "Type=Application\n"
-      "Name=Easy Shot\n"
+      "Name=Hax Shot\n"
       "Exec=%s\n"
       "Icon=%s\n"
       "Terminal=false\n"
       "NoDisplay=true\n"
       "Categories=Graphics;Utility;\n"
       "StartupNotify=true\n"
-      "StartupWMClass=com.example.easy_shot\n"
-      "X-GNOME-WMClass=com.example.easy_shot\n",
+      "StartupWMClass=com.github.xiehanff.hax_shot\n"
+      "X-GNOME-WMClass=com.github.xiehanff.hax_shot\n",
       exe_path, icon_path);
 
   g_mkdir_with_parents(applications_dir, 0755);
@@ -88,11 +88,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "easy_shot");
+    gtk_header_bar_set_title(header_bar, "Hax Shot");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "easy_shot");
+    gtk_window_set_title(window, "Hax Shot");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -107,7 +107,7 @@ static void my_application_activate(GApplication* application) {
   const gchar* assets_dir = fl_dart_project_get_assets_path(project);
   g_autofree gchar* data_dir = g_path_get_dirname(assets_dir);
   g_autofree gchar* icon_path =
-      g_build_filename(data_dir, "easy_shot_icon.png", nullptr);
+      g_build_filename(data_dir, "hax_shot_icon.png", nullptr);
   gtk_window_set_icon_from_file(window, icon_path, nullptr);
   gtk_window_set_icon_name(window, APPLICATION_ID);
 
@@ -119,7 +119,7 @@ static void my_application_activate(GApplication* application) {
     g_autofree gchar* icon_dir = g_build_filename(
         user_data_dir, "icons", "hicolor", "256x256", "apps", nullptr);
     g_autofree gchar* user_icon_path = g_build_filename(
-        icon_dir, "com.example.easy_shot.png", nullptr);
+        icon_dir, "com.github.xiehanff.hax_shot.png", nullptr);
     copy_file_overwrite(icon_path, user_icon_path);
     install_dev_desktop_entry(exe_path, user_icon_path);
   }

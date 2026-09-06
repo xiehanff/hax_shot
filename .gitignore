@@ -28,6 +28,10 @@ migrate_working_dir/
 
 # Rust build artifacts
 /rust/target/
+
+# Local-only reference clones; keep the tracked index file only.
+/references/*/
+
 **/ios/Flutter/.last_build_id
 .dart_tool/
 .flutter-plugins-dependencies
@@ -46,3 +50,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# FVM Version Cache
+.fvm/

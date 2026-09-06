@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Hax Shot
+Comment=Minimal Linux screenshot tool
+Exec=hax_shot
+Icon=com.github.xiehanff.hax_shot
+Terminal=false
+Type=Application
+NoDisplay=true
+Categories=Graphics;Utility;
+StartupNotify=true
+StartupWMClass=com.github.xiehanff.hax_shot
+X-GNOME-WMClass=com.github.xiehanff.hax_shot

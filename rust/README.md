@@ -1,9 +1,9 @@
 # Rust native layer
 
-Easy Shot 的 Linux 原生层已经接入 Flutter Linux 构建流程，生成：
+Hax Shot 的 Linux 原生层已经接入 Flutter Linux 构建流程，生成：
 
 ```text
-libeasy_shot_native.so
+libhax_shot_native.so
 ```
 
 ## 当前能力
@@ -26,15 +26,15 @@ cargo build --release
 Flutter 的 `linux/CMakeLists.txt` 会在构建应用时自动执行 release 构建，并将动态库安装到：
 
 ```text
-build/linux/x64/<mode>/bundle/lib/libeasy_shot_native.so
+build/linux/x64/<mode>/bundle/lib/libhax_shot_native.so
 ```
 
 ## C ABI
 
-- `easy_shot_capture_screen`
-- `easy_shot_copy_png_to_clipboard`
-- `easy_shot_last_error`
-- `easy_shot_remove_file`
+- `hax_shot_capture_screen`
+- `hax_shot_copy_png_to_clipboard`
+- `hax_shot_last_error`
+- `hax_shot_remove_file`
 
 Dart 封装位于 `lib/native/native_bridge.dart`。
 

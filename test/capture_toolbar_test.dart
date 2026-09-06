@@ -1,10 +1,12 @@
-import 'package:easy_shot/features/capture/capture_toolbar.dart';
+import 'package:hax_shot/features/capture/capture_toolbar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 void main() {
-  testWidgets('toolbar paints its controls and handles actions', (tester) async {
+  testWidgets('toolbar paints its controls and handles actions', (
+    tester,
+  ) async {
     var cancelled = false;
     var saved = false;
     var copied = false;

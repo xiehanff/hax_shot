@@ -3,7 +3,7 @@
 ## 0. 阅读范围
 
 - 仓库：<https://github.com/croc100/Reticle>
-- 本地路径：`/home/han/Documents/github/easy_shot/references/reticle`
+- 本地路径：`/home/han/Documents/github/hax_shot/references/reticle`
 - 本地浅克隆提交：`8d05dfa`
 - 目标：理解接近 Snipaste 的冻结截图、框选、标注、保存、复制和贴图流程。
 - 阅读方式：实际阅读关键 Swift 源文件、测试和许可证；本报告不是 README 摘要。
@@ -81,7 +81,7 @@ reticle/
 3. 将 Carbon modifier flags 和 AppKit modifier flags 做转换；
 4. 设置页使用本地 key monitor 录入快捷键。
 
-Linux/GNOME Wayland 不能直接照搬此机制。Easy Shot MVP 使用 GNOME 自定义快捷键调用 `easy_shot --capture`，将系统快捷键和应用截图流程解耦。
+Linux/GNOME Wayland 不能直接照搬此机制。Hax Shot MVP 使用 GNOME 自定义快捷键调用 `hax_shot --capture`，将系统快捷键和应用截图流程解耦。
 
 ## 3. 截图总调用链
 
@@ -104,7 +104,7 @@ Reticle 的区域截图主链路为：
   → 保存、剪贴板、通知、历史、贴图、上传、OCR
 ```
 
-对 Easy Shot MVP 来说，只保留：
+对 Hax Shot MVP 来说，只保留：
 
 ```text
 系统快捷键
@@ -174,7 +174,7 @@ Linux Rust 版本不需要模仿 CoreImage，但需要保留“原始像素图 �
 - 根据窗口 ID 查窗口；
 - 获取 Retina backing scale。
 
-Easy Shot MVP 第一阶段只保证 GNOME Wayland 单显示器，仍然要在数据结构中保留 `pixelWidth/pixelHeight/scale`，避免以后重写坐标模型。
+Hax Shot MVP 第一阶段只保证 GNOME Wayland 单显示器，仍然要在数据结构中保留 `pixelWidth/pixelHeight/scale`，避免以后重写坐标模型。
 
 ## 5. 冻结覆盖层和框选
 
@@ -196,7 +196,7 @@ Easy Shot MVP 第一阶段只保证 GNOME Wayland 单显示器，仍然要在数
 
 多个显示器共享一个 `OverlayViewModel`，工具栏显示在鼠标所在显示器。
 
-这里最值得借鉴的不是 AppKit API，而是流程：**先拿到冻结图，再在冻结图上做框选**。Easy Shot 用 Flutter 显示冻结 PNG，Rust 只负责原始截图和 PNG 处理。
+这里最值得借鉴的不是 AppKit API，而是流程：**先拿到冻结图，再在冻结图上做框选**。Hax Shot 用 Flutter 显示冻结 PNG，Rust 只负责原始截图和 PNG 处理。
 
 ### OverlayView
 
@@ -211,7 +211,7 @@ Easy Shot MVP 第一阶段只保证 GNOME Wayland 单显示器，仍然要在数
 - 8 个缩放手柄；
 - Shift 约束比例/角度。
 
-Easy Shot MVP 只保留：
+Hax Shot MVP 只保留：
 
 - 左键拖拽；
 - 有效矩形选区；
@@ -226,11 +226,11 @@ Easy Shot MVP 只保留：
 2. 根据 `baseCGImage.width / bounds.width` 计算真实像素缩放；
 3. 调用 `renderFinalImage()` 生成最终图片。
 
-这提醒 Easy Shot：Flutter 的逻辑像素选区不能直接作为 PNG 裁剪坐标，必须转换为物理像素。
+这提醒 Hax Shot：Flutter 的逻辑像素选区不能直接作为 PNG 裁剪坐标，必须转换为物理像素。
 
 ## 6. 标注模型和绘制
 
-虽然 Easy Shot MVP 暂不实现标注，仍需要了解 Reticle 的模型边界。
+虽然 Hax Shot MVP 暂不实现标注，仍需要了解 Reticle 的模型边界。
 
 关键文件：
 
@@ -262,7 +262,7 @@ Easy Shot MVP 只保留：
 3. 通过 Core Graphics 绘制矢量标注；
 4. 返回最终 `CGImage`。
 
-未来 Easy Shot 增加标注时，应使用 Rust 的可序列化值类型，而不是复制 Swift 的引用类型：
+未来 Hax Shot 增加标注时，应使用 Rust 的可序列化值类型，而不是复制 Swift 的引用类型：
 
 ```text
 Annotation {
@@ -300,7 +300,7 @@ BeforeCapture
 
 `CaptureContext` 记录 workflow ID、触发时间和输出文件。
 
-Easy Shot MVP 不需要实现完整插件化 Pipeline，但可以保留一个简单的服务边界：
+Hax Shot MVP 不需要实现完整插件化 Pipeline，但可以保留一个简单的服务边界：
 
 ```text
 CaptureService
@@ -316,7 +316,7 @@ CaptureService
 - 在主线程访问系统剪贴板；
 - 使用图像对象写入剪贴板。
 
-Linux/GNOME Wayland 不能使用 Flutter 的文本剪贴板接口来保证图片复制。Easy Shot 应由 Rust 使用 Wayland 图片剪贴板实现，并明确传入 `image/png`。
+Linux/GNOME Wayland 不能使用 Flutter 的文本剪贴板接口来保证图片复制。Hax Shot 应由 Rust 使用 Wayland 图片剪贴板实现，并明确传入 `image/png`。
 
 ### 文件保存
 
@@ -327,7 +327,7 @@ Linux/GNOME Wayland 不能使用 Flutter 的文本剪贴板接口来保证图片
 - 设置 DPI：`scaleFactor × 72`；
 - 后处理任务负责打开 Finder、复制路径等。
 
-Easy Shot MVP 只支持 PNG 和用户选择路径，不加入日期目录、DPI 和后处理任务。
+Hax Shot MVP 只支持 PNG 和用户选择路径，不加入日期目录、DPI 和后处理任务。
 
 ## 8. 贴图、历史和扩展功能
 
@@ -342,7 +342,7 @@ Easy Shot MVP 只支持 PNG 和用户选择路径，不加入日期目录、DPI 
 - 静态数组保持窗口生命周期；
 - 关闭时从数组移除。
 
-这正是 Snipaste 的核心体验之一，但不进入 Easy Shot 当前 MVP。未来实现时，Linux Wayland 的“全局置顶窗口”不是标准能力，应单独作为桌面环境兼容任务。
+这正是 Snipaste 的核心体验之一，但不进入 Hax Shot 当前 MVP。未来实现时，Linux Wayland 的“全局置顶窗口”不是标准能力，应单独作为桌面环境兼容任务。
 
 ### 历史和缩略图
 
@@ -362,7 +362,7 @@ Easy Shot MVP 只支持 PNG 和用户选择路径，不加入日期目录、DPI 
 4. `finalize()` 中部分通知、历史、Pin、上传和 OCR 使用原始图片，而不是经过遮罩/水印后的最终图片。
 5. Annotation 没有 Codable，标注不能保存为工程文件。
 
-## 10. 对 Easy Shot 的直接结论
+## 10. 对 Hax Shot 的直接结论
 
 ### 保留
 
@@ -388,7 +388,7 @@ Reticle OverlayView          → Flutter SelectionCanvas
 Reticle renderFinalImage     → Flutter 选区裁剪 / Rust PNG 处理
 Reticle LocalFileOutput      → Flutter file_selector + PNG 写文件
 Reticle ClipboardOutput      → Rust Wayland ClipboardService
-Reticle HotkeyManager        → GNOME 自定义快捷键启动 easy_shot --capture
+Reticle HotkeyManager        → GNOME 自定义快捷键启动 hax_shot --capture
 ```
 
 ## 11. 许可证
@@ -403,6 +403,6 @@ Apache License 2.0
 Commons Clause 明确不授予出售软件的权利。结论：
 
 - 可以阅读和参考设计；
-- 不应把 Reticle 代码直接复制到 Easy Shot；
+- 不应把 Reticle 代码直接复制到 Hax Shot；
 - 不要把它宣传为“纯 Apache-2.0”；
 - 如未来必须复用代码，需要单独进行许可证合规审查。

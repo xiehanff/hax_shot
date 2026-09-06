@@ -9,10 +9,10 @@ import 'package:flutter/services.dart';
 final class ShortcutSettings {
   static const mediaKeysSchema = 'org.gnome.settings-daemon.plugins.media-keys';
   static const keyPath =
-      '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/easy-shot/';
+      '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/hax-shot/';
   static const bindingSchema =
       'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$keyPath';
-  static const name = 'Easy Shot Capture';
+  static const name = 'Hax Shot Capture';
 
   const ShortcutSettings._();
 }
@@ -358,7 +358,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                 Text('截图快捷键', style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 8),
                 Text(
-                  '按下快捷键后，Easy Shot 会启动全屏框选。',
+                  '按下快捷键后，Hax Shot 会启动全屏框选。',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 24),

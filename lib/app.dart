@@ -8,8 +8,8 @@ import 'package:window_manager/window_manager.dart';
 import 'features/capture/capture_page.dart';
 import 'features/settings/shortcut_settings_page.dart';
 
-class EasyShotApp extends StatelessWidget {
-  const EasyShotApp({required this.captureMode, super.key});
+class HaxShotApp extends StatelessWidget {
+  const HaxShotApp({required this.captureMode, super.key});
 
   final bool captureMode;
 
@@ -17,7 +17,7 @@ class EasyShotApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Easy Shot',
+      title: 'Hax Shot',
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(
@@ -63,8 +63,8 @@ class _TrayHostPageState extends State<TrayHostPage>
     try {
       await windowManager.setPreventClose(true);
       await windowManager.hide();
-      await trayManager.setIcon('assets/icons/easy_shot.png');
-      await trayManager.setTitle('Easy Shot');
+      await trayManager.setIcon('assets/icons/hax_shot.png');
+      await trayManager.setTitle('Hax Shot');
       await trayManager.setContextMenu(
         Menu(
           items: [
@@ -89,7 +89,7 @@ class _TrayHostPageState extends State<TrayHostPage>
       );
     } on Object catch (error) {
       // A missing AppIndicator extension should not prevent screenshots.
-      debugPrint('Easy Shot tray initialization failed: $error');
+      debugPrint('Hax Shot tray initialization failed: $error');
     }
   }
 
@@ -106,6 +106,8 @@ class _TrayHostPageState extends State<TrayHostPage>
   Future<void> _openShortcutSettings() async {
     if (!mounted) return;
     setState(() => _showShortcutSettings = true);
+    await windowManager.setSize(const Size(520, 400));
+    await windowManager.center();
     await windowManager.show();
     await windowManager.focus();
   }
@@ -138,7 +140,7 @@ class _TrayHostPageState extends State<TrayHostPage>
 
   @override
   Widget build(BuildContext context) {
-    // Easy Shot is tray-only. The short-lived --capture process owns the
+    // Hax Shot is tray-only. The short-lived --capture process owns the
     // full-screen selection UI; this host only reveals shortcut settings on
     // demand.
     if (_showShortcutSettings) {
