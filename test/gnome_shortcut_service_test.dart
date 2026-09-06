@@ -29,30 +29,36 @@ void main() {
 
     expect(
       calls,
-      contains([
-        'set',
-        GnomeShortcutService.bindingSchema,
-        'command',
-        '"/opt/hax shot/hax_shot" --capture',
-      ]),
+      contains(
+        equals([
+          'set',
+          GnomeShortcutService.bindingSchema,
+          'command',
+          '"/opt/hax shot/hax_shot" --capture',
+        ]),
+      ),
     );
     expect(
       calls,
-      contains([
-        'set',
-        GnomeShortcutService.bindingSchema,
-        'binding',
-        '<Control>k',
-      ]),
+      contains(
+        equals([
+          'set',
+          GnomeShortcutService.bindingSchema,
+          'binding',
+          '<Control>k',
+        ]),
+      ),
     );
     expect(
       calls,
-      contains([
-        'set',
-        GnomeShortcutService.bindingSchema,
-        'binding',
-        '',
-      ]),
+      contains(
+        equals([
+          'set',
+          GnomeShortcutService.bindingSchema,
+          'binding',
+          '',
+        ]),
+      ),
     );
     expect(
       calls.any(
