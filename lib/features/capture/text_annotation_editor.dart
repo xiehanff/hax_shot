@@ -226,18 +226,22 @@ final class _MoveHandle extends StatelessWidget {
         onPanStart: (_) => onMoveStart(),
         onPanUpdate: (details) => onMoveUpdate(details.delta),
         onPanEnd: (_) => onMoveEnd(),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.9),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white70),
-          ),
-          child: const Center(
-            child: HugeIcon(
-              icon: HugeIcons.strokeRoundedMove,
-              color: Colors.white,
-              size: 16,
-              strokeWidth: 1.5,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.9),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white70),
+            ),
+            child: const Center(
+              child: HugeIcon(
+                icon: HugeIcons.strokeRoundedMove,
+                color: Colors.white,
+                size: 16,
+                strokeWidth: 1.5,
+              ),
             ),
           ),
         ),
