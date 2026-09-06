@@ -2,16 +2,26 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARY="$PROJECT_DIR/build/linux/x64/release/bundle/hax_shot"
+SOURCE_BINARY="$PROJECT_DIR/build/linux/x64/release/bundle/hax_shot"
+BINARY="${HAX_SHOT_BINARY:-}"
+if [[ -z "$BINARY" ]]; then
+  if [[ -x "$SOURCE_BINARY" ]]; then
+    BINARY="$SOURCE_BINARY"
+  elif command -v hax_shot >/dev/null 2>&1; then
+    BINARY="$(command -v hax_shot)"
+  fi
+fi
+
 KEY_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/hax-shot/"
 LEGACY_KEY_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/easy-shot/"
 SCHEMA="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KEY_PATH"
 LEGACY_SCHEMA="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$LEGACY_KEY_PATH"
 MEDIA_KEYS="org.gnome.settings-daemon.plugins.media-keys"
 
-if [[ ! -x "$BINARY" ]]; then
-  echo "找不到 release 可执行文件：$BINARY" >&2
-  echo "请先运行：fvm flutter build linux --release" >&2
+if [[ -z "$BINARY" || ! -x "$BINARY" ]]; then
+  echo "找不到 Hax Shot 可执行文件。" >&2
+  echo "源码项目请先运行：fvm flutter build linux --release" >&2
+  echo "RPM 安装后请确认 /usr/bin/hax_shot 已存在。" >&2
   exit 1
 fi
 
@@ -46,15 +56,18 @@ applications_dir="$HOME/.local/share/applications"
 icons_root="$HOME/.local/share/icons/hicolor"
 icons_dir="$icons_root/256x256/apps"
 mkdir -p "$applications_dir" "$icons_dir"
-cp "$PROJECT_DIR/linux/icons/hicolor/index.theme" "$icons_root/index.theme"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/16x16" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/24x24" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/32x32" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/48x48" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/64x64" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/128x128" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/256x256" "$icons_root/"
-cp -R "$PROJECT_DIR/linux/icons/hicolor/512x512" "$icons_root/"
+icon_source_dir="$PROJECT_DIR/linux/icons/hicolor"
+if [[ -d "$icon_source_dir" ]]; then
+  cp "$icon_source_dir/index.theme" "$icons_root/index.theme"
+  cp -R "$icon_source_dir/16x16" "$icons_root/"
+  cp -R "$icon_source_dir/24x24" "$icons_root/"
+  cp -R "$icon_source_dir/32x32" "$icons_root/"
+  cp -R "$icon_source_dir/48x48" "$icons_root/"
+  cp -R "$icon_source_dir/64x64" "$icons_root/"
+  cp -R "$icon_source_dir/128x128" "$icons_root/"
+  cp -R "$icon_source_dir/256x256" "$icons_root/"
+  cp -R "$icon_source_dir/512x512" "$icons_root/"
+fi
 desktop_file="$applications_dir/com.github.xiehanff.hax_shot.desktop"
 cat > "$desktop_file" <<EOF
 [Desktop Entry]

@@ -1,0 +1,66 @@
+name: Build Fedora RPM
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            patchelf \
+            rpm \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Install Flutter SDK used by the project
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install FVM and resolve the pinned SDK
+        run: |
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+          fvm install
+          fvm flutter --version
+
+      - name: Build RPM
+        run: ./scripts/build_linux_rpm.sh
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hax-shot-rpm
+          path: build/linux/x64/release/hax-shot-*.rpm
+          if-no-files-found: error
+
+      - name: Attach RPM to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/linux/x64/release/hax-shot-*.rpm
+          generate_release_notes: true

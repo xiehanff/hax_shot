@@ -112,6 +112,7 @@ Alt+Z → hax_shot --capture
 - [当前实现与开发指南](./docs/development-guide.md)
 - [图标、Dock 和托盘](./docs/icon-and-tray.md)
 - [参考结论](./docs/reference-decisions.md)
+- [Linux 打包与分发](./docs/packaging.md)
 - [许可证与第三方声明](./THIRD_PARTY_NOTICES.md)
 
 ## 许可证
