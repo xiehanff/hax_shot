@@ -58,6 +58,9 @@ tar -xzf %{SOURCE0} -C %{buildroot}/opt/hax-shot --strip-components=1
 rm -rf %{buildroot}/opt/hax-shot/share
 
 tar -xzf %{SOURCE1} -C %{buildroot}%{_datadir}/icons
+# index.theme belongs to Fedora's hicolor-icon-theme package; do not claim
+# ownership of the shared file in this RPM.
+rm -f %{buildroot}%{_datadir}/icons/hicolor/index.theme
 sed 's|^Exec=hax_shot$|Exec=/usr/bin/hax_shot|' %{SOURCE2} > \
   %{buildroot}%{_datadir}/applications/com.github.xiehanff.hax_shot.desktop
 
@@ -108,7 +111,6 @@ fi
 %{_bindir}/hax_shot
 %{_datadir}/hax-shot/install-gnome-shortcut.sh
 %{_datadir}/applications/com.github.xiehanff.hax_shot.desktop
-%{_datadir}/icons/hicolor/index.theme
 %{_datadir}/icons/hicolor/*/apps/com.github.xiehanff.hax_shot.png
 
 %changelog
