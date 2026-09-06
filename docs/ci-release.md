@@ -37,7 +37,7 @@ tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号：
 
 | `pubspec.yaml` | Git tag | RPM 结果 |
 |---|---|---|
-| `1.2.0+9` | `v1.2.0` | `hax-shot-1.2.0-9.fc44.x86_64.rpm` |
+| `1.2.0+10` | `v1.2.0` | `hax-shot-1.2.0-10.fc44.x86_64.rpm` |
 | `1.2.1+1` | `v1.2.1` | `hax-shot-1.2.1-1.fc44.x86_64.rpm` |
 
 工作流开始时会主动检查这个关系。tag 和版本不一致时立即失败，避免把错误版本的 RPM 上传到 Release。
@@ -45,7 +45,7 @@ tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号：
 其中：
 
 - `1.2.0` 是应用和 RPM 的 Version；
-- `+9` 是 Fedora RPM 的 Release；
+- `+10` 是 Fedora RPM 的 Release；
 - `fc44` 由 Fedora RPM 构建环境追加；
 - `v1.2.0` 是 GitHub Release 的 tag 和页面名称。
 
@@ -104,7 +104,7 @@ git push origin v1.2.0
 下载 RPM 后，在 Fedora GNOME + Wayland 机器上安装：
 
 ```bash
-sudo dnf install ./hax-shot-1.2.0-9.fc44.x86_64.rpm
+sudo dnf install ./hax-shot-1.2.0-10.fc44.x86_64.rpm
 /usr/share/hax-shot/install-gnome-shortcut.sh
 ```
 

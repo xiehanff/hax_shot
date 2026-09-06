@@ -44,9 +44,9 @@ on:
 普通 `main` push、Pull Request 和手动运行都不会触发打包。tag 去掉 `v` 后必须等于 `pubspec.yaml` 中 `+` 之前的版本号。例如：
 
 ```text
-pubspec.yaml: version: 1.2.0+9
+pubspec.yaml: version: 1.2.0+10
 Git tag:        v1.2.0
-RPM:            hax-shot-1.2.0-9.fc44.x86_64.rpm
+RPM:            hax-shot-1.2.0-10.fc44.x86_64.rpm
 ```
 
 本地检查通过后，创建并推送 tag：

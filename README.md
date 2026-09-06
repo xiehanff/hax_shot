@@ -15,7 +15,7 @@ Hax Shot 是一个面向 **Fedora GNOME + Wayland** 的 tray-only 截图工具�
 - 设置页支持 GNOME 登录后自动启动托盘宿主；
 - 框选后支持选择颜色绘制矩形标注；
 - 框选后支持拖动绘制方向和长度可控的箭头标注；
-- 支持文字标注，输入后可拖动文字框四角缩放字号、顶部抓手移动，并可删除当前文字框。
+- 支持文字标注，输入后可拖动文字框四角缩放字号、顶部抓手移动，并可删除或再次编辑当前文字框。
 
 当前暂不包含贴图、OCR、历史和录屏。
 
@@ -130,7 +130,7 @@ git tag -a v1.2.0 -m "Release v1.2.0"
 git push origin v1.2.0
 ```
 
-tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.2.0+9` 使用 `v1.2.0`。`+9` 会成为 Fedora RPM 的 Release 字段。构建通过后，RPM 会自动上传到对应的 GitHub Release 页面。
+tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.2.0+10` 使用 `v1.2.0`。`+10` 会成为 Fedora RPM 的 Release 字段。构建通过后，RPM 会自动上传到对应的 GitHub Release 页面。
 
 详细流程见 [CI 与 GitHub Release](./docs/ci-release.md)。
 

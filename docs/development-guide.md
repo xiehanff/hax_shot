@@ -52,7 +52,8 @@ Alt+Z / 托盘“立即截屏”
     ├── 保存 PNG
     ├── 复制 image/png 到 Wayland 剪贴板
     ├── 点击矩形/箭头工具后，在截图选区内继续拖拽绘制标注
-    ├── 点击文字工具后，在截图选区内单击并输入文字；四角缩放、顶部抓手移动、关闭按钮删除
+    ├── 点击文字工具后，在截图选区内单击并输入文字；已有文字可再次点击编辑
+    ├── 四角缩放、顶部抓手移动、关闭按钮删除；点击其他区域创建新的文字框
     ├── 保存/复制带标注的最终 PNG
     └── Esc 取消
 ```
@@ -481,7 +482,7 @@ cargo test --manifest-path rust/Cargo.toml
 tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 
 ```text
-version: 1.2.0+9  →  git push origin v1.2.0
+version: 1.2.0+10  →  git push origin v1.2.0
 ```
 
 推送 tag 后，工作流会重新执行 Dart/Rust 检查，构建 Fedora x86_64 RPM，保存 Actions artifact，并把 RPM 上传到对应 GitHub Release。不要为普通开发 commit 创建 `v*` tag；完整操作见 [`ci-release.md`](./ci-release.md)。

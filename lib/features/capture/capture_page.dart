@@ -198,11 +198,52 @@ class _CapturePageState extends State<CapturePage> {
     setState(() => _textDraft = updated);
   }
 
-  void _beginTextInput(ScreenshotLayout layout, Offset point) {
-    final selection = _selection;
-    if (selection == null || !_selectionCommitted) return;
+  int? _textAnnotationIndexAt(Offset point) {
+    for (var index = _annotations.length - 1; index >= 0; index--) {
+      final annotation = _annotations[index];
+      if (annotation.tool == CaptureTool.text &&
+          annotation.text.isNotEmpty &&
+          annotation.rect.contains(point)) {
+        return index;
+      }
+    }
+    return null;
+  }
 
-    _commitTextDraft();
+  void _editTextAnnotation(int index) {
+    final annotation = _annotations[index];
+    final remaining = [..._annotations]..removeAt(index);
+    _suppressTextListener = true;
+    _textController.value = TextEditingValue(
+      text: annotation.text,
+      selection: TextSelection.collapsed(offset: annotation.text.length),
+    );
+    _suppressTextListener = false;
+    _textResizeStart = null;
+    _textResizeHandle = null;
+    _textMoveStart = null;
+    _textMoveOffset = Offset.zero;
+
+    setState(() {
+      _annotations = remaining;
+      _activeTool = CaptureTool.text;
+      _selectedColor = annotation.color;
+      _textAutoSizing = false;
+      _textDraft = annotation;
+      _message = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _textDraft == null) return;
+      _textFocusNode.requestFocus();
+      _textController.selection = TextSelection.collapsed(
+        offset: _textController.text.length,
+      );
+    });
+  }
+
+  void _createTextInput(ScreenshotLayout layout, Offset point) {
+    final selection = _selection;
+    if (selection == null) return;
     final start = _clampToSelection(layout, point);
     final rect = _textRectForInput(
       requestedStart: start,
@@ -233,6 +274,19 @@ class _CapturePageState extends State<CapturePage> {
         offset: _textController.text.length,
       );
     });
+  }
+
+  void _beginTextInput(ScreenshotLayout layout, Offset point) {
+    final selection = _selection;
+    if (selection == null || !_selectionCommitted) return;
+
+    _commitTextDraft();
+    final existingIndex = _textAnnotationIndexAt(point);
+    if (existingIndex != null) {
+      _editTextAnnotation(existingIndex);
+      return;
+    }
+    _createTextInput(layout, point);
   }
 
   void _commitTextDraft() {
