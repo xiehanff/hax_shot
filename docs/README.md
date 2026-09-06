@@ -14,11 +14,12 @@
 | — | [图标、Dock 和托盘](./icon-and-tray.md) | `assets/icons`、`linux/icons` | 原创图标和 Linux 桌面集成 |
 
 | — | [当前实现与开发指南](./development-guide.md) | 当前代码入口、运行方式、坑点、验证和交接信息 |
+| — | [MVP2 功能说明](./mvp2.md) | 自启动、矩形标注、箭头标注和导出坐标 |
 | — | [Linux 打包与分发](./packaging.md) | Fedora RPM、Rust 动态库、系统运行依赖和安装流程 |
 
 ## 结论先看
 
-Hax Shot MVP 只实现：
+Hax Shot MVP1 只实现基础截图链路；MVP2 在此基础上增加自启动、矩形标注和箭头标注，详见 [MVP2 功能说明](./mvp2.md)。
 
 ```text
 Alt+Z

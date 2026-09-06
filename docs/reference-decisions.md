@@ -8,7 +8,9 @@
 | SnapShotKit | point/pixel 坐标规范、统一 flatten、PNG/剪贴板输出 | macOS TCC、Carbon、SwiftUI 代码 |
 | Screenshot | 最小主链路、单帧捕获、排除 overlay、Save/Copy | 未接通的 Editor/LayerManager、缺少错误处理的部分 |
 
-## 2. Hax Shot MVP 的最终边界
+## 2. Hax Shot MVP1 的最终边界
+
+MVP1 定义基础截图链路；MVP2 的自启动、矩形和箭头标注实现见 [`mvp2.md`](./mvp2.md)。
 
 ```text
 GNOME 系统快捷键 Alt+Z
@@ -29,7 +31,8 @@ GNOME 系统快捷键 Alt+Z
 - PNG 保存路径选择；
 - PNG 图片剪贴板；
 - 截图失败、权限失败和超时提示；
-- Hax Shot 原创图标的 GNOME 托盘集成；应用常驻托盘，不显示主应用窗口。
+- Hax Shot 原创图标的 GNOME 托盘集成；应用常驻托盘，不显示主应用窗口；
+- MVP2 的矩形、箭头标注使用 Flutter 统一预览和导出，不将标注逻辑放入 Rust 截图后端。
 
 ### 明确不实现
 

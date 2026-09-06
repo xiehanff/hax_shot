@@ -3,10 +3,16 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
+import 'annotation.dart';
+
 class CaptureToolbar extends StatefulWidget {
   const CaptureToolbar({
     required this.enabled,
     required this.busy,
+    required this.activeTool,
+    required this.selectedColor,
+    required this.onToolSelected,
+    required this.onColorSelected,
     required this.onCancel,
     required this.onSave,
     required this.onCopy,
@@ -15,6 +21,10 @@ class CaptureToolbar extends StatefulWidget {
 
   final bool enabled;
   final bool busy;
+  final CaptureTool activeTool;
+  final Color selectedColor;
+  final ValueChanged<CaptureTool> onToolSelected;
+  final ValueChanged<Color> onColorSelected;
   final VoidCallback onCancel;
   final VoidCallback onSave;
   final VoidCallback onCopy;
@@ -24,8 +34,6 @@ class CaptureToolbar extends StatefulWidget {
 }
 
 class _CaptureToolbarState extends State<CaptureToolbar> {
-  Color _selectedColor = _ToolbarColorPalette.colors.first;
-
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -86,14 +94,17 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       const _ToolbarDivider(),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedRectangular,
-                        tooltip: '框选（当前工具）',
-                        selected: true,
-                        onPressed: null,
+                        tooltip: '框选截图区域',
+                        selected: widget.activeTool == CaptureTool.selection,
+                        onPressed: () =>
+                            widget.onToolSelected(CaptureTool.selection),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedArrowDownLeft01,
-                        tooltip: '标注箭头（即将支持）',
-                        onPressed: null,
+                        tooltip: '标注箭头',
+                        selected: widget.activeTool == CaptureTool.arrow,
+                        onPressed: () =>
+                            widget.onToolSelected(CaptureTool.arrow),
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedText,
@@ -102,10 +113,8 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       ),
                       const _ToolbarDivider(),
                       _ToolbarColorPalette(
-                        selectedColor: _selectedColor,
-                        onSelected: (color) {
-                          setState(() => _selectedColor = color);
-                        },
+                        selectedColor: widget.selectedColor,
+                        onSelected: widget.onColorSelected,
                       ),
                       const _ToolbarDivider(),
                       const _AiPlaceholderGroup(),
@@ -255,13 +264,7 @@ class _ToolbarColorPalette extends StatelessWidget {
     required this.onSelected,
   });
 
-  static const colors = <Color>[
-    Color(0xFFE53935), // red
-    Color(0xFF8E44AD), // purple
-    Color(0xFFFBC02D), // yellow
-    Color(0xFF2E9B59), // green
-    Color(0xFFF57C00), // orange
-  ];
+  static const colors = annotationColors;
 
   final Color selectedColor;
   final ValueChanged<Color> onSelected;

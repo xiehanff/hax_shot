@@ -11,9 +11,12 @@ Hax Shot 是一个面向 **Fedora GNOME + Wayland** 的 tray-only 截图工具�
 - 使用 `wl-copy` 复制 PNG 到 Wayland 图片剪贴板；
 - `Esc` 取消；
 - GNOME 托盘菜单：立即截屏、修改快捷键、退出；
-- 快捷键设置支持查看、删除和录制新的组合键。
+- 快捷键设置支持查看、删除和录制新的组合键；
+- 设置页支持 GNOME 登录后自动启动托盘宿主；
+- 框选后支持选择颜色绘制矩形标注；
+- 框选后支持拖动绘制方向和长度可控的箭头标注。
 
-当前 MVP 暂不包含标注绘制、贴图、OCR、历史和录屏。
+当前暂不包含文字标注、贴图、OCR、历史和录屏。
 
 ## 支持范围
 
@@ -112,6 +115,7 @@ Alt+Z → hax_shot --capture
 - [当前实现与开发指南](./docs/development-guide.md)
 - [图标、Dock 和托盘](./docs/icon-and-tray.md)
 - [参考结论](./docs/reference-decisions.md)
+- [MVP2 功能说明](./docs/mvp2.md)
 - [Linux 打包与分发](./docs/packaging.md)
 - [许可证与第三方声明](./THIRD_PARTY_NOTICES.md)
 

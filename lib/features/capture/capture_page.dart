@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
+import 'annotation.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
 import 'selection_toolbar_placement.dart';
@@ -26,6 +27,10 @@ class _CapturePageState extends State<CapturePage> {
   bool _loading = true;
   bool _busy = false;
   bool _selectionCommitted = false;
+  CaptureTool _activeTool = CaptureTool.selection;
+  Color _selectedColor = annotationColors.first;
+  List<ScreenshotAnnotation> _annotations = const [];
+  ScreenshotAnnotation? _draftAnnotation;
 
   @override
   void initState() {
@@ -76,12 +81,40 @@ class _CapturePageState extends State<CapturePage> {
     }
   }
 
+  void _selectTool(CaptureTool tool) {
+    if (_busy || !mounted) return;
+    setState(() {
+      _activeTool = tool;
+      _dragStart = null;
+      _draftAnnotation = null;
+      _message = null;
+    });
+  }
+
+  void _selectColor(Color color) {
+    if (!mounted) return;
+    setState(() => _selectedColor = color);
+  }
+
+  Offset _clampToSelection(ScreenshotLayout layout, Offset point) {
+    final selected = _selection;
+    if (selected == null) return layout.clampToImage(point);
+    final clampedToImage = layout.clampToImage(point);
+    return Offset(
+      clampedToImage.dx.clamp(selected.left, selected.right).toDouble(),
+      clampedToImage.dy.clamp(selected.top, selected.bottom).toDouble(),
+    );
+  }
+
   void _startSelection(ScreenshotLayout layout, Offset point) {
     final start = layout.clampToImage(point);
     setState(() {
       _dragStart = start;
       _selection = null;
       _selectionCommitted = false;
+      _activeTool = CaptureTool.selection;
+      _annotations = const [];
+      _draftAnnotation = null;
       _message = null;
     });
   }
@@ -111,8 +144,55 @@ class _CapturePageState extends State<CapturePage> {
     }
 
     setState(() {
+      _activeTool = CaptureTool.selection;
       _selectionCommitted = true;
     });
+  }
+
+  void _startAnnotation(ScreenshotLayout layout, Offset point) {
+    final selected = _selection;
+    if (selected == null || !_selectionCommitted) return;
+    final start = _clampToSelection(layout, point);
+    setState(() {
+      _dragStart = start;
+      _draftAnnotation = ScreenshotAnnotation(
+        tool: _activeTool,
+        start: start,
+        end: start,
+        color: _selectedColor,
+      );
+      _message = null;
+    });
+  }
+
+  void _updateAnnotation(ScreenshotLayout layout, Offset point) {
+    final start = _dragStart;
+    if (start == null || _activeTool == CaptureTool.selection) return;
+    final current = _clampToSelection(layout, point);
+    setState(() {
+      _draftAnnotation = ScreenshotAnnotation(
+        tool: _activeTool,
+        start: start,
+        end: current,
+        color: _selectedColor,
+      );
+    });
+  }
+
+  void _finishAnnotation() {
+    final draft = _draftAnnotation;
+    _dragStart = null;
+    _draftAnnotation = null;
+    final isLargeEnough = draft == null
+        ? false
+        : draft.tool == CaptureTool.arrow
+        ? (draft.end - draft.start).distance >= 4
+        : draft.rect.shortestSide >= 4;
+    if (!isLargeEnough) {
+      setState(() => _message = '请拖动绘制一个更大的标注');
+      return;
+    }
+    setState(() => _annotations = [..._annotations, draft]);
   }
 
   Future<Uint8List> _renderSelection(
@@ -146,6 +226,29 @@ class _CapturePageState extends State<CapturePage> {
       destination,
       Paint()..filterQuality = FilterQuality.high,
     );
+
+    // Convert the overlay's logical coordinates to the cropped image's pixel
+    // coordinates. Save and copy therefore use exactly the same annotation
+    // geometry that the user saw on the frozen screenshot.
+    final cropOrigin = Offset(
+      layout.imageRect.left + source.left * layout.scale,
+      layout.imageRect.top + source.top * layout.scale,
+    );
+    canvas.save();
+    canvas.clipRect(destination);
+    for (final annotation in _annotations) {
+      final pixelAnnotation = annotation.translatedAndScaled(
+        origin: cropOrigin,
+        scale: layout.scale,
+      );
+      paintScreenshotAnnotation(
+        canvas,
+        pixelAnnotation,
+        lineWidth: 3 / layout.scale,
+        arrowHeadLength: 14 / layout.scale,
+      );
+    }
+    canvas.restore();
 
     final picture = recorder.endRecording();
     final cropped = await picture.toImage(width, height);
@@ -283,14 +386,35 @@ class _CapturePageState extends State<CapturePage> {
                     image: image,
                     layout: layout,
                     selection: _selection,
+                    annotations: _annotations,
+                    draftAnnotation: _draftAnnotation,
                   ),
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onPanStart: (details) =>
-                        _startSelection(layout, details.localPosition),
-                    onPanUpdate: (details) =>
-                        _updateSelection(layout, details.localPosition),
-                    onPanEnd: (_) => _finishSelection(),
+                    onPanStart: (details) {
+                      if (_activeTool == CaptureTool.selection ||
+                          _selection == null) {
+                        _startSelection(layout, details.localPosition);
+                      } else {
+                        _startAnnotation(layout, details.localPosition);
+                      }
+                    },
+                    onPanUpdate: (details) {
+                      if (_activeTool == CaptureTool.selection ||
+                          _selection == null) {
+                        _updateSelection(layout, details.localPosition);
+                      } else {
+                        _updateAnnotation(layout, details.localPosition);
+                      }
+                    },
+                    onPanEnd: (_) {
+                      if (_activeTool == CaptureTool.selection ||
+                          _selection == null) {
+                        _finishSelection();
+                      } else {
+                        _finishAnnotation();
+                      }
+                    },
                     child: const SizedBox.expand(),
                   ),
                   if (_selection == null && _message == null)
@@ -343,6 +467,10 @@ class _CapturePageState extends State<CapturePage> {
                         child: CaptureToolbar(
                           enabled: true,
                           busy: _busy,
+                          activeTool: _activeTool,
+                          selectedColor: _selectedColor,
+                          onToolSelected: _selectTool,
+                          onColorSelected: _selectColor,
                           onCancel: _cancel,
                           onSave: () => _save(layout),
                           onCopy: () => _copy(layout),

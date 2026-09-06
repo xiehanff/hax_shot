@@ -1,6 +1,9 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+
+import 'annotation.dart';
 
 final class ScreenshotLayout {
   const ScreenshotLayout({
@@ -79,12 +82,16 @@ class ScreenshotCanvas extends StatelessWidget {
     required this.image,
     required this.layout,
     required this.selection,
+    this.annotations = const [],
+    this.draftAnnotation,
     super.key,
   });
 
   final ui.Image image;
   final ScreenshotLayout layout;
   final Rect? selection;
+  final List<ScreenshotAnnotation> annotations;
+  final ScreenshotAnnotation? draftAnnotation;
 
   @override
   Widget build(BuildContext context) {
@@ -93,6 +100,8 @@ class ScreenshotCanvas extends StatelessWidget {
         image: image,
         layout: layout,
         selection: selection,
+        annotations: annotations,
+        draftAnnotation: draftAnnotation,
       ),
       size: Size.infinite,
     );
@@ -104,11 +113,15 @@ final class _ScreenshotPainter extends CustomPainter {
     required this.image,
     required this.layout,
     required this.selection,
+    required this.annotations,
+    required this.draftAnnotation,
   });
 
   final ui.Image image;
   final ScreenshotLayout layout;
   final Rect? selection;
+  final List<ScreenshotAnnotation> annotations;
+  final ScreenshotAnnotation? draftAnnotation;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -136,6 +149,13 @@ final class _ScreenshotPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(selected);
     canvas.drawImageRect(image, source, layout.imageRect, paint);
+    for (final annotation in annotations) {
+      paintScreenshotAnnotation(canvas, annotation);
+    }
+    final draft = draftAnnotation;
+    if (draft != null) {
+      paintScreenshotAnnotation(canvas, draft);
+    }
     canvas.restore();
 
     canvas.drawRect(
@@ -178,6 +198,55 @@ final class _ScreenshotPainter extends CustomPainter {
   bool shouldRepaint(covariant _ScreenshotPainter oldDelegate) {
     return oldDelegate.image != image ||
         oldDelegate.layout != layout ||
-        oldDelegate.selection != selection;
+        oldDelegate.selection != selection ||
+        oldDelegate.annotations != annotations ||
+        oldDelegate.draftAnnotation != draftAnnotation;
   }
+}
+
+/// Paint one annotation in the coordinate space supplied by the caller.
+/// Both the overlay and the final PNG use this same geometry.
+void paintScreenshotAnnotation(
+  Canvas canvas,
+  ScreenshotAnnotation annotation, {
+  double lineWidth = 3,
+  double arrowHeadLength = 14,
+}) {
+  final paint = Paint()
+    ..color = annotation.color
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = lineWidth
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+
+  if (annotation.tool == CaptureTool.rectangle) {
+    canvas.drawRect(annotation.rect, paint);
+    return;
+  }
+
+  if (annotation.tool != CaptureTool.arrow) return;
+
+  final start = annotation.start;
+  final end = annotation.end;
+  final delta = end - start;
+  final length = delta.distance;
+  if (length < 0.1) return;
+
+  canvas.drawLine(start, end, paint);
+  final angle = math.atan2(delta.dy, delta.dx);
+  final wingAngle = math.pi / 6;
+  final leftWing =
+      end -
+      Offset(
+        math.cos(angle - wingAngle) * arrowHeadLength,
+        math.sin(angle - wingAngle) * arrowHeadLength,
+      );
+  final rightWing =
+      end -
+      Offset(
+        math.cos(angle + wingAngle) * arrowHeadLength,
+        math.sin(angle + wingAngle) * arrowHeadLength,
+      );
+  canvas.drawLine(end, leftWing, paint);
+  canvas.drawLine(end, rightWing, paint);
 }

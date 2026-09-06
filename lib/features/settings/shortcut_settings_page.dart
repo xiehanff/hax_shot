@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'autostart_service.dart';
+
 /// The GNOME custom shortcut location installed by
 /// scripts/install-gnome-shortcut.sh.
 final class ShortcutSettings {
@@ -33,12 +35,16 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
   bool _loading = true;
   bool _recording = false;
   bool _saving = false;
+  bool _autoLaunch = false;
+  bool _autoLaunchLoading = true;
+  bool _autoLaunchSaving = false;
   String? _message;
 
   @override
   void initState() {
     super.initState();
     unawaited(_loadBinding());
+    unawaited(_loadAutoLaunch());
   }
 
   @override
@@ -65,6 +71,49 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       setState(() {
         _loading = false;
         _message = '读取快捷键失败：$error';
+      });
+    }
+  }
+
+  Future<void> _loadAutoLaunch() async {
+    try {
+      final enabled = await AutostartService.instance.isEnabled();
+      if (!mounted) return;
+      setState(() {
+        _autoLaunch = enabled;
+        _autoLaunchLoading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _autoLaunchLoading = false;
+        _message = '读取开机自启动状态失败：$error';
+      });
+    }
+  }
+
+  Future<void> _setAutoLaunch(bool enabled) async {
+    if (_autoLaunchSaving) return;
+    final previous = _autoLaunch;
+    setState(() {
+      _autoLaunch = enabled;
+      _autoLaunchSaving = true;
+      _message = enabled ? '正在启用开机自启动…' : '正在关闭开机自启动…';
+    });
+
+    try {
+      await AutostartService.instance.setEnabled(enabled);
+      if (!mounted) return;
+      setState(() {
+        _autoLaunchSaving = false;
+        _message = enabled ? '已启用开机自启动' : '已关闭开机自启动';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _autoLaunch = previous;
+        _autoLaunchSaving = false;
+        _message = '设置开机自启动失败：$error';
       });
     }
   }
@@ -400,6 +449,20 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                         : Icons.fiber_manual_record,
                   ),
                   label: Text(_recording ? '取消录制' : '录制新的快捷键'),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.power_settings_new),
+                    title: const Text('开机自启动'),
+                    subtitle: const Text('登录 GNOME 后自动显示托盘图标'),
+                    trailing: Switch(
+                      value: _autoLaunch,
+                      onChanged: _autoLaunchLoading || _autoLaunchSaving
+                          ? null
+                          : _setAutoLaunch,
+                    ),
+                  ),
                 ),
                 if (_recording) ...[
                   const SizedBox(height: 16),

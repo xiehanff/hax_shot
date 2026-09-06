@@ -1,3 +1,4 @@
+import 'package:hax_shot/features/capture/annotation.dart';
 import 'package:hax_shot/features/capture/capture_toolbar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,10 @@ void main() {
             child: CaptureToolbar(
               enabled: true,
               busy: false,
+              activeTool: CaptureTool.selection,
+              selectedColor: annotationColors.first,
+              onToolSelected: (_) {},
+              onColorSelected: (_) {},
               onCancel: () => cancelled = true,
               onSave: () => saved = true,
               onCopy: () => copied = true,
