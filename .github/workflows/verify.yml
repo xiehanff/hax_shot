@@ -47,18 +47,13 @@ jobs:
           toolchain: stable
           components: rustfmt
 
-      - name: Resolve pinned Flutter SDK
-        shell: bash
-        run: |
-          dart pub global activate fvm
-          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
-          fvm install
-          fvm flutter pub get
+      - name: Resolve Dart dependencies
+        run: flutter pub get
 
       - name: Run Dart checks
         run: |
-          fvm flutter analyze
-          fvm flutter test
+          flutter analyze
+          flutter test
 
       - name: Run Rust checks
         run: |
