@@ -29,9 +29,12 @@ Future<void> main(List<String> args) async {
   // The regular process is tray-only. A capture process stays hidden until
   // the native ScreenCast frame has been prepared, so the overlay never gets
   // captured into its own background.
-  await windowManager.waitUntilReadyToShow(options, () async {
-    await windowManager.hide();
-  });
+  // Configure the native window first, then hide it synchronously. Passing an
+  // async callback to waitUntilReadyToShow is unsafe because window_manager
+  // invokes VoidCallback without awaiting it; the later capture show() could
+  // otherwise race with this initial hide().
+  await windowManager.waitUntilReadyToShow(options);
+  await windowManager.hide();
 
   runApp(HaxShotApp(captureMode: captureMode));
 }

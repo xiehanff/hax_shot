@@ -358,7 +358,6 @@ class _AiPlaceholderGroup extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: const [
-          _AiIcon(icon: HugeIcons.strokeRoundedAiChat02, tooltip: 'AI'),
           _AiIcon(icon: HugeIcons.strokeRoundedTranslate, tooltip: '翻译（即将支持）'),
           _AiIcon(
             icon: HugeIcons.strokeRoundedBookOpenCheck,
