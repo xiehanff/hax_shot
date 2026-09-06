@@ -43,7 +43,7 @@ static void install_dev_desktop_entry(const gchar* exe_path,
       "Exec=%s\n"
       "Icon=%s\n"
       "Terminal=false\n"
-      "NoDisplay=true\n"
+      "NoDisplay=false\n"
       "Categories=Graphics;Utility;\n"
       "StartupNotify=true\n"
       "StartupWMClass=com.github.xiehanff.hax_shot\n"

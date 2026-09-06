@@ -282,11 +282,11 @@ hax_shot --capture
 ```text
 Exec=/.../hax_shot
 Icon=com.github.xiehanff.hax_shot
-NoDisplay=true
+NoDisplay=false
 StartupWMClass=com.github.xiehanff.hax_shot
 ```
 
-注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `hax_shot --capture`。这样 desktop entry 才代表应用本身，同时不在应用菜单显示 tray-only 程序。
+注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `hax_shot --capture`。`NoDisplay=false` 让 Hax Shot 出现在 GNOME 应用列表中；从应用列表启动后仍只驻留托盘，不显示主窗口。
 
 桌面文件名、Wayland app ID、`StartupWMClass`、图标名必须保持一致：
 
