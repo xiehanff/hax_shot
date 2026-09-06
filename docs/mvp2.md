@@ -1,6 +1,6 @@
 # MVP2：自启动与基础标注
 
-MVP2 在原有“冻结截图 → 框选 → 保存/复制”流程上增加三个能力：登录自启动、矩形标注和箭头标注。
+MVP2 在原有“冻结截图 → 框选 → 保存/复制”流程上增加四个能力：登录自启动、矩形标注、箭头标注和文字标注。
 
 ## 1. 开机自启动
 
@@ -48,6 +48,16 @@ Hax Shot 不使用 root 权限，也不修改系统级服务。设置页的“�
 
 箭头保留拖拽方向：起点是箭尾，终点是箭头尖端；拖动距离决定箭头长度。箭头由一条线段和两条开放式箭头翼组成。
 
+### 文字
+
+1. 第一次拖拽完成截图选区；
+2. 点击工具条的“标注文字”图标；
+3. 在截图选区任意位置单击鼠标左键；
+4. 输入第一个字符后，文字框和输入光标出现；
+5. 继续输入文字，或拖动文字框四个角缩放。
+
+文字框形成后，四个角都是缩放控制点。拖动任意角会保持文字框比例，并按缩放比例同步增大或减小字号；文字框边框和控制点只属于编辑态，不会被写入最终 PNG。点击新的位置会先提交当前文字，再创建新的文字输入点。
+
 ## 3. 坐标和导出
 
 `ScreenshotAnnotation` 暂存为 Flutter overlay 的逻辑像素坐标，使用左上角为原点、向下为正的坐标系。绘制时直接叠加在冻结画面上。
@@ -61,7 +71,7 @@ overlay logical point
   → 绘制到裁剪后的 PNG
 ```
 
-预览和最终 PNG 共用 `paintScreenshotAnnotation()` 的矩形/箭头几何规则，避免预览和导出形状不一致。
+预览和最终 PNG 共用 `paintScreenshotAnnotation()` 的矩形/箭头/文字几何规则，避免预览和导出形状不一致。
 
 ## 4. 代码入口
 
@@ -71,11 +81,12 @@ overlay logical point
 | `lib/features/settings/shortcut_settings_page.dart` | 快捷键和自启动开关 |
 | `lib/features/capture/annotation.dart` | 工具类型、标注模型和颜色板 |
 | `lib/features/capture/capture_page.dart` | 工具切换、标注拖拽、保存/复制前的像素坐标转换 |
-| `lib/features/capture/screenshot_canvas.dart` | 预览绘制和统一标注几何 |
-| `lib/features/capture/capture_toolbar.dart` | 矩形/箭头工具、颜色和输出操作 |
+| `lib/features/capture/screenshot_canvas.dart` | 预览绘制和统一矩形/箭头/文字几何 |
+| `lib/features/capture/text_annotation_editor.dart` | 文字输入框、光标和四角缩放控制点 |
+| `lib/features/capture/capture_toolbar.dart` | 矩形/箭头/文字工具、颜色和输出操作 |
 
 ## 5. 当前边界
 
-MVP2 暂时只支持矩形和箭头，不支持选中后移动、缩放、删除单个标注、文字、马赛克和撤销。按下矩形或箭头工具后可以连续绘制多个标注；点击“框选截图区域”可以重新选择截图范围并清空旧标注。
+MVP2 暂时只支持矩形、箭头和文字，不支持选中后移动、删除单个标注、马赛克和撤销。按下矩形或箭头工具后可以连续绘制多个标注；文字输入完成后可立即拖动四角缩放字号；点击“框选截图区域”可以重新选择截图范围并清空旧标注。
 
 一句话总结：**第一次拖拽决定图片，后续拖拽绘制标注，保存和复制都使用同一份带标注的 PNG。**

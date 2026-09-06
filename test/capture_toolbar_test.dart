@@ -38,6 +38,8 @@ void main() {
     expect(find.byType(HugeIcon), findsNWidgets(10));
     await tester.tap(find.byTooltip('标注矩形'));
     expect(selectedTool, CaptureTool.rectangle);
+    await tester.tap(find.byTooltip('标注文字'));
+    expect(selectedTool, CaptureTool.text);
     await tester.tap(find.byTooltip('标注箭头'));
     expect(selectedTool, CaptureTool.arrow);
     await tester.tap(find.byTooltip('取消 (Esc)'));

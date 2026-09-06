@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_selector/file_selector.dart';
@@ -11,6 +12,7 @@ import 'annotation.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
 import 'selection_toolbar_placement.dart';
+import 'text_annotation_editor.dart';
 
 class CapturePage extends StatefulWidget {
   const CapturePage({super.key});
@@ -31,15 +33,27 @@ class _CapturePageState extends State<CapturePage> {
   Color _selectedColor = annotationColors.first;
   List<ScreenshotAnnotation> _annotations = const [];
   ScreenshotAnnotation? _draftAnnotation;
+  final TextEditingController _textController = TextEditingController();
+  final FocusNode _textFocusNode = FocusNode(debugLabel: 'capture-text');
+  ScreenshotAnnotation? _textDraft;
+  bool _textAutoSizing = false;
+  bool _suppressTextListener = false;
+  ScreenshotAnnotation? _textResizeStart;
+  TextResizeHandle? _textResizeHandle;
+  Offset _textResizePointer = Offset.zero;
 
   @override
   void initState() {
     super.initState();
+    _textController.addListener(_handleTextChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _capture());
   }
 
   @override
   void dispose() {
+    _textController.removeListener(_handleTextChanged);
+    _textController.dispose();
+    _textFocusNode.dispose();
     _image?.dispose();
     super.dispose();
   }
@@ -83,6 +97,9 @@ class _CapturePageState extends State<CapturePage> {
 
   void _selectTool(CaptureTool tool) {
     if (_busy || !mounted) return;
+    if (_activeTool == CaptureTool.text && tool != CaptureTool.text) {
+      _commitTextDraft();
+    }
     setState(() {
       _activeTool = tool;
       _dragStart = null;
@@ -93,7 +110,215 @@ class _CapturePageState extends State<CapturePage> {
 
   void _selectColor(Color color) {
     if (!mounted) return;
-    setState(() => _selectedColor = color);
+    setState(() {
+      _selectedColor = color;
+      final draft = _textDraft;
+      if (draft != null) {
+        _textDraft = draft.copyWith(color: color);
+      }
+    });
+  }
+
+  Size _measureText(String text, double fontSize, double maxWidth) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text.isEmpty ? 'M' : text,
+        style: TextStyle(fontSize: fontSize, height: 1),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    )..layout(maxWidth: math.max(1, maxWidth));
+    return Size(painter.width, painter.height);
+  }
+
+  Rect _textRectForInput({
+    required Offset requestedStart,
+    required String text,
+    required double fontSize,
+    required Rect bounds,
+  }) {
+    final measured = _measureText(text, fontSize, bounds.width);
+    final width = math.min(math.max(measured.width + 4, 24), bounds.width);
+    final height = math.min(
+      math.max(measured.height + 4, fontSize + 8),
+      bounds.height,
+    );
+    final left = requestedStart.dx.clamp(
+      bounds.left,
+      math.max(bounds.left, bounds.right - width),
+    );
+    final top = requestedStart.dy.clamp(
+      bounds.top,
+      math.max(bounds.top, bounds.bottom - height),
+    );
+    return Rect.fromLTWH(
+      left.toDouble(),
+      top.toDouble(),
+      width.toDouble(),
+      height.toDouble(),
+    );
+  }
+
+  void _handleTextChanged() {
+    if (_suppressTextListener || !mounted) return;
+    final draft = _textDraft;
+    if (draft == null) return;
+
+    var updated = draft.copyWith(text: _textController.text);
+    final selection = _selection;
+    if (_textAutoSizing && selection != null) {
+      final rect = _textRectForInput(
+        requestedStart: draft.start,
+        text: _textController.text,
+        fontSize: draft.fontSize,
+        bounds: selection,
+      );
+      updated = updated.copyWith(start: rect.topLeft, end: rect.bottomRight);
+    }
+    setState(() => _textDraft = updated);
+  }
+
+  void _beginTextInput(ScreenshotLayout layout, Offset point) {
+    final selection = _selection;
+    if (selection == null || !_selectionCommitted) return;
+
+    _commitTextDraft();
+    final start = _clampToSelection(layout, point);
+    final rect = _textRectForInput(
+      requestedStart: start,
+      text: '',
+      fontSize: 24,
+      bounds: selection,
+    );
+    _suppressTextListener = true;
+    _textController.clear();
+    _suppressTextListener = false;
+
+    setState(() {
+      _activeTool = CaptureTool.text;
+      _textAutoSizing = true;
+      _textDraft = ScreenshotAnnotation(
+        tool: CaptureTool.text,
+        start: rect.topLeft,
+        end: rect.bottomRight,
+        color: _selectedColor,
+        fontSize: 24,
+      );
+      _message = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _textDraft == null) return;
+      _textFocusNode.requestFocus();
+      _textController.selection = TextSelection.collapsed(
+        offset: _textController.text.length,
+      );
+    });
+  }
+
+  void _commitTextDraft() {
+    final draft = _textDraft;
+    if (draft == null) return;
+    final text = _textController.text;
+    final committed = text.isEmpty ? null : draft.copyWith(text: text);
+    _suppressTextListener = true;
+    _textController.clear();
+    _suppressTextListener = false;
+    _textFocusNode.unfocus();
+    _textResizeStart = null;
+    _textResizeHandle = null;
+    _textAutoSizing = false;
+    if (!mounted) return;
+    setState(() {
+      _textDraft = null;
+      if (committed != null) {
+        _annotations = [..._annotations, committed];
+      }
+    });
+  }
+
+  Offset _textCorner(Rect rect, TextResizeHandle handle) {
+    return switch (handle) {
+      TextResizeHandle.topLeft => rect.topLeft,
+      TextResizeHandle.topRight => rect.topRight,
+      TextResizeHandle.bottomLeft => rect.bottomLeft,
+      TextResizeHandle.bottomRight => rect.bottomRight,
+    };
+  }
+
+  Offset _textOppositeCorner(Rect rect, TextResizeHandle handle) {
+    return switch (handle) {
+      TextResizeHandle.topLeft => rect.bottomRight,
+      TextResizeHandle.topRight => rect.bottomLeft,
+      TextResizeHandle.bottomLeft => rect.topRight,
+      TextResizeHandle.bottomRight => rect.topLeft,
+    };
+  }
+
+  void _startTextResize(TextResizeHandle handle) {
+    final draft = _textDraft;
+    if (draft == null || draft.text.isEmpty) return;
+    _textResizeStart = draft;
+    _textResizeHandle = handle;
+    _textResizePointer = _textCorner(draft.rect, handle);
+    _textAutoSizing = false;
+  }
+
+  void _updateTextResize(TextResizeHandle handle, Offset delta) {
+    final start = _textResizeStart;
+    final activeHandle = _textResizeHandle;
+    final bounds = _selection;
+    if (start == null || activeHandle != handle || bounds == null) return;
+
+    _textResizePointer += delta;
+    final baseRect = start.rect;
+    final anchor = _textOppositeCorner(baseRect, handle);
+    final baseCorner = _textCorner(baseRect, handle);
+    final baseVector = baseCorner - anchor;
+    final denominator =
+        baseVector.dx * baseVector.dx + baseVector.dy * baseVector.dy;
+    if (denominator <= 0) return;
+
+    final pointer = Offset(
+      _textResizePointer.dx.clamp(bounds.left, bounds.right).toDouble(),
+      _textResizePointer.dy.clamp(bounds.top, bounds.bottom).toDouble(),
+    );
+    final pointerVector = pointer - anchor;
+    var scale =
+        (pointerVector.dx * baseVector.dx + pointerVector.dy * baseVector.dy) /
+        denominator;
+
+    var maxScale = double.infinity;
+    if (baseVector.dx > 0) {
+      maxScale = math.min(maxScale, (bounds.right - anchor.dx) / baseVector.dx);
+    } else if (baseVector.dx < 0) {
+      maxScale = math.min(maxScale, (bounds.left - anchor.dx) / baseVector.dx);
+    }
+    if (baseVector.dy > 0) {
+      maxScale = math.min(
+        maxScale,
+        (bounds.bottom - anchor.dy) / baseVector.dy,
+      );
+    } else if (baseVector.dy < 0) {
+      maxScale = math.min(maxScale, (bounds.top - anchor.dy) / baseVector.dy);
+    }
+    maxScale = math.min(maxScale, 8);
+    scale = scale.clamp(0.25, maxScale).toDouble();
+
+    final target = anchor + baseVector * scale;
+    final rect = Rect.fromPoints(anchor, target);
+    setState(() {
+      _textDraft = start.copyWith(
+        start: rect.topLeft,
+        end: rect.bottomRight,
+        fontSize: (start.fontSize * scale).clamp(8, 256).toDouble(),
+      );
+    });
+  }
+
+  void _finishTextResize(TextResizeHandle handle) {
+    if (_textResizeHandle != handle) return;
+    _textResizeStart = null;
+    _textResizeHandle = null;
   }
 
   Offset _clampToSelection(ScreenshotLayout layout, Offset point) {
@@ -264,6 +489,7 @@ class _CapturePageState extends State<CapturePage> {
   Future<void> _save(ScreenshotLayout layout) async {
     final selection = _selection;
     if (selection == null || _busy) return;
+    _commitTextDraft();
 
     setState(() {
       _busy = true;
@@ -307,6 +533,7 @@ class _CapturePageState extends State<CapturePage> {
   Future<void> _copy(ScreenshotLayout layout) async {
     final selection = _selection;
     if (selection == null || _busy) return;
+    _commitTextDraft();
 
     setState(() {
       _busy = true;
@@ -381,6 +608,7 @@ class _CapturePageState extends State<CapturePage> {
               );
               return Stack(
                 fit: StackFit.expand,
+                clipBehavior: Clip.none,
                 children: [
                   ScreenshotCanvas(
                     image: image,
@@ -391,7 +619,13 @@ class _CapturePageState extends State<CapturePage> {
                   ),
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
+                    onTapUp: (details) {
+                      if (_activeTool == CaptureTool.text) {
+                        _beginTextInput(layout, details.localPosition);
+                      }
+                    },
                     onPanStart: (details) {
+                      if (_activeTool == CaptureTool.text) return;
                       if (_activeTool == CaptureTool.selection ||
                           _selection == null) {
                         _startSelection(layout, details.localPosition);
@@ -400,6 +634,7 @@ class _CapturePageState extends State<CapturePage> {
                       }
                     },
                     onPanUpdate: (details) {
+                      if (_activeTool == CaptureTool.text) return;
                       if (_activeTool == CaptureTool.selection ||
                           _selection == null) {
                         _updateSelection(layout, details.localPosition);
@@ -408,6 +643,7 @@ class _CapturePageState extends State<CapturePage> {
                       }
                     },
                     onPanEnd: (_) {
+                      if (_activeTool == CaptureTool.text) return;
                       if (_activeTool == CaptureTool.selection ||
                           _selection == null) {
                         _finishSelection();
@@ -417,6 +653,21 @@ class _CapturePageState extends State<CapturePage> {
                     },
                     child: const SizedBox.expand(),
                   ),
+                  if (_textDraft != null)
+                    Positioned(
+                      left: _textDraft!.rect.left,
+                      top: _textDraft!.rect.top,
+                      width: _textDraft!.rect.width,
+                      height: _textDraft!.rect.height,
+                      child: TextAnnotationEditor(
+                        annotation: _textDraft!,
+                        controller: _textController,
+                        focusNode: _textFocusNode,
+                        onResizeStart: _startTextResize,
+                        onResizeUpdate: _updateTextResize,
+                        onResizeEnd: _finishTextResize,
+                      ),
+                    ),
                   if (_selection == null && _message == null)
                     const IgnorePointer(
                       child: Align(

@@ -153,7 +153,7 @@ final class _ScreenshotPainter extends CustomPainter {
       paintScreenshotAnnotation(canvas, annotation);
     }
     final draft = draftAnnotation;
-    if (draft != null) {
+    if (draft != null && draft.tool != CaptureTool.text) {
       paintScreenshotAnnotation(canvas, draft);
     }
     canvas.restore();
@@ -221,6 +221,24 @@ void paintScreenshotAnnotation(
 
   if (annotation.tool == CaptureTool.rectangle) {
     canvas.drawRect(annotation.rect, paint);
+    return;
+  }
+
+  if (annotation.tool == CaptureTool.text) {
+    if (annotation.text.isEmpty) return;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: annotation.text,
+        style: TextStyle(
+          color: annotation.color,
+          fontSize: annotation.fontSize,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    )..layout(maxWidth: annotation.rect.width.clamp(1, double.infinity));
+    textPainter.paint(canvas, annotation.rect.topLeft);
     return;
   }
 

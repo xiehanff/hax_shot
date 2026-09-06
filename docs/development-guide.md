@@ -52,6 +52,7 @@ Alt+Z / 托盘“立即截屏”
     ├── 保存 PNG
     ├── 复制 image/png 到 Wayland 剪贴板
     ├── 点击矩形/箭头工具后，在截图选区内继续拖拽绘制标注
+    ├── 点击文字工具后，在截图选区内单击并输入文字，再拖动四角缩放字号
     ├── 保存/复制带标注的最终 PNG
     └── Esc 取消
 ```
@@ -66,8 +67,8 @@ Alt+Z / 托盘“立即截屏”
 | `lib/app.dart` | tray-only 宿主、快捷键设置页、菜单、启动子进程 | 不要重新添加主应用窗口；设置页是按需显示的临时窗口；菜单截图通过 `Platform.resolvedExecutable --capture` 启动独立进程 |
 | `lib/features/settings/shortcut_settings_page.dart` | 快捷键录制、开机自启动开关 | 快捷键通过 `gsettings` 写入，启动项通过 `AutostartService` 写入当前用户 XDG 配置 |
 | `lib/features/capture/capture_page.dart` | 冻结图加载、框选、保存、复制 | `_capture()` 完成前不要显示捕获窗口；保存/复制使用同一份裁剪逻辑 |
-| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；矩形/箭头工具通过 callback 切换，颜色由 CapturePage 持有并用于最终 PNG |
-| `lib/features/capture/screenshot_canvas.dart` | 图片适配、遮罩、选区和矩形/箭头绘制、point→pixel 映射 | `ScreenshotLayout` 的坐标是 Flutter logical pixels，最终裁剪和标注导出是物理像素 |
+| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
+| `lib/features/capture/screenshot_canvas.dart` | 图片适配、遮罩、选区和矩形/箭头/文字绘制、point→pixel 映射 | `ScreenshotLayout` 的坐标是 Flutter logical pixels，最终裁剪和标注导出是物理像素 |
 | `lib/native/native_bridge.dart` | Dart FFI 封装 | 不在这里执行 DBus 或 `wl-copy`，这些都属于 Rust 原生层 |
 | `rust/src/lib.rs` | Mutter ScreenCast、GStreamer、`wl-copy`、C ABI | 不要悄悄回退到 Screenshot Portal，否则会重新出现 GNOME 快门声 |
 | `linux/runner/my_application.cc` | GTK 窗口、应用 ID、开发桌面项 | Dart 负责显示/隐藏；不要恢复旧的 first-frame 自动显示逻辑 |
@@ -367,7 +368,7 @@ lib/features/capture/capture_page.dart
 5. 通过 `CustomSingleChildLayout` 获取真实工具栏尺寸，不能写死宽度，因为字体、按钮文字和主题可能改变组件宽度；同时必须在 `SingleChildLayoutDelegate.getConstraintsForChild` 中返回 `constraints.loosen()`，否则子工具栏会被施加全屏紧约束，既会跑到左上/左侧，也会让其背景遮住整张截图；
 6. viewport 和 toolbar 都留 12px 边距，避免贴住屏幕边缘。
 
-当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、颜色板（红/紫/黄/绿/橙）和 AI 预留控件。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头工具通过 callback 切换 CapturePage 的拖拽模式，颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
+当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、文字标注、颜色板（红/紫/黄/绿/橙）和 AI 预留控件。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头通过拖拽绘制，文字工具通过单击创建输入框，并可拖动四角缩放字号。颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
 
 已添加 `test/selection_toolbar_placement_test.dart` 覆盖顶部、底部、左右边缘、几乎占满屏幕，以及真实 `CustomSingleChildLayout` 尺寸约束。
 
@@ -469,7 +470,7 @@ pkill -x hax_shot
 - 不支持 X11、KDE、wlroots compositor；
 - ScreenCast 服务或 GStreamer 插件不可用时会失败，不使用有快门声的 Portal 兜底；
 - 暂不捕获鼠标光标；
-- 暂不支持文字标注、OCR、贴图、历史、录屏和滚动截图；
+- 暂不支持 OCR、贴图、历史、录屏和滚动截图；
 - 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
 - AppIndicator 依赖 GNOME Shell AppIndicator 扩展，Fedora 可能打印 deprecated warning，但当前功能正常；
 - system GStreamer/PipeWire 依赖不会随 Rust `.so` 一起分发；

@@ -23,6 +23,26 @@ void main() {
     expect(mapped.color, const Color(0xFFE53935));
   });
 
+  test('maps text content and font size to image pixels', () {
+    const annotation = ScreenshotAnnotation(
+      tool: CaptureTool.text,
+      start: Offset(120, 80),
+      end: Offset(320, 140),
+      color: Color(0xFF2E9B59),
+      text: '截图完成',
+      fontSize: 24,
+    );
+
+    final mapped = annotation.translatedAndScaled(
+      origin: const Offset(100, 50),
+      scale: 2,
+    );
+
+    expect(mapped.text, '截图完成');
+    expect(mapped.rect, const Rect.fromLTWH(10, 15, 100, 30));
+    expect(mapped.fontSize, 12);
+  });
+
   test('autostart service creates and removes a user desktop entry', () async {
     final configHome = await Directory.systemTemp.createTemp('hax-shot-test-');
     addTearDown(() => configHome.delete(recursive: true));

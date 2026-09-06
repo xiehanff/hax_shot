@@ -115,8 +115,10 @@ class _CaptureToolbarState extends State<CaptureToolbar> {
                       ),
                       _ToolbarIconButton(
                         icon: HugeIcons.strokeRoundedText,
-                        tooltip: '标注文字（即将支持）',
-                        onPressed: null,
+                        tooltip: '标注文字',
+                        selected: widget.activeTool == CaptureTool.text,
+                        onPressed: () =>
+                            widget.onToolSelected(CaptureTool.text),
                       ),
                       const _ToolbarDivider(),
                       _ToolbarColorPalette(
