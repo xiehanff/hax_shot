@@ -134,10 +134,11 @@ async fn start_mutter_screencast() -> Result<(Connection, OwnedObjectPath, u32),
     .map_err(|error| format!("failed to connect to Mutter ScreenCast: {error}"))?;
 
     let session_options: HashMap<&str, Value<'_>> = HashMap::new();
-    let session_path: OwnedObjectPath = screen_cast
-        .call("CreateSession", &session_options)
-        .await
-        .map_err(|error| format!("Mutter ScreenCast session creation failed: {error}"))?;
+    let session_path: OwnedObjectPath =
+        screen_cast
+            .call("CreateSession", &session_options)
+            .await
+            .map_err(|error| format!("Mutter ScreenCast session creation failed: {error}"))?;
 
     let session = Proxy::new(
         &connection,
