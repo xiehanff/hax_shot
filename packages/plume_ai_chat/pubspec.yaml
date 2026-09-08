@@ -1,0 +1,19 @@
+name: plume_ai_chat
+description: Reusable Flutter AI chat runtime and UI foundation used by Plume apps.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.8.0
+  flutter: '>=3.27.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  get: ^4.7.3
+  http: ^1.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0

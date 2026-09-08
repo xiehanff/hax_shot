@@ -10,14 +10,15 @@ Hax Shot 是一个面向 **Fedora GNOME + Wayland** 的 tray-only 截图工具�
 - 保存选区为 PNG；
 - 使用 `wl-copy` 复制 PNG 到 Wayland 图片剪贴板；
 - `Esc` 取消；
-- GNOME 托盘菜单：立即截屏、修改快捷键、退出；
-- 快捷键设置支持查看、删除和录制新的组合键；
-- 设置页支持 GNOME 登录后自动启动托盘宿主；
+- GNOME 托盘菜单：立即截屏、设置、退出；
+- 设置页统一管理快捷键和 GNOME 登录后自动启动；
 - 框选后支持选择颜色绘制矩形标注；
 - 框选后支持拖动绘制方向和长度可控的箭头标注；
-- 支持文字标注，输入后可拖动文字框四角缩放字号、顶部抓手移动，并可删除或再次编辑当前文字框。
+- 支持文字标注，输入后可拖动文字框四角缩放字号、顶部抓手移动，并可删除或再次编辑当前文字框；
+- AI 侧栏支持截图翻译、解释和深度理解；
+- AI 支持图片拖拽/剪贴板输入、DeepSeek reasoning、Markdown 流式输出、停止生成和推荐追问。
 
-当前暂不包含贴图、OCR、历史和录屏。
+当前暂不包含贴图、OCR、持久化会话和录屏。
 
 ## 支持范围
 
@@ -111,7 +112,6 @@ Alt+Z → hax_shot --capture
 
 ## 文档
 
-- [MVP 方案](./mvp.md)
 - [源码阅读索引](./docs/README.md)
 - [当前实现与开发指南](./docs/development-guide.md)
 - [图标、Dock 和托盘](./docs/icon-and-tray.md)
@@ -126,14 +126,14 @@ Alt+Z → hax_shot --capture
 GitHub Actions 只在推送版本 tag 时运行打包流程，不会因为普通 `main` 分支 push 或手动运行 workflow 而发布 RPM：
 
 ```bash
-git tag -a v1.2.0 -m "Release v1.2.0"
-git push origin v1.2.0
+git tag -a v1.3.0 -m "Release v1.3.0"
+git push origin v1.3.0
 ```
 
-tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.2.0+10` 使用 `v1.2.0`。`+10` 会成为 Fedora RPM 的 Release 字段。构建通过后，RPM 会自动上传到对应的 GitHub Release 页面。
+tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.3.0+1` 使用 `v1.3.0`。`+1` 会成为 Fedora RPM 的 Release 字段。构建通过后，RPM 会自动上传到对应的 GitHub Release 页面。
 
 详细流程见 [CI 与 GitHub Release](./docs/ci-release.md)。
 
 ## 许可证
 
-Hax Shot 自有源代码和原创图标采用 [MIT License](./LICENSE)。第三方依赖、GNOME/GStreamer/PipeWire 组件和参考仓库分别遵循各自许可证，详见 [第三方声明](./THIRD_PARTY_NOTICES.md)。
+Hax Shot 源代码采用 [MIT License](./LICENSE)。当前应用图标来自外部 `.icns` 资源；第三方依赖、GNOME/GStreamer/PipeWire 组件和参考仓库分别遵循各自许可证，详见 [第三方声明](./THIRD_PARTY_NOTICES.md)。

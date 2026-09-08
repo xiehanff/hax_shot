@@ -2,11 +2,12 @@
 
 ## 图标来源
 
-Hax Shot 使用项目原创的截图工具图标，不再依赖第三方产品图标：
+Hax Shot 当前使用从外部 `.icns` 资源提取并生成的 PNG 图标。图标处理使用
+`skills/icns-handle`，源文件不进入仓库。
 
-- SVG 源文件：`assets/icons/hax_shot.svg`
 - Flutter 托盘资源：`assets/icons/hax_shot.png`
-- 生成目录：`assets/generated_icons/`
+- Linux 图标组：`linux/icons/hicolor/`
+- 生成尺寸：16、24、32、48、64、128、256、512px
 
 生成后的 Linux 图标已复制到：
 
@@ -15,7 +16,7 @@ linux/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png
 ```
 
 同时保留 `linux/icons/hax_shot.png` 和 `linux/icons/com.github.xiehanff.hax_shot.png` 的
-256px 兼容副本。图标源文件和生成文件均属于本项目 MIT 许可内容。
+256px 兼容副本。外部图标资源的版权和许可应以原始资源为准。
 
 ## Dock 图标
 
@@ -47,8 +48,8 @@ share/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png
 Flutter 使用 `tray_manager`：
 
 - 图标：`assets/icons/hax_shot.png`；
-- 菜单：立即截屏、修改快捷键、退出；
-- “修改快捷键”显示临时设置页，展示当前快捷键、删除按钮和录制新快捷键入口；
+- 菜单：立即截屏、设置、退出；
+- “设置”显示临时设置页，统一管理快捷键和登录自启动；
 - 普通进程不显示主窗口；
 - 托盘菜单的“立即截屏”启动新的 `hax_shot --capture` 进程；
 - 左键点击图标不打开主窗口，右键使用原生托盘菜单。
@@ -75,6 +76,9 @@ gnome-shell-extension-appindicator
 ~/.local/share/icons/hicolor/index.theme
 ~/.local/share/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png
 ```
+
+用户级安装会覆盖同名 desktop 条目，并刷新图标缓存；Wayland 下 GNOME Dock
+可能继续使用旧缓存，注销并重新登录后生效。
 
 并注册：
 

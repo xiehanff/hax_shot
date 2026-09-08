@@ -11,16 +11,17 @@
 | 3 | [Screenshot 源码阅读](./screenshot-source-review.md) | `references/screenshot` | 轻量截图主链路、单帧捕获、选区 overlay、复制和保存 |
 | 4 | [snapclip 源码阅读](./snapclip-source-review.md) | `references/snapclip` | GNOME Wayland Mutter ScreenCast + PipeWire 无快门声单帧捕获 |
 | — | [MVP 参考结论](./reference-decisions.md) | — | 将 macOS 设计转换为 Hax Shot 的 Flutter + Rust + Linux 方案 |
-| — | [图标、Dock 和托盘](./icon-and-tray.md) | `assets/icons`、`linux/icons` | 原创图标和 Linux 桌面集成 |
+| — | [图标、Dock 和托盘](./icon-and-tray.md) | `assets/icons`、`linux/icons` | 图标和 Linux 桌面集成 |
 
 | — | [当前实现与开发指南](./development-guide.md) | 当前代码入口、运行方式、坑点、验证和交接信息 |
 | — | [MVP2 功能说明](./mvp2.md) | 自启动、矩形、箭头、文字标注和导出坐标 |
 | — | [Linux 打包与分发](./packaging.md) | Fedora RPM、Rust 动态库、系统运行依赖和安装流程 |
 | — | [CI 与 GitHub Release](./ci-release.md) | 版本 tag 触发 RPM 构建并上传 GitHub Release |
+| — | [Hax Shot AI](./ai.md) | 截图视觉 AI、对话侧栏和 DeepSeek 流式请求 |
 
 ## 结论先看
 
-Hax Shot MVP1 只实现基础截图链路；MVP2 在此基础上增加自启动、矩形、箭头和文字标注，详见 [MVP2 功能说明](./mvp2.md)。
+Hax Shot 当前包含基础截图、自启动、矩形/箭头/文字标注，以及截图视觉 AI；MVP2 的标注细节见 [MVP2 功能说明](./mvp2.md)，AI 细节见 [Hax Shot AI](./ai.md)。
 
 ```text
 Alt+Z
@@ -36,7 +37,7 @@ Alt+Z
 
 ## 许可证提醒
 
-- Hax Shot 自有源代码和原创图标：MIT，见根目录 [`LICENSE`](../LICENSE)。
+- Hax Shot 源代码：MIT，见根目录 [`LICENSE`](../LICENSE)；当前应用图标来自外部 `.icns` 资源。
 - Reticle：Apache-2.0 + Commons Clause，不能按普通 Apache-2.0 直接复用。
 - SnapShotKit：MIT，可以在保留版权和许可证的前提下参考/复用。
 - Screenshot：README 声称 MIT，但本地仓库没有 `LICENSE` 正文；在上游确认前不复制代码。

@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
+import '../ai/models/hax_ai_action.dart';
 import 'annotation.dart';
 import 'capture_session.dart';
 import 'capture_toolbar.dart';
@@ -16,8 +17,13 @@ import 'screenshot_exporter.dart';
 import 'selection_toolbar_placement.dart';
 import 'text_annotation_editor.dart';
 
+typedef CaptureAiActionCallback =
+    Future<void> Function(HaxAiAction action, Uint8List pngBytes);
+
 class CapturePage extends StatefulWidget {
-  const CapturePage({super.key});
+  const CapturePage({this.onAiAction, super.key});
+
+  final CaptureAiActionCallback? onAiAction;
 
   @override
   State<CapturePage> createState() => _CapturePageState();
@@ -432,6 +438,44 @@ class _CapturePageState extends State<CapturePage> {
     setState(() => _textDraft = null);
   }
 
+  Future<Uint8List> _renderSelectedPngForAi(ScreenshotLayout layout) async {
+    _commitTextDraft();
+    final image = _image;
+    final selection = _session.selection;
+    if (image == null || selection == null) {
+      throw StateError('没有可提交给 AI 的截图区域');
+    }
+
+    return ScreenshotExporter.renderPng(
+      image: image,
+      layout: layout,
+      selection: selection,
+      annotations: _session.annotations,
+    );
+  }
+
+  Future<void> _askAi(HaxAiAction action, ScreenshotLayout layout) async {
+    final onAiAction = widget.onAiAction;
+    if (onAiAction == null || _busy) return;
+
+    setState(() {
+      _busy = true;
+      _message = '正在准备 AI 请求…';
+    });
+
+    try {
+      final png = await _renderSelectedPngForAi(layout);
+      await onAiAction(action, png);
+      await _closeCapture();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _message = 'AI 请求失败：$error';
+      });
+    }
+  }
+
   Future<void> _save(ScreenshotLayout layout) async {
     final selection = _session.selection;
     final image = _image;
@@ -671,6 +715,16 @@ class _CapturePageState extends State<CapturePage> {
                           onCancel: _cancel,
                           onSave: () => _save(layout),
                           onCopy: () => _copy(layout),
+                          onTranslate: widget.onAiAction == null
+                              ? null
+                              : () => _askAi(HaxAiAction.translate, layout),
+                          onExplain: widget.onAiAction == null
+                              ? null
+                              : () => _askAi(HaxAiAction.explain, layout),
+                          onDeepUnderstand: widget.onAiAction == null
+                              ? null
+                              : () =>
+                                    _askAi(HaxAiAction.deepUnderstand, layout),
                         ),
                       ),
                     ),

@@ -44,9 +44,9 @@ on:
 普通 `main` push、Pull Request 和手动运行都不会触发打包。tag 去掉 `v` 后必须等于 `pubspec.yaml` 中 `+` 之前的版本号。例如：
 
 ```text
-pubspec.yaml: version: 1.2.0+10
-Git tag:        v1.2.0
-RPM:            hax-shot-1.2.0-10.fc44.x86_64.rpm
+pubspec.yaml: version: 1.3.0+1
+Git tag:        v1.3.0
+RPM:            hax-shot-1.3.0-1.fc44.x86_64.rpm
 ```
 
 本地检查通过后，创建并推送 tag：
@@ -58,8 +58,8 @@ cargo fmt --manifest-path rust/Cargo.toml --check
 cargo check --manifest-path rust/Cargo.toml
 cargo test --manifest-path rust/Cargo.toml
 
-git tag -a v1.2.0 -m "Release v1.2.0"
-git push origin v1.2.0
+git tag -a v1.3.0 -m "Release v1.3.0"
+git push origin v1.3.0
 ```
 
 工作流会运行同样的 Dart/Rust 检查，调用本脚本构建 RPM，并将产物同时保存为 Actions artifact、上传到对应 GitHub Release 的 Assets。完整发布约定见 [CI 与 GitHub Release](./ci-release.md)。
@@ -167,7 +167,7 @@ command -v wl-copy
 2. `Alt+Z`；
 3. 选区保存；
 4. PNG 图片剪贴板；
-5. 设置页修改快捷键。
+5. 设置页统一配置快捷键和登录自启动。
 
 ## 当前不发布 AppImage
 

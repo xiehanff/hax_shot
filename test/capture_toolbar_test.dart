@@ -50,4 +50,53 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('AI actions invoke callbacks and are disabled while busy', (
+    tester,
+  ) async {
+    var translated = false;
+    var explained = false;
+    var deeplyUnderstood = false;
+
+    Widget buildToolbar({required bool busy}) {
+      return MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: CaptureToolbar(
+              busy: busy,
+              activeTool: CaptureTool.selection,
+              selectedColor: annotationColors.first,
+              onToolSelected: (_) {},
+              onColorSelected: (_) {},
+              onCancel: () {},
+              onSave: () {},
+              onCopy: () {},
+              onTranslate: () => translated = true,
+              onExplain: () => explained = true,
+              onDeepUnderstand: () => deeplyUnderstood = true,
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildToolbar(busy: false));
+    await tester.tap(find.byTooltip('翻译截图'));
+    await tester.tap(find.byTooltip('解释截图'));
+    await tester.tap(find.byTooltip('深入理解截图'));
+    expect(translated, isTrue);
+    expect(explained, isTrue);
+    expect(deeplyUnderstood, isTrue);
+
+    translated = false;
+    explained = false;
+    deeplyUnderstood = false;
+    await tester.pumpWidget(buildToolbar(busy: true));
+    await tester.tap(find.byTooltip('翻译截图'));
+    await tester.tap(find.byTooltip('解释截图'));
+    await tester.tap(find.byTooltip('深入理解截图'));
+    expect(translated, isFalse);
+    expect(explained, isFalse);
+    expect(deeplyUnderstood, isFalse);
+  });
 }

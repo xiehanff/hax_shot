@@ -86,6 +86,7 @@ jobs:
         run: |
           fvm flutter analyze
           fvm flutter test
+          fvm flutter test packages/plume_ai_chat/test
 
       - name: Run Rust checks
         run: |

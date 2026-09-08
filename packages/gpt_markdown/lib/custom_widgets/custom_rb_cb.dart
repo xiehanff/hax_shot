@@ -1,0 +1,94 @@
+// Flutter 3.32 deprecated the legacy Radio callback API used by this copied
+// renderer; keep the package behavior compatible across supported SDKs.
+// ignore_for_file: deprecated_member_use
+
+import 'package:flutter/material.dart';
+
+/// A custom radio button widget that extends StatelessWidget.
+class CustomRb extends StatelessWidget {
+  const CustomRb({
+    super.key,
+    this.spacing = 5,
+    required this.child,
+    this.textDirection = TextDirection.ltr,
+    required this.value,
+  });
+  final Widget child;
+  final bool value;
+  final double spacing;
+  final TextDirection textDirection;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: textDirection,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        textBaseline: TextBaseline.alphabetic,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        children: [
+          Text.rich(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: EdgeInsetsDirectional.only(
+                  start: spacing,
+                  end: spacing,
+                ),
+                child: Radio<bool>(
+                  value: value,
+                  groupValue: true,
+                  onChanged: (bool? v) {},
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ),
+          Flexible(child: child),
+        ],
+      ),
+    );
+  }
+}
+
+/// A custom checkbox widget that extends StatelessWidget.
+class CustomCb extends StatelessWidget {
+  const CustomCb({
+    super.key,
+    this.spacing = 5,
+    required this.child,
+    this.textDirection = TextDirection.ltr,
+    required this.value,
+  });
+  final Widget child;
+  final bool value;
+  final double spacing;
+  final TextDirection textDirection;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: textDirection,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        textBaseline: TextBaseline.alphabetic,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        children: [
+          Text.rich(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: EdgeInsetsDirectional.only(
+                  start: spacing,
+                  end: spacing,
+                ),
+                child: Checkbox(value: value, onChanged: (value) {}),
+              ),
+            ),
+          ),
+          Flexible(child: child),
+        ],
+      ),
+    );
+  }
+}

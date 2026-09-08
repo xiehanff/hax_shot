@@ -15,6 +15,9 @@ class CaptureToolbar extends StatelessWidget {
     required this.onCancel,
     required this.onSave,
     required this.onCopy,
+    this.onTranslate,
+    this.onExplain,
+    this.onDeepUnderstand,
     super.key,
   });
 
@@ -26,6 +29,9 @@ class CaptureToolbar extends StatelessWidget {
   final VoidCallback onCancel;
   final VoidCallback onSave;
   final VoidCallback onCopy;
+  final VoidCallback? onTranslate;
+  final VoidCallback? onExplain;
+  final VoidCallback? onDeepUnderstand;
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +121,12 @@ class CaptureToolbar extends StatelessWidget {
                         onSelected: onColorSelected,
                       ),
                       const _ToolbarDivider(),
-                      const _AiPlaceholderGroup(),
+                      _AiActionGroup(
+                        busy: busy,
+                        onTranslate: onTranslate,
+                        onExplain: onExplain,
+                        onDeepUnderstand: onDeepUnderstand,
+                      ),
                       const _ToolbarDivider(),
                       _ToolbarTextButton(
                         icon: HugeIcons.strokeRoundedSave,
@@ -345,53 +356,40 @@ class _ToolbarColorSwatch extends StatelessWidget {
   }
 }
 
-class _AiPlaceholderGroup extends StatelessWidget {
-  const _AiPlaceholderGroup();
+class _AiActionGroup extends StatelessWidget {
+  const _AiActionGroup({
+    required this.busy,
+    required this.onTranslate,
+    required this.onExplain,
+    required this.onDeepUnderstand,
+  });
+
+  final bool busy;
+  final VoidCallback? onTranslate;
+  final VoidCallback? onExplain;
+  final VoidCallback? onDeepUnderstand;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 5),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: const [
-          _AiIcon(icon: HugeIcons.strokeRoundedTranslate, tooltip: '翻译（即将支持）'),
-          _AiIcon(
-            icon: HugeIcons.strokeRoundedBookOpenCheck,
-            tooltip: '解释（即将支持）',
-          ),
-          _AiIcon(
-            icon: HugeIcons.strokeRoundedKnowledge01,
-            tooltip: '深度理解（即将支持）',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AiIcon extends StatelessWidget {
-  const _AiIcon({required this.icon, required this.tooltip});
-
-  final List<List<dynamic>> icon;
-  final String tooltip;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: SizedBox(
-        width: 32,
-        height: 40,
-        child: Center(
-          child: HugeIcon(
-            icon: icon,
-            color: Colors.white,
-            size: 18,
-            strokeWidth: 1.5,
-          ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _ToolbarIconButton(
+          icon: HugeIcons.strokeRoundedTranslate,
+          tooltip: '翻译截图',
+          onPressed: busy ? null : onTranslate,
         ),
-      ),
+        _ToolbarIconButton(
+          icon: HugeIcons.strokeRoundedBookOpenCheck,
+          tooltip: '解释截图',
+          onPressed: busy ? null : onExplain,
+        ),
+        _ToolbarIconButton(
+          icon: HugeIcons.strokeRoundedKnowledge01,
+          tooltip: '深入理解截图',
+          onPressed: busy ? null : onDeepUnderstand,
+        ),
+      ],
     );
   }
 }

@@ -29,11 +29,11 @@ Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，�
 
 ```text
 立即截屏
-修改快捷键
+设置
 退出
 ```
 
-“修改快捷键”会临时显示一个设置窗口，而不是打开外部控制中心。设置窗口展示当前 GNOME 快捷键，右侧 `×` 清空快捷键，点击“录制新的快捷键”后聚焦键盘录制区域；按下带修饰键的组合键后立即写回 GNOME GSettings，按 `Esc` 取消录制。设置页还提供基于 XDG autostart 的“开机自启动”开关。关闭设置窗口后，宿主仍回到纯托盘状态。
+“设置”会临时显示一个设置窗口，而不是打开外部控制中心。设置窗口展示当前 GNOME 快捷键，右侧 `×` 清空快捷键，点击“录制新的快捷键”后聚焦键盘录制区域；按下带修饰键的组合键后立即写回 GNOME GSettings，按 `Esc` 取消录制。设置页还提供基于 XDG autostart 的“开机自启动”开关。关闭设置窗口后，宿主仍回到纯托盘状态。
 
 截图流程是：
 
@@ -99,7 +99,7 @@ build/linux/x64/release/bundle/hax_shot
 - 初始化 `tray_manager`；
 - 通过 AppIndicator 注册 GNOME 托盘图标；
 - 菜单中的“立即截屏”启动独立的 `--capture` 子进程；
-- 菜单中的“修改快捷键”显示 `ShortcutSettingsPage`；
+- 菜单中的“设置”显示 `ShortcutSettingsPage`；
 - 设置页通过 `gsettings` 读取 `binding`，删除时写入空字符串，录制成功后同时更新 `name`、`command`、`binding`；
 - 托盘菜单“退出”会先取消窗口拦截、销毁托盘，再强制结束 Dart/GTK 进程；仅调用 `windowManager.close()` 不足以结束隐藏的 GtkApplication 事件循环。
 - 普通进程退出时才销毁托盘图标。
@@ -369,26 +369,49 @@ lib/features/capture/capture_page.dart
 5. 通过 `CustomSingleChildLayout` 获取真实工具栏尺寸，不能写死宽度，因为字体、按钮文字和主题可能改变组件宽度；同时必须在 `SingleChildLayoutDelegate.getConstraintsForChild` 中返回 `constraints.loosen()`，否则子工具栏会被施加全屏紧约束，既会跑到左上/左侧，也会让其背景遮住整张截图；
 6. viewport 和 toolbar 都留 12px 边距，避免贴住屏幕边缘。
 
-当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、文字标注、颜色板（红/紫/黄/绿/橙）和 AI 预留控件。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头通过拖拽绘制，文字工具通过单击创建输入框，并可拖动四角缩放字号。颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
+当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、文字标注、颜色板（红/紫/黄/绿/橙）以及截图 AI 操作：翻译、解释、深入理解。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头通过拖拽绘制，文字工具通过单击创建输入框，并可拖动四角缩放字号。颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
 
 已添加 `test/selection_toolbar_placement_test.dart` 覆盖顶部、底部、左右边缘、几乎占满屏幕，以及真实 `CustomSingleChildLayout` 尺寸约束。
 
-## 9. 图标更换流程
+## 9. 截图 AI 与对话侧栏
 
-当前图标源文件是项目原创的：
+截图工具栏的三个 AI 操作都会先调用 `ScreenshotExporter.renderPng()`，把当前选区和矩形、箭头、文字标注合成为最终 PNG，再发送给 AI：
 
 ```text
-assets/icons/hax_shot.svg
+截图选区 + 标注
+      ↓
+ScreenshotExporter
+      ↓
+AiImageAttachment(image/png)
+      ↓
+HaxAiController
+      ↓
+plume_ai_chat / DeepSeek SSE
 ```
 
-使用 ImageMagick 生成 Linux hicolor 图标组：
+AI Host 代码位于：
+
+```text
+lib/features/ai/
+├── controllers/hax_ai_controller.dart
+├── models/
+├── services/
+└── views/
+```
+
+通用对话能力完整复用 `packages/plume_ai_chat`，包括 reasoning、流式 Markdown、Stop、会话历史、图片输入和 follow-up suggestions。普通追问只发送文字，不会重复上传上一张截图；新的截图操作会新建视觉会话。
+
+AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口。标题栏支持拖动，右上角关闭按钮结束当前截图进程。API Key 保存到 `shared_preferences`，key 为 `hax_shot.deepseek_api_key`。
+
+## 10. 图标更换流程
+
+当前图标由 `skills/icns-handle` 从外部 `.icns` 提取并生成 Linux PNG 组，源文件不进入仓库。
+
+使用脚本生成 Linux hicolor 图标组：
 
 ```bash
-for size in 16 24 32 48 64 128 256 512; do
-  magick -background none assets/icons/hax_shot.svg \
-    -resize "${size}x${size}" -depth 8 \
-    "linux/icons/hicolor/${size}x${size}/apps/com.github.xiehanff.hax_shot.png"
-done
+python3 /path/to/icns_handle.py generate source.icns \
+  -o /tmp/hax_shot_icons -p linux -n hax_shot
 ```
 
 当前工程有两份用途不同的图标：
@@ -409,7 +432,7 @@ fvm flutter build linux --release
 
 正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
 
-## 10. 调试和验证清单
+## 11. 调试和验证清单
 
 ### Dart/Flutter
 
@@ -464,7 +487,7 @@ build/linux/x64/debug/bundle/hax_shot --capture
 pkill -x hax_shot
 ```
 
-## 11. CI 与 GitHub Release
+## 12. CI 与 GitHub Release
 
 GitHub Actions 配置位于 `.github/workflows/build-rpm.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布。
 
@@ -482,25 +505,25 @@ cargo test --manifest-path rust/Cargo.toml
 tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 
 ```text
-version: 1.2.0+10  →  git push origin v1.2.0
+version: 1.3.0+1  →  git push origin v1.3.0
 ```
 
 推送 tag 后，工作流会重新执行 Dart/Rust 检查，构建 Fedora x86_64 RPM，保存 Actions artifact，并把 RPM 上传到对应 GitHub Release。不要为普通开发 commit 创建 `v*` tag；完整操作见 [`ci-release.md`](./ci-release.md)。
 
-## 12. 已知限制和未完成项
+## 13. 已知限制和未完成项
 
 - 仅支持 GNOME + Wayland；
 - 仅支持 primary monitor，暂不处理多显示器和混合 DPI；
 - 不支持 X11、KDE、wlroots compositor；
 - ScreenCast 服务或 GStreamer 插件不可用时会失败，不使用有快门声的 Portal 兜底；
 - 暂不捕获鼠标光标；
-- 暂不支持 OCR、贴图、历史、录屏和滚动截图；
+- 暂不支持 OCR、贴图、持久化会话、录屏和滚动截图；AI 会话仅在当前进程内保留；
 - 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
 - AppIndicator 依赖 GNOME Shell AppIndicator 扩展，Fedora 可能打印 deprecated warning，但当前功能正常；
 - system GStreamer/PipeWire 依赖不会随 Rust `.so` 一起分发；
 - 关闭或杀掉 tray 宿主后，GNOME 自定义快捷键仍可能指向旧的 release 路径，需要重新安装快捷键。
 
-## 13. 给后续 Agent 的最短交接信息
+## 14. 给后续 Agent 的最短交接信息
 
 如果任务是调整捕获 UI：只改 `lib/features/capture/`，保持 `_capture()` 完成后再 `windowManager.show()`。
 
@@ -508,7 +531,7 @@ version: 1.2.0+10  →  git push origin v1.2.0
 
 如果任务是调整截图后端：先阅读 `docs/snapclip-source-review.md`，保持 Mutter ScreenCast 的调用顺序，不要替换为 Screenshot Portal。
 
-如果任务是调整图标/Dock 匹配：先检查 application ID、desktop 文件名、`Icon` 名称和 `StartupWMClass`，然后运行安装脚本并重启旧进程。
+如果任务是调整图标/Dock 匹配：先检查 application ID、desktop 文件名、`Icon` 名称和 `StartupWMClass`，再用 `icns-handle` 生成图标、运行安装脚本并重启旧进程；Wayland 下 GNOME Dock 仍使用旧缓存时需要注销并重新登录。
 
 如果任务是增加跨平台支持：先明确不能把当前 Mutter/GStreamer 路径抽象成所有 Linux 桌面的通用方案；应新增后端并保留 GNOME backend。
 
