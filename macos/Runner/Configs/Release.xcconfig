@@ -1,0 +1,5 @@
+#include "../../Flutter/Flutter-Release.xcconfig"
+#include "Warnings.xcconfig"
+
+// 分发（Developer ID 签名 + 公证）要求硬化运行时；本地 ad-hoc 调试构建不受影响。
+ENABLE_HARDENED_RUNTIME = YES

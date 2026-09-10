@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 截图需要读取屏幕内容并启动 --capture 子进程，macOS 版本不使用 App Sandbox。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!-- 允许加载 bundle 内由 cargo 产出的原生库。 -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

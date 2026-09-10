@@ -42,3 +42,5 @@ Alt+Z
 - SnapShotKit：MIT，可以在保留版权和许可证的前提下参考/复用。
 - Screenshot：README 声称 MIT，但本地仓库没有 `LICENSE` 正文；在上游确认前不复制代码。
 - 参考仓库只用于本地阅读，克隆目录已加入 Git 忽略，不随项目发布。
+
+- [macOS 打包与分发](./macos-distribution.md)

@@ -1,19 +1,18 @@
-use futures_util::StreamExt;
-use gst::prelude::*;
-use gstreamer as gst;
+//! Hax Shot 原生层：Flutter 通过 `dart:ffi` 只看到下面这几个 C ABI 函数。
+//!
+//! 平台实现分别放在 `linux` 和 `macos` 模块里，Flutter 侧看不到
+//! Mutter / PipeWire / CoreGraphics / Carbon 这些平台细节。
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+
 use std::cmp::min;
-use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::runtime::Builder;
-use tokio::time::{timeout, Duration};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
-use zbus::{Connection, Proxy};
 
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
@@ -55,275 +54,63 @@ fn unique_temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("hax-shot-{}-{}.png", std::process::id(), timestamp))
 }
 
-type MonitorMode = (
-    String,
-    i32,
-    i32,
-    f64,
-    f64,
-    Vec<f64>,
-    HashMap<String, OwnedValue>,
-);
-type Monitor = (
-    (String, String, String, String),
-    Vec<MonitorMode>,
-    HashMap<String, OwnedValue>,
-);
-type LogicalMonitor = (
-    i32,
-    i32,
-    f64,
-    u32,
-    bool,
-    Vec<(String, String, String, String)>,
-    HashMap<String, OwnedValue>,
-);
-
-const MUTTER_SCREEN_CAST: &str = "org.gnome.Mutter.ScreenCast";
-const MUTTER_SCREEN_CAST_PATH: &str = "/org/gnome/Mutter/ScreenCast";
-const MUTTER_SCREEN_CAST_INTERFACE: &str = "org.gnome.Mutter.ScreenCast";
-const MUTTER_SESSION_INTERFACE: &str = "org.gnome.Mutter.ScreenCast.Session";
-const MUTTER_STREAM_INTERFACE: &str = "org.gnome.Mutter.ScreenCast.Stream";
-
-async fn primary_connector(connection: &Connection) -> Result<String, String> {
-    let proxy = Proxy::new(
-        connection,
-        "org.gnome.Mutter.DisplayConfig",
-        "/org/gnome/Mutter/DisplayConfig",
-        "org.gnome.Mutter.DisplayConfig",
-    )
-    .await
-    .map_err(|error| format!("failed to connect to Mutter DisplayConfig: {error}"))?;
-
-    let (_, _monitors, logical_monitors, _properties): (
-        u32,
-        Vec<Monitor>,
-        Vec<LogicalMonitor>,
-        HashMap<String, OwnedValue>,
-    ) = proxy
-        .call("GetCurrentState", &())
-        .await
-        .map_err(|error| format!("failed to read monitor layout from Mutter: {error}"))?;
-
-    logical_monitors
-        .iter()
-        .find(|monitor| monitor.4 && !monitor.5.is_empty())
-        .or_else(|| {
-            logical_monitors
-                .iter()
-                .find(|monitor| !monitor.5.is_empty())
-        })
-        .and_then(|monitor| monitor.5.first())
-        .map(|monitor| monitor.0.clone())
-        .ok_or_else(|| "Mutter did not report a primary monitor".to_owned())
-}
-
-async fn start_mutter_screencast() -> Result<(Connection, OwnedObjectPath, u32), String> {
-    let connection = Connection::session()
-        .await
-        .map_err(|error| format!("failed to connect to the session bus: {error}"))?;
-    let connector = primary_connector(&connection).await?;
-
-    let screen_cast = Proxy::new(
-        &connection,
-        MUTTER_SCREEN_CAST,
-        MUTTER_SCREEN_CAST_PATH,
-        MUTTER_SCREEN_CAST_INTERFACE,
-    )
-    .await
-    .map_err(|error| format!("failed to connect to Mutter ScreenCast: {error}"))?;
-
-    let session_options: HashMap<&str, Value<'_>> = HashMap::new();
-    let session_path: OwnedObjectPath =
-        screen_cast
-            .call("CreateSession", &session_options)
-            .await
-            .map_err(|error| format!("Mutter ScreenCast session creation failed: {error}"))?;
-
-    let session = Proxy::new(
-        &connection,
-        MUTTER_SCREEN_CAST,
-        session_path.as_str(),
-        MUTTER_SESSION_INTERFACE,
-    )
-    .await
-    .map_err(|error| format!("failed to connect to Mutter ScreenCast session: {error}"))?;
-
-    let mut monitor_options: HashMap<&str, Value<'_>> = HashMap::new();
-    // The cursor is handled by the Flutter UI and is not part of the image.
-    monitor_options.insert("cursor-mode", Value::U32(0));
-    let stream_path: OwnedObjectPath = session
-        .call("RecordMonitor", &(connector.as_str(), monitor_options))
-        .await
-        .map_err(|error| format!("Mutter monitor recording setup failed: {error}"))?;
-
-    let stream = Proxy::new(
-        &connection,
-        MUTTER_SCREEN_CAST,
-        stream_path.as_str(),
-        MUTTER_STREAM_INTERFACE,
-    )
-    .await
-    .map_err(|error| format!("failed to connect to Mutter ScreenCast stream: {error}"))?;
-    let mut stream_signals = stream
-        .receive_signal("PipeWireStreamAdded")
-        .await
-        .map_err(|error| format!("failed to subscribe to Mutter PipeWire stream: {error}"))?;
-
-    session
-        .call_method("Start", &())
-        .await
-        .map_err(|error| format!("Mutter ScreenCast start failed: {error}"))?;
-
-    let message = timeout(Duration::from_secs(10), stream_signals.next())
-        .await
-        .map_err(|_| "timed out waiting for Mutter PipeWire stream".to_owned())?
-        .ok_or_else(|| "Mutter PipeWire stream ended before it was created".to_owned())?;
-    let (node_id,): (u32,) = message
-        .body()
-        .deserialize()
-        .map_err(|error| format!("invalid Mutter PipeWire stream signal: {error}"))?;
-
-    Ok((connection, session_path, node_id))
-}
-
-async fn stop_mutter_screencast(connection: &Connection, session_path: &OwnedObjectPath) {
-    if let Ok(session) = Proxy::new(
-        connection,
-        MUTTER_SCREEN_CAST,
-        session_path.as_str(),
-        MUTTER_SESSION_INTERFACE,
-    )
-    .await
-    {
-        let _ = session.call_method("Stop", &()).await;
-    }
-}
-
-fn capture_pipewire_frame(node_id: u32) -> Result<PathBuf, String> {
-    gst::init().map_err(|error| format!("failed to initialize GStreamer: {error}"))?;
-
-    let destination = unique_temp_path();
-    let source = gst::ElementFactory::make("pipewiresrc")
-        .property("path", node_id.to_string())
-        .property("num-buffers", 1i32)
-        .build()
-        .map_err(|error| format!("failed to create GStreamer pipewiresrc: {error}"))?;
-    let converter = gst::ElementFactory::make("videoconvert")
-        .build()
-        .map_err(|error| format!("failed to create GStreamer videoconvert: {error}"))?;
-    let encoder = gst::ElementFactory::make("pngenc")
-        .build()
-        .map_err(|error| format!("failed to create GStreamer pngenc: {error}"))?;
-    let sink = gst::ElementFactory::make("filesink")
-        .property("location", destination.to_string_lossy().as_ref())
-        .build()
-        .map_err(|error| format!("failed to create GStreamer filesink: {error}"))?;
-
-    let pipeline = gst::Pipeline::new();
-    pipeline
-        .add_many([&source, &converter, &encoder, &sink])
-        .map_err(|error| format!("failed to assemble capture pipeline: {error}"))?;
-    gst::Element::link_many([&source, &converter, &encoder, &sink])
-        .map_err(|error| format!("failed to link capture pipeline: {error}"))?;
-
-    let result = (|| {
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|error| format!("failed to start GStreamer capture: {error:?}"))?;
-        let bus = pipeline
-            .bus()
-            .ok_or_else(|| "GStreamer capture pipeline has no bus".to_owned())?;
-        let message = bus
-            .timed_pop_filtered(
-                gst::ClockTime::from_seconds(10),
-                &[gst::MessageType::Eos, gst::MessageType::Error],
-            )
-            .ok_or_else(|| "timed out waiting for GStreamer capture frame".to_owned())?;
-
-        match message.view() {
-            gst::MessageView::Eos(..) => Ok(()),
-            gst::MessageView::Error(error) => Err(format!(
-                "GStreamer capture failed: {}{}",
-                error.error(),
-                error
-                    .debug()
-                    .map(|debug| format!(" ({debug})"))
-                    .unwrap_or_default()
-            )),
-            _ => Err("GStreamer capture ended unexpectedly".to_owned()),
-        }
-    })();
-    let _ = pipeline.set_state(gst::State::Null);
-
-    if let Err(error) = result {
-        let _ = fs::remove_file(&destination);
-        return Err(error);
-    }
-    if !destination.is_file() {
-        return Err("GStreamer produced no screenshot PNG".to_owned());
-    }
-    Ok(destination)
-}
-
-fn capture_screen_impl() -> Result<PathBuf, String> {
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("failed to create async runtime: {error}"))?;
-
-    let (connection, session_path, node_id) = runtime.block_on(start_mutter_screencast())?;
-    let capture_result = capture_pipewire_frame(node_id);
-    runtime.block_on(stop_mutter_screencast(&connection, &session_path));
-    capture_result
-}
-
-fn copy_png_impl(data: &[u8]) -> Result<(), String> {
-    if data.is_empty() {
-        return Err("PNG data is empty".to_owned());
-    }
-
-    // GNOME's Wayland compositor does not expose the data-control protocol
-    // required by wl-clipboard-rs. The official wl-copy client uses the
-    // compositor-compatible clipboard path, so use it as the MVP backend.
-    let mut child = Command::new("wl-copy")
-        .args(["--type", "image/png"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("failed to start wl-copy: {error}"))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "wl-copy stdin is unavailable".to_owned())?;
-    stdin
-        .write_all(data)
-        .map_err(|error| format!("failed to write PNG to wl-copy: {error}"))?;
-    drop(stdin);
-
-    let status = child
-        .wait()
-        .map_err(|error| format!("failed to wait for wl-copy: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("wl-copy exited with status {status}"))
-    }
-}
+#[cfg(target_os = "linux")]
+use linux::{
+    capture_screen_impl, copy_png_impl, cursor_display_impl, request_screen_capture_access_impl,
+    screen_capture_authorized_impl,
+};
+#[cfg(target_os = "macos")]
+use macos::{
+    capture_screen_impl, copy_png_impl, cursor_display_impl, request_screen_capture_access_impl,
+    screen_capture_authorized_impl,
+};
 
 /// Return the native library version used by the Flutter smoke test.
 #[no_mangle]
 pub extern "C" fn hax_shot_native_version() -> u32 {
-    1
+    4
 }
 
-/// Capture one primary-monitor frame through Mutter ScreenCast + PipeWire.
+/// Whether the app may capture the screen right now.
+///
+/// Returns 1 when capture is allowed, 0 when the platform has not granted the
+/// permission yet (macOS screen recording). The Flutter layer uses this to show
+/// a permission guide *before* trying to capture, instead of covering the
+/// screen with a failed capture overlay.
+#[no_mangle]
+pub extern "C" fn hax_shot_screen_capture_authorized() -> u32 {
+    screen_capture_authorized_impl()
+}
+
+/// Ask the platform to grant screen capture access.
+///
+/// macOS 首次调用会弹出系统对话框，并把 Hax Shot 加进“系统设置 → 隐私与安全性 →
+/// 屏幕录制”列表；用户同意前返回 0。Linux 上没有这个授权，直接返回 1。
+#[no_mangle]
+pub extern "C" fn hax_shot_request_screen_capture_access() -> u32 {
+    request_screen_capture_access_impl()
+}
+
+/// Return the platform identifier of the display the pointer is on.
+///
+/// The tray host reads this once per capture and passes it to the `--capture`
+/// process, so the selection overlay and the native capture always agree on the
+/// same display. Returns 0 when the platform cannot report it.
+#[no_mangle]
+pub extern "C" fn hax_shot_cursor_display() -> u32 {
+    cursor_display_impl()
+}
+
+/// Capture one frame of the target display and write it to a temporary PNG.
+///
+/// The target display is `--display <id>` when the tray host passed one, then the
+/// display under the pointer, then the main display (see `rust/src/macos.rs`).
+/// This must stay consistent with the display the Runner puts the overlay on.
 ///
 /// On success, writes a NUL-terminated temporary PNG path to `out_path` and
-/// returns 0. On failure, returns -1. If the output buffer is too small,
-/// returns -2 and records an error.
+/// returns 0. On failure returns -1, when the output buffer is too small returns
+/// -2, and when the screen recording permission is missing returns -3 (the
+/// Flutter layer turns that into a permission guide instead of an overlay).
 #[no_mangle]
 pub extern "C" fn hax_shot_capture_screen(out_path: *mut u8, capacity: usize) -> i32 {
     clear_last_error();
@@ -344,8 +131,9 @@ pub extern "C" fn hax_shot_capture_screen(out_path: *mut u8, capacity: usize) ->
             0
         }
         Ok(Err(error)) => {
-            set_last_error(error);
-            -1
+            let (code, message) = error;
+            set_last_error(message);
+            code
         }
         Err(_) => {
             set_last_error("native capture panicked".to_owned());
@@ -354,7 +142,7 @@ pub extern "C" fn hax_shot_capture_screen(out_path: *mut u8, capacity: usize) ->
     }
 }
 
-/// Copy PNG bytes to the regular Wayland image clipboard.
+/// Copy PNG bytes to the system image clipboard.
 #[no_mangle]
 pub extern "C" fn hax_shot_copy_png_to_clipboard(data: *const u8, length: usize) -> i32 {
     clear_last_error();

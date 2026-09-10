@@ -22,8 +22,7 @@ final class CaptureSession {
 
   bool get isTextTool => activeTool == CaptureTool.text;
 
-  bool get hasCommittedSelection =>
-      selectionCommitted && selection != null;
+  bool get hasCommittedSelection => selectionCommitted && selection != null;
 
   void selectTool(CaptureTool tool) {
     activeTool = tool;

@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'autostart_service.dart';
-import 'gnome_shortcut_service.dart';
+import 'shortcut_service.dart';
 
 class ShortcutSettingsPage extends StatefulWidget {
   const ShortcutSettingsPage({required this.onClose, super.key});
@@ -42,7 +43,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   Future<void> _loadBinding() async {
     try {
-      final binding = await GnomeShortcutService.instance.readBinding();
+      final binding = await shortcutService.readBinding();
       if (!mounted) return;
       setState(() {
         _binding = binding;
@@ -59,7 +60,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   Future<void> _loadAutoLaunch() async {
     try {
-      final enabled = await AutostartService.instance.isEnabled();
+      final enabled = await autostartService.isEnabled();
       if (!mounted) return;
       setState(() {
         _autoLaunch = enabled;
@@ -84,7 +85,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     });
 
     try {
-      await AutostartService.instance.setEnabled(enabled);
+      await autostartService.setEnabled(enabled);
       if (!mounted) return;
       setState(() {
         _autoLaunchSaving = false;
@@ -99,6 +100,14 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       });
     }
   }
+
+  String get _modifierHint =>
+      Platform.isMacOS ? '⌘、⌥、⌃ 或 ⇧' : 'Alt、Ctrl 或 Super';
+
+  String get _autostartSubtitle =>
+      Platform.isMacOS ? '登录后自动显示菜单栏图标' : '登录 GNOME 后自动显示托盘图标';
+
+  String get _exampleShortcut => Platform.isMacOS ? '⌘+⇧+Z' : 'Alt+Z';
 
   void _startRecording() {
     setState(() {
@@ -131,7 +140,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       return KeyEventResult.handled;
     }
 
-    final keyName = _gsettingsKeyName(event.logicalKey);
+    final keyName = _bindingKeyName(event.logicalKey);
     if (keyName == null) {
       setState(() => _message = '这个按键不能作为快捷键主体，请再按一次');
       return KeyEventResult.handled;
@@ -139,7 +148,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
     final modifiers = _pressedModifiers();
     if (modifiers.isEmpty) {
-      setState(() => _message = '快捷键至少需要一个修饰键，例如 Alt、Ctrl 或 Super');
+      setState(() => _message = '快捷键至少需要一个修饰键，例如 $_modifierHint');
       return KeyEventResult.handled;
     }
 
@@ -158,7 +167,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     });
 
     try {
-      await GnomeShortcutService.instance.saveBinding(binding);
+      await shortcutService.saveBinding(binding);
       if (!mounted) return;
       setState(() {
         _binding = binding;
@@ -183,7 +192,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     });
 
     try {
-      await GnomeShortcutService.instance.clearBinding();
+      await shortcutService.clearBinding();
       if (!mounted) return;
       setState(() {
         _binding = null;
@@ -221,7 +230,8 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     return modifiers;
   }
 
-  String? _gsettingsKeyName(LogicalKeyboardKey key) {
+  /// 产出三个平台共用的绑定键名，例如 `z`、`space`、`F5`。
+  String? _bindingKeyName(LogicalKeyboardKey key) {
     if (_isModifier(key)) return null;
 
     final label = key.keyLabel.trim();
@@ -290,12 +300,16 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       onKeyEvent: _onShortcutKeyEvent,
       child: Scaffold(
         appBar: AppBar(
-          leading: IconButton(
-            tooltip: '关闭',
-            onPressed: widget.onClose,
-            icon: const Icon(Icons.close),
-          ),
+          // 关闭按钮统一放右上角，和授权引导页/欢迎页保持一致。
+          automaticallyImplyLeading: false,
           title: const Text('快捷键设置'),
+          actions: [
+            IconButton(
+              tooltip: '关闭',
+              onPressed: widget.onClose,
+              icon: const Icon(Icons.close),
+            ),
+          ],
         ),
         body: Center(
           child: ConstrainedBox(
@@ -324,7 +338,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                           ? '读取中…'
                           : _binding == null
                           ? '未设置'
-                          : _displayBinding(_binding!),
+                          : bindingDisplayLabel(_binding!),
                     ),
                     subtitle: const Text('当前快捷键'),
                     trailing: _binding == null
@@ -355,7 +369,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                   child: ListTile(
                     leading: const Icon(Icons.power_settings_new),
                     title: const Text('开机自启动'),
-                    subtitle: const Text('登录 GNOME 后自动显示托盘图标'),
+                    subtitle: Text(_autostartSubtitle),
                     trailing: Switch(
                       value: _autoLaunch,
                       onChanged: _autoLaunchLoading || _autoLaunchSaving
@@ -374,7 +388,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Text(
-                        '请按下新的组合键，例如 Alt+Z。\n按 Esc 可取消录制。',
+                        '请按下新的组合键，例如 $_exampleShortcut。\n按 Esc 可取消录制。',
                         style: TextStyle(
                           color: Theme.of(
                             context,
@@ -399,35 +413,6 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
         ),
       ),
     );
-  }
-
-  String _displayBinding(String binding) {
-    final modifiers = RegExp(r'<([^>]+)>')
-        .allMatches(binding)
-        .map((match) => _displayModifier(match.group(1)!))
-        .where((value) => value.isNotEmpty)
-        .toList();
-    final key = binding.replaceAll(RegExp(r'<[^>]+>'), '');
-    final displayKey = switch (key.toLowerCase()) {
-      'return' => 'Enter',
-      'back_space' => 'Backspace',
-      'page_up' => 'PageUp',
-      'page_down' => 'PageDown',
-      'space' => 'Space',
-      _ when key.length == 1 => key.toUpperCase(),
-      _ => key,
-    };
-    return [...modifiers, displayKey].join('+');
-  }
-
-  String _displayModifier(String modifier) {
-    return switch (modifier.toLowerCase()) {
-      'control' => 'Ctrl',
-      'alt' => 'Alt',
-      'shift' => 'Shift',
-      'super' || 'meta' => 'Super',
-      _ => modifier,
-    };
   }
 }
 

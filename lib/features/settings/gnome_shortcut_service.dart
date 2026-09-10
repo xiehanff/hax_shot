@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'shortcut_service.dart';
+
 /// GNOME custom shortcut location used by Hax Shot.
-final class GnomeShortcutService {
+final class GnomeShortcutService implements ShortcutService {
   GnomeShortcutService({
     String? executablePath,
     Future<ProcessResult> Function(String, List<String>)? processRunner,
@@ -22,12 +24,19 @@ final class GnomeShortcutService {
   final String _executablePath;
   final Future<ProcessResult> Function(String, List<String>) _processRunner;
 
+  /// GNOME 自己持有快捷键（gsettings 里保存的是 `hax_shot --capture`），
+  /// 按一下由系统直接启动子进程，托盘宿主不需要注册什么。
+  @override
+  Future<void> activate({required void Function() onTriggered}) async {}
+
+  @override
   Future<String?> readBinding() async {
     final result = await _runGsettings(['get', bindingSchema, 'binding']);
     final binding = _parseGvariantString(result.stdout.toString());
     return binding.isEmpty ? null : binding;
   }
 
+  @override
   Future<void> saveBinding(String binding) async {
     await _ensureCustomKeybindingIsActive();
     await _setGsettings(bindingSchema, 'name', name);
@@ -35,6 +44,7 @@ final class GnomeShortcutService {
     await _setGsettings(bindingSchema, 'binding', binding);
   }
 
+  @override
   Future<void> clearBinding() async {
     await _setGsettings(bindingSchema, 'binding', '');
   }
@@ -50,12 +60,7 @@ final class GnomeShortcutService {
 
     current.add(keyPath);
     final value = '[${current.map(_quoteGvariantString).join(', ')}]';
-    await _runGsettings([
-      'set',
-      mediaKeysSchema,
-      'custom-keybindings',
-      value,
-    ]);
+    await _runGsettings(['set', mediaKeysSchema, 'custom-keybindings', value]);
   }
 
   Future<ProcessResult> _runGsettings(List<String> arguments) async {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../controllers/hax_ai_controller.dart';
 import 'widgets/ai_colors.dart';
@@ -13,9 +14,18 @@ class AiPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.scaffoldBg,
-      body: AiSidebar(controller: controller, onClose: onClose),
+    // Esc 一定要能退出：浮层/面板一旦拿不到键盘或按钮失灵，用户就被困住了。
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.escape): onClose,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: AppColors.scaffoldBg,
+          body: AiSidebar(controller: controller, onClose: onClose),
+        ),
+      ),
     );
   }
 }

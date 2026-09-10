@@ -2,12 +2,22 @@
 
 ## 图标来源
 
-Hax Shot 当前使用从外部 `.icns` 资源提取并生成的 PNG 图标。图标处理使用
-`skills/icns-handle`，源文件不进入仓库。
+三平台图标都从仓库里的单一源图生成：
 
-- Flutter 托盘资源：`assets/icons/hax_shot.png`
-- Linux 图标组：`linux/icons/hicolor/`
-- 生成尺寸：16、24、32、48、64、128、256、512px
+```text
+assets/icons/hax_shot_source.png   正方形、带透明背景
+```
+
+换了图标替换它，然后跑 `scripts/generate_icons.sh`（细节见
+[`assets/generated_icons/README.md`](../assets/generated_icons/README.md)）。
+
+- Flutter 托盘资源：`assets/icons/hax_shot.png`（Windows 用 `assets/icons/hax_shot.ico`，
+  见 `lib/app.dart` 的 `trayIconAsset`）
+- Linux 图标组：`linux/icons/hicolor/`（CMake 安装到 `share/icons/hicolor`，GNOME Dock
+  和应用列表都用它）
+- macOS：`macos/Runner/Assets.xcassets/AppIcon.appiconset/`
+- Windows：`windows/runner/resources/app_icon.ico`
+- 生成尺寸：16、24、32、48、64、128、256、512px（macOS 另有 1024）
 
 生成后的 Linux 图标已复制到：
 

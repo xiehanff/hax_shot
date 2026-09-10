@@ -52,12 +52,7 @@ void main() {
     expect(
       calls,
       contains(
-        equals([
-          'set',
-          GnomeShortcutService.bindingSchema,
-          'binding',
-          '',
-        ]),
+        equals(['set', GnomeShortcutService.bindingSchema, 'binding', '']),
       ),
     );
     expect(

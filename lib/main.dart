@@ -19,22 +19,33 @@ Future<void> main(List<String> args) async {
   await windowManager.ensureInitialized();
 
   final captureMode = args.contains('--capture');
+  final targetDisplay = _targetDisplay(args);
+  // macOS 的浮层由 Runner 的 CaptureOverlayWindow 直接改窗口（borderless +
+  // .screenSaver + 铺满目标显示器），不走 window_manager：setAlwaysOnTop 会把
+  // 层级改回 .normal/.floating，setTitleBarStyle 又会在 borderless 窗口上强解包
+  // nil 崩溃。所以 macOS 捕获模式不传这三个选项。详见 docs/development-guide.md 6.9。
+  final nativeCaptureOverlay = captureMode && Platform.isMacOS;
   final options = WindowOptions(
     title: 'Hax Shot',
     backgroundColor: Colors.black,
     // The tray host only reveals the shortcut settings page on demand; keep
     // that temporary window compact instead of inheriting a full-screen size.
-    size: captureMode ? null : const Size(520, 400),
-    minimumSize: captureMode ? null : const Size(460, 320),
-    center: !captureMode,
+    // 捕获进程先只用一个小窗口：抓屏失败（没授权等）时用户看到的是引导，
+    // 抓到画面之后才由 CaptureOverlayWindow / setFullScreen 升格成全屏浮层。
+    size: captureMode ? const Size(560, 400) : const Size(520, 400),
+    minimumSize: captureMode ? const Size(460, 320) : const Size(460, 320),
+    center: true,
     // The product is tray-only; neither the hidden host nor the transient
     // selection overlay belongs in the Dock/taskbar.
     skipTaskbar: true,
-    alwaysOnTop: captureMode,
-    fullScreen: captureMode,
-    // The settings view supplies its own Flutter AppBar; the tray host and
-    // capture overlay should not expose a second native title bar.
-    titleBarStyle: TitleBarStyle.hidden,
+    // 抓屏成功前不要全屏：失败时要留一个能正常关闭的小窗口。
+    alwaysOnTop: nativeCaptureOverlay ? null : false,
+    fullScreen: null,
+    // The settings view supplies its own Flutter AppBar; the tray host should
+    // not expose a second native title bar, and the macOS traffic lights would
+    // sit on top of our close button.
+    titleBarStyle: nativeCaptureOverlay ? null : TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
 
   // The regular process is tray-only. A capture process stays hidden until
@@ -47,7 +58,16 @@ Future<void> main(List<String> args) async {
   await windowManager.waitUntilReadyToShow(options);
   await windowManager.hide();
 
-  runApp(HaxShotApp(captureMode: captureMode));
+  runApp(HaxShotApp(captureMode: captureMode, targetDisplay: targetDisplay));
+}
+
+/// 托盘宿主用 `--display <id>` 指定主浮层落在哪块显示器；授权后重启抓屏进程时
+/// 需要原样带上。id 是平台自己的显示器标识，Flutter 只负责转交。
+int? _targetDisplay(List<String> args) {
+  final index = args.indexOf('--display');
+  if (index < 0 || index + 1 >= args.length) return null;
+  final value = int.tryParse(args[index + 1]);
+  return (value == null || value == 0) ? null : value;
 }
 
 class _ErrorDetailsView extends StatelessWidget {

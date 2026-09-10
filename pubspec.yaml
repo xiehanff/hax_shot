@@ -1,5 +1,5 @@
 name: hax_shot
-description: "A tray-only GNOME Wayland screenshot tool built with Flutter and Rust."
+description: "A tray-only desktop screenshot tool built with Flutter and Rust for Linux GNOME Wayland and macOS."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   ffi: ^2.2.0
   window_manager: ^0.5.2
+  hotkey_manager: ^0.2.3
+  url_launcher: ^6.3.0
   file_selector: ^1.1.0
   tray_manager: ^0.5.3
   hugeicons: ^1.1.7
@@ -75,7 +77,10 @@ flutter:
   uses-material-design: true
 
   assets:
+    # 托盘图标：Windows 需要 .ico（tray_manager 用 LoadImage 读 IMAGE_ICON），
+    # 其它平台用 .png。两者都由 scripts/generate_icons.sh 生成。
     - assets/icons/hax_shot.png
+    - assets/icons/hax_shot.ico
 
   # To add assets to your application, add an assets section, like this:
   # assets:

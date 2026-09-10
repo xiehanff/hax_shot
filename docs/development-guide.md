@@ -23,7 +23,7 @@ fvm flutter --version
 
 ## 1. 先记住产品边界
 
-Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有 GNOME 托盘图标和托盘菜单。
+Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有托盘图标（Linux GNOME 托盘 / macOS 菜单栏）和托盘菜单。
 
 托盘菜单目前只有：
 
@@ -32,6 +32,12 @@ Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，�
 设置
 退出
 ```
+
+**首次启动**会弹一次欢迎窗口（`lib/features/onboarding/first_run_guide.dart`，560×460）：
+托盘/菜单栏应用启动后屏幕上什么都不出现，新用户会以为没启动；欢迎页说明图标在哪、
+快捷键是什么、首次截图会要屏幕录制权限。标记存在 shared_preferences 的
+`hax_shot.onboarding_seen`（`FirstRunOnboarding`，按 hax_pick 的做法在**展示时**就写入，
+避免用户刚看到就退出后每次启动都弹）。托盘菜单先建好再弹欢迎页，这样欢迎页失败也不影响入口。
 
 “设置”会临时显示一个设置窗口，而不是打开外部控制中心。设置窗口展示当前 GNOME 快捷键，右侧 `×` 清空快捷键，点击“录制新的快捷键”后聚焦键盘录制区域；按下带修饰键的组合键后立即写回 GNOME GSettings，按 `Esc` 取消录制。设置页还提供基于 XDG autostart 的“开机自启动”开关。关闭设置窗口后，宿主仍回到纯托盘状态。
 
@@ -227,7 +233,252 @@ wl-copy --type image/png
 
 写入图片剪贴板。之前尝试 `wl-clipboard-rs` 时，GNOME compositor 不支持所需的 data-control 协议，因此不要在没有验证的情况下替换这条路径。
 
-## 6. 选区坐标规则
+## 6. macOS 平台适配
+
+macOS 与 Linux 共用同一套 Flutter UI 和 Dart FFI 接口，平台差异全部收敛在 Rust 和 Runner 里：
+
+```text
+Flutter（Linux / macOS 共用）
+        │ Dart FFI：hax_shot_capture_screen / hax_shot_copy_png_to_clipboard
+        │           hax_shot_register_capture_hotkey / hax_shot_last_error
+        ├── rust/src/linux.rs   Mutter ScreenCast + GStreamer + wl-copy + GNOME gsettings
+        └── rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard + Carbon
+```
+
+### 6.1 构建
+
+macOS 需要 Xcode（含命令行工具）、CocoaPods 和 Rust 工具链：
+
+```bash
+fvm flutter pub get
+fvm flutter run -d macos
+fvm flutter build macos --release
+```
+
+`macos/Runner.xcodeproj` 的 “Build Rust Native Library” 脚本阶段会调用
+`scripts/build_macos_rust.sh`：Debug 配置编译 cargo dev profile，Release/Profile 配置
+编译 release profile，然后把 `libhax_shot_native.dylib` 复制到 `Contents/Frameworks`，
+并用当前签名身份单独签名（Hardened Runtime 的 library validation 不接受未签名动态库）。
+
+只构建 **Apple Silicon（arm64）**：不做 universal、不 lipo。`AppInfo.xcconfig` 里
+`ARCHS = arm64`，脚本按 `$ARCHS` 的第一个架构构建对应 target，保证 dylib 和主程序同架构。
+要支持 Intel 时删掉 `ARCHS` 那一行，并把脚本改成按 `$ARCHS` 逐架构构建后 `lipo -create`。
+
+### 6.2 屏幕录制权限
+
+macOS 不允许应用静默抓屏。关键是**没授权时绝对不能显示全屏浮层**：浮层是 borderless +
+`.screenSaver` 层级、铺满整块屏，一旦在失败路径上弹出来，用户会被一块盖住菜单栏和 Dock
+的黑屏困住（只剩 Esc 或强杀进程）。
+
+所以窗口分两步走：
+
+```text
+--capture 进程启动
+    ↓ 只是一个普通小窗口（560×480，带标题栏、层级 .normal）
+Dart 先问 NativeBridge.screenCaptureAuthorized()（Rust: CGPreflightScreenCaptureAccess）
+    ├── 未授权 → 显示 CapturePermissionGuide（小窗口里），并调用
+    │             hax_shot_request_screen_capture_access()（CGRequestScreenCaptureAccess）
+    │             弹一次系统对话框 + 把 Hax Shot 注册进“屏幕录制”列表
+    │             用户点“打开系统设置”跳转，回来点“我已授权，重新检查”
+    └── 已授权 → Rust 抓屏
+            ├── 成功 → CaptureOverlayWindow.becomeOverlay()（borderless + .screenSaver +
+            │          铺满目标显示器）→ 然后才 show()
+            └── 失败 → 同样留在小窗口里显示错误（不再弹全屏浮层）
+```
+
+对应实现：
+
+| 位置 | 职责 |
+|---|---|
+| `rust/src/macos.rs` | `screen_capture_authorized_impl` / `request_screen_capture_access_impl`；抓屏时权限缺失返回 ABI 错误码 **-3** |
+| `lib/native/native_bridge.dart` | `screenCaptureAuthorized()` / `requestScreenCaptureAccess()`；-3 抛 `ScreenCapturePermissionException` |
+| `lib/features/capture/capture_permission_guide.dart` | 引导页（步骤说明 + 打开系统设置 + 重新检查 + 退出） |
+| `lib/features/capture/capture_overlay_window.dart` | 抓屏成功后调 `becomeOverlay` |
+| `macos/Runner/CaptureOverlayWindow.swift` | 真正把窗口改成全屏浮层 |
+| `lib/main.dart` | 捕获模式不再一启动就 `fullScreen`，也不再传 `alwaysOnTop` |
+
+注意：`CGRequestScreenCaptureAccess()` 只在**显示引导页之前**调用一次，否则 app 不会
+出现在“屏幕录制”列表里，用户无从勾选。`lib/main.dart` 捕获模式不传 `titleBarStyle`：
+`window_manager` 的 macOS 实现会强解包标题栏按钮，在 borderless 窗口上直接 SIGTRAP
+（引导窗口需要标题栏，浮层靠 Runner 自己切 borderless）。
+
+重新构建会让 ad-hoc 签名指纹变化，TCC 记录可能失效，需要重新授权。
+
+### 6.3 抓屏实现
+
+```text
+目标显示器 → CGDisplayCreateImage → ImageIO(CGImageDestinationCreateWithURL) → 临时 PNG
+```
+
+`CGDisplayCreateImage` 返回物理像素，Retina 屏上是逻辑尺寸的 2 倍；Flutter 侧按逻辑点
+铺满同一块显示器，正好 1:1 显示，裁剪和标注仍然按物理像素计算。目标显示器怎么定
+见 [6.9 多显示器](#69-多显示器)。
+
+### 6.4 抓屏浮层
+
+macOS 不使用 `windowManager.setFullScreen()`：原生全屏会切到独立 Space 并播放动画，
+而 `alwaysOnTop` 只到 `.floating` 层级，盖不住菜单栏和 Dock。改为在
+`macos/Runner/MainFlutterWindow.swift` 里判断 `--capture` 参数，直接设置：
+
+```text
+styleMask          = [.borderless]
+level              = .screenSaver
+collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+frame              = CaptureDisplay.targetScreen().frame
+```
+
+浮层只铺满**目标显示器**（不是全部显示器的并集），因此冻结画面和窗口尺寸一一对应。
+实测 borderless 窗口用 `setFrame(screen.frame)` 不会被 AppKit 收缩到 `visibleFrame`，
+菜单栏和 Dock 区域也在窗口内。
+
+窗口仍然保持隐藏，由 Dart 在拿到冻结帧后调用 `show()`，保持“先截图、后显示”的顺序。
+`lib/main.dart` 因此只在非 macOS 平台传 `alwaysOnTop/fullScreen`。
+
+### 6.5 剪贴板
+
+`NSPasteboard` 只能在主线程访问，因此 `NativeBridge.copyPngToClipboard()` 在 macOS 上
+不再包 `Isolate.run`，直接在主 isolate 调用；Linux 仍然保留 worker isolate。
+
+### 6.6 全局快捷键
+
+macOS 没有 gsettings，用成熟的第三方包 **`hotkey_manager`**（macOS 端依赖 soffes/HotKey，
+底层是 Carbon `RegisterEventHotKey`）注册全局热键，不自己写 Carbon 调用。
+
+首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Alt>z`（即 `⌥Z`）——菜单栏图标
+可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
+
+```text
+托盘宿主启动
+    ↓ shortcutService.activate(onTriggered: _startCapture)
+macOS: hotkey_manager 注册（见 lib/features/settings/macos_shortcut_service.dart）
+Linux: 不动，GNOME gsettings 自己启动 `hax_shot --capture`
+    ↓ 热键按下
+onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标所在屏 → 起 --capture 子进程）
+```
+
+绑定字符串与 Linux 共用同一种格式，由 `lib/features/settings/hotkey_binding.dart` 解析：
+
+```text
+<Super><Shift>z   →  macOS ⌘⇧Z
+<Alt>z            →  Linux Alt+Z
+```
+
+`hax_shot_register_capture_hotkey` 必须从 Dart 主 isolate 调用，Carbon 事件处理器要装在
+主线程 RunLoop 上；`--capture` 进程不注册热键。
+
+### 6.7 开机自启动
+
+`MacosAutostartService` 写入 `~/Library/LaunchAgents/com.github.xiehanff.haxShot.plist`
+（`RunAtLoad`）。只写文件，不调用 `launchctl bootstrap`：LaunchAgent 会在下次登录时由
+launchd 自动加载，而立即 bootstrap 会在用户已经运行托盘宿主时再开一个实例。
+
+### 6.8 macOS 特有文件
+
+| 文件 | 职责 |
+|---|---|
+| `macos/Runner/MainFlutterWindow.swift` | `--capture` 浮层的窗口层级和 frame |
+| `macos/Runner/CaptureDisplay.swift` | 目标显示器选择，规则必须和 Rust 保持一致 |
+| `macos/Runner/AppDelegate.swift` | 关闭设置窗口不结束进程 |
+| `macos/Runner/Info.plist` | `LSUIElement`（菜单栏应用，无 Dock 图标）、显示名 |
+| `macos/Runner/*.entitlements` | 关闭 App Sandbox，允许加载 cargo 产出的动态库 |
+| `macos/Runner/Configs/Warnings.xcconfig` | `ENABLE_USER_SCRIPT_SANDBOXING = NO` |
+| `scripts/build_macos_rust.sh` | cargo 构建并复制 dylib 到 bundle |
+| `lib/features/settings/macos_shortcut_service.dart` | 快捷键持久化和原生注册 |
+
+### 6.9 多显示器
+
+macOS 已支持多显示器：**截图目标和浮层始终是同一块显示器**，按下面的顺序决定：
+
+```text
+1. --display <id>   托盘宿主在按下快捷键/菜单的那一刻取得并传给子进程
+2. 光标所在显示器     没有传 --display 时的兼容路径
+3. 主显示器          前两者都拿不到时的兜底
+```
+
+这个顺序在两处各实现一次，必须保持一致：
+
+```text
+rust/src/macos.rs                  target_display()
+macos/Runner/CaptureDisplay.swift  CaptureDisplay.targetScreen()
+```
+
+为什么不让两边各自去查光标：`--capture` 子进程从启动到 Dart 真正开始抓屏有几百毫秒，
+如果这期间用户把鼠标移到另一块屏，两边就会得出不同结果，出现“浮层在 A 屏、画面是
+B 屏”。所以托盘宿主只在**触发的那一瞬间**读一次光标，把显示器标识当作命令行参数
+固定下来：
+
+```text
+按快捷键（Rust）／点托盘菜单（Dart）
+    ↓ NativeBridge.cursorDisplay() → hax_shot_cursor_display()
+    ↓ hax_shot --capture --display <id>
+    ├── Rust：hax_shot_capture_screen 按 <id> 抓屏
+    └── Swift：CaptureDisplay.targetScreen() 把浮层铺到同一块屏
+```
+
+DPI：抓屏是物理像素，浮层是该显示器的逻辑尺寸，`ScreenshotLayout.fromViewport` 会自动
+算出 `scale`（Retina 2x 屏上是 0.5），裁剪、标注、导出仍然按物理像素计算。混合 DPI
+（内置 2x + 外接 1x）不需要特殊处理，每次截图只涉及一块屏。
+
+**不做的**：不支持一次框选跨越两块屏。macOS 开了「显示器有独立 Space」（默认）时
+WindowServer 会把窗口限制在一块屏上，跨屏选区必须为每块屏各开一个浮层窗口（Capso、
+Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步；详见
+[`docs/reference-decisions.md`](./reference-decisions.md)。
+
+#### 调试授权引导的入口
+
+托盘菜单在 debug 构建里多一项 **“权限引导（调试）”**（`lib/app.dart` 里用 `kDebugMode`
+控制）：点它会按 560×480 打开 `CapturePermissionGuide`，用于反复调这个页面的 UI，
+不影响真实权限状态。“我已授权，重新检查”在调试模式下只反馈当前真实授权状态。
+
+#### macOS 窗口交给 Flutter 自己管
+
+不要 macOS 原生的红黄绿按钮（它们会压在 Flutter AppBar 自己的 ✕ 上）：
+
+- 托盘宿主/设置窗口：`WindowOptions.windowButtonVisibility = false`（`window_manager`
+  的 macOS 实现里是 `standardWindowButton(...)?.isHidden = true`）；
+- `--capture` 进程的窗口（引导/错误态）：Runner 直接 `styleMask = [.borderless]`，
+  抓屏成功后由 `CaptureOverlayWindow.becomeOverlay()` 改成全屏浮层。
+  无边框窗口靠 Flutter 自己拖：引导页标题行绑定了 `windowManager.startDragging()`。
+
+#### 浮层必须永远能退出（血泪教训）
+
+捕获进程是 `.screenSaver` 层级、铺满整块屏的浮层：**一旦它退不出去，用户连菜单栏都点不到，
+整台电脑就没法用了**。所以：
+
+- Esc 有**原生兜底**：`CaptureOverlayWindow.installEscapeMonitor()` 装 local monitor，
+  窗口覆盖整屏时直接 `exit(0)`。不依赖 Flutter 焦点树，也不依赖 `performClose`
+  （后者对无边框窗口不一定生效）。
+- 引导页、AI 面板各有自己的 Esc 处理；AI 面板还有右上角 ✕。
+- **AI 面板接管同一个窗口前，必须先把浮层状态退掉**：`CaptureOverlayWindow.exitOverlay()`
+  恢复 `level = .normal` 和 `collectionBehavior = []`，再让 Dart 改尺寸。顺序反了的话，
+  一旦改尺寸失败，窗口就停在“全屏 + .screenSaver”，用户被锁死。
+- 不要再引入“忽略下一次关闭”这类隐式标志：CapturePage 的 AI 路径以前靠
+  `_ignoreNextWindowClose` 阻止进程退出，标志没被消费时窗口就永远停在截图态、Esc 也失效。
+  现在 AI 路径**不调用** `_closeCapture()`，由 AI 面板接管窗口，取消/保存/复制则正常退出。
+
+#### 两个实际运行才暴露的坑
+
+1. **捕获模式不能传 `titleBarStyle`**：`window_manager` 的 macOS 实现里
+   `setTitleBarStyle` 会执行 `(mainWindow.standardWindowButton(.closeButton)?.superview)!.superview!`，
+   borderless 窗口没有标题栏按钮，直接强解包 nil 触发 SIGTRAP；它还会把窗口改成半透明
+   带阴影，和冻结画面浮层冲突。所以 `lib/main.dart` 只在非捕获模式传 `titleBarStyle`。
+2. **捕获模式不能传 `alwaysOnTop` / `fullScreen`**：`setAlwaysOnTop(false)` 会把窗口层级
+   写成 `.normal`、`true` 写成 `.floating`，都会覆盖 Runner 设好的 `.screenSaver`，
+   结果是浮层盖不住菜单栏和 Dock。这两个选项在 macOS 捕获模式下传 `null`。
+   验证方法：`CGWindowListCopyWindowInfo` 里浮层应该是 `layer=1000`。
+
+#### Linux
+
+Linux（GNOME Wayland）目前仍然只抓主显示器，是协议层硬约束：
+
+- Wayland 不向客户端提供全局指针位置（`wl_pointer` 只在指针进入自己的 surface 时有事件），
+  拿不到“用户在哪块屏”；`hax_shot_cursor_display` 在 Linux 上直接返回 0；
+- Wayland 客户端不能自己摆放窗口（`xdg-shell` 没有 set_position），
+  `windowManager.setFullScreen()` 后是哪块屏由 Mutter 决定，无法和抓屏目标对齐。
+
+要支持得在 GTK runner 里为每块屏各开一个窗口，属于独立的一步。
+
+## 7. 选区坐标规则
 
 Flutter 侧使用：
 
@@ -257,7 +508,7 @@ PNG 使用：
 
 当前 MVP 只保证主显示器/单显示器场景。`DisplayConfig` 只选择 primary connector，不能把多显示器偏移直接当成单屏坐标使用。
 
-## 7. 快捷键设置、录制与 desktop 文件
+## 8. 快捷键设置、录制与 desktop 文件
 
 ### 默认快捷键
 
@@ -306,6 +557,10 @@ com.github.xiehanff.hax_shot.png
 
 实现文件：`lib/features/settings/shortcut_settings_page.dart`。
 
+设置页只依赖 `ShortcutService` 接口：Linux 实现在 `gnome_shortcut_service.dart`（gsettings），
+macOS 实现在 `macos_shortcut_service.dart`（shared_preferences + 原生全局热键）。
+录制产出的绑定字符串两个平台共用，macOS 侧由 `rust/src/macos.rs` 解析。
+
 当前规则参考 Cliper 的以下实现：
 
 ```text
@@ -344,7 +599,7 @@ debug 构建中 `my_application.cc` 会把 bundle 内的图标复制到：
 
 如果项目目录移动过、build 目录清理过或 release 路径变化，也必须重新执行脚本。
 
-## 8. 截图选区后的工具栏定位
+## 9. 截图选区后的工具栏定位
 
 实现文件：
 
@@ -373,7 +628,7 @@ lib/features/capture/capture_page.dart
 
 已添加 `test/selection_toolbar_placement_test.dart` 覆盖顶部、底部、左右边缘、几乎占满屏幕，以及真实 `CustomSingleChildLayout` 尺寸约束。
 
-## 9. 截图 AI 与对话侧栏
+## 10. 截图 AI 与对话侧栏
 
 截图工具栏的三个 AI 操作都会先调用 `ScreenshotExporter.renderPng()`，把当前选区和矩形、箭头、文字标注合成为最终 PNG，再发送给 AI：
 
@@ -403,7 +658,7 @@ lib/features/ai/
 
 AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口。标题栏支持拖动，右上角关闭按钮结束当前截图进程。API Key 保存到 `shared_preferences`，key 为 `hax_shot.deepseek_api_key`。
 
-## 10. 图标更换流程
+## 11. 图标更换流程
 
 当前图标由 `skills/icns-handle` 从外部 `.icns` 提取并生成 Linux PNG 组，源文件不进入仓库。
 
@@ -432,7 +687,7 @@ fvm flutter build linux --release
 
 正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
 
-## 11. 调试和验证清单
+## 12. 调试和验证清单
 
 ### Dart/Flutter
 
@@ -487,7 +742,7 @@ build/linux/x64/debug/bundle/hax_shot --capture
 pkill -x hax_shot
 ```
 
-## 12. CI 与 GitHub Release
+## 13. CI 与 GitHub Release
 
 GitHub Actions 配置位于 `.github/workflows/build-rpm.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布。
 
@@ -510,20 +765,35 @@ version: 1.3.0+1  →  git push origin v1.3.0
 
 推送 tag 后，工作流会重新执行 Dart/Rust 检查，构建 Fedora x86_64 RPM，保存 Actions artifact，并把 RPM 上传到对应 GitHub Release。不要为普通开发 commit 创建 `v*` tag；完整操作见 [`ci-release.md`](./ci-release.md)。
 
-## 13. 已知限制和未完成项
+## 14. 已知限制和未完成项
+
+Linux：
 
 - 仅支持 GNOME + Wayland；
-- 仅支持 primary monitor，暂不处理多显示器和混合 DPI；
+- 仅支持主显示器，多显示器需要改成“每块屏一个浮层窗口”，见 [6.9 多显示器](#69-多显示器)；
 - 不支持 X11、KDE、wlroots compositor；
 - ScreenCast 服务或 GStreamer 插件不可用时会失败，不使用有快门声的 Portal 兜底；
-- 暂不捕获鼠标光标；
-- 暂不支持 OCR、贴图、持久化会话、录屏和滚动截图；AI 会话仅在当前进程内保留；
-- 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
 - AppIndicator 依赖 GNOME Shell AppIndicator 扩展，Fedora 可能打印 deprecated warning，但当前功能正常；
 - system GStreamer/PipeWire 依赖不会随 Rust `.so` 一起分发；
 - 关闭或杀掉 tray 宿主后，GNOME 自定义快捷键仍可能指向旧的 release 路径，需要重新安装快捷键。
 
-## 14. 给后续 Agent 的最短交接信息
+macOS：
+
+- 首次截图必须在系统设置里授予“屏幕录制”权限；
+- bundle 目前是 ad-hoc 签名，重新构建后 TCC 授权可能失效，需要重新授权；
+- 菜单栏直接复用 Linux 的彩色图标（`assets/icons/hax_shot.png`，18pt）。深色菜单栏上对比度偏低，后续需要一张单色 template 图标；
+- 还没有 DMG 打包、公证（notarization）和 `AppIcon`（仍是 Flutter 默认图标）；
+- 还没有 macOS 的 CI 构建任务，本地验证使用 `fvm flutter build macos`；
+- 不支持跨显示器框选：一次截图只覆盖目标显示器，选区不能跨越两块屏。
+
+两个平台共同：
+
+- 暂不捕获鼠标光标；
+- 暂不支持 OCR、贴图、持久化会话、录屏和滚动截图；AI 会话仅在当前进程内保留；
+- 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
+- 还没有默认快捷键：Linux 需要运行 `scripts/install-gnome-shortcut.sh`，macOS 需要在设置页录制。
+
+## 15. 给后续 Agent 的最短交接信息
 
 如果任务是调整捕获 UI：只改 `lib/features/capture/`，保持 `_capture()` 完成后再 `windowManager.show()`。
 
@@ -531,8 +801,13 @@ version: 1.3.0+1  →  git push origin v1.3.0
 
 如果任务是调整截图后端：先阅读 `docs/snapclip-source-review.md`，保持 Mutter ScreenCast 的调用顺序，不要替换为 Screenshot Portal。
 
+如果任务是多显示器：先读 [6.9 多显示器](#69-多显示器)。macOS 改动 `rust/src/macos.rs` 的
+`target_display()` 时必须同步改 `macos/Runner/CaptureDisplay.swift`；两边一旦不一致就会出现
+浮层和画面不在同一块屏的 bug。Linux 需要多窗口架构，不能只改抓屏。
+要支持跨屏框选，必须改成“每块屏一个浮层窗口 + 跨窗口选区同步”，不要试图用一个窗口去跨屏。
+
 如果任务是调整图标/Dock 匹配：先检查 application ID、desktop 文件名、`Icon` 名称和 `StartupWMClass`，再用 `icns-handle` 生成图标、运行安装脚本并重启旧进程；Wayland 下 GNOME Dock 仍使用旧缓存时需要注销并重新登录。
 
-如果任务是增加跨平台支持：先明确不能把当前 Mutter/GStreamer 路径抽象成所有 Linux 桌面的通用方案；应新增后端并保留 GNOME backend。
+如果任务是增加跨平台支持：先明确不能把当前 Mutter/GStreamer 路径抽象成所有 Linux 桌面的通用方案；应新增后端并保留 GNOME backend，参考 `rust/src/macos.rs` 的做法：平台实现只暴露 `capture_screen_impl` / `copy_png_impl` / `register_capture_hotkey_impl` 三个函数。
 
 一句话记忆：**先确定这是 tray 宿主还是 `--capture` 窗口，再修改对应层；不要让隐藏时序、desktop ID 或 ScreenCast 顺序被无意破坏。**

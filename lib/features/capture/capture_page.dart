@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -8,8 +9,11 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
+import '../settings/screen_capture_permission.dart';
 import '../ai/models/hax_ai_action.dart';
 import 'annotation.dart';
+import 'capture_overlay_window.dart';
+import 'capture_permission_guide.dart';
 import 'capture_session.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
@@ -21,15 +25,18 @@ typedef CaptureAiActionCallback =
     Future<void> Function(HaxAiAction action, Uint8List pngBytes);
 
 class CapturePage extends StatefulWidget {
-  const CapturePage({this.onAiAction, super.key});
+  const CapturePage({this.onAiAction, this.targetDisplay, super.key});
 
   final CaptureAiActionCallback? onAiAction;
+
+  /// 当前进程是从哪块显示器启动的，重启抓屏进程时原样带上。
+  final int? targetDisplay;
 
   @override
   State<CapturePage> createState() => _CapturePageState();
 }
 
-class _CapturePageState extends State<CapturePage> {
+class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   final CaptureSession _session = CaptureSession();
   final TextEditingController _textController = TextEditingController();
   final FocusNode _textFocusNode = FocusNode(debugLabel: 'capture-text');
@@ -38,6 +45,22 @@ class _CapturePageState extends State<CapturePage> {
   String? _message;
   bool _loading = true;
   bool _busy = false;
+
+  /// 复制进行中（只用于防重复点击，不驱动任何 loading UI）。
+  bool _copying = false;
+
+  /// 等待授权期间的轮询：和 hax_pick 一样，授权成功后自动继续，不需要用户点按钮。
+  ///
+  /// 注意 macOS 抓屏授权是**按进程缓存**的，所以这里检测到已授权后不是原地继续，
+  /// 而是重启一个新的抓屏进程（新进程才读得到新授权）。
+  Timer? _permissionPoll;
+  static const _permissionPollInterval = Duration(milliseconds: 750);
+
+  /// 没有屏幕录制权限（或抓屏失败）时显示引导页。
+  ///
+  /// 这两种情况都必须留在小窗口里：用户可能还没授权，如果把全屏浮层弹出来，
+  /// 整块屏幕会被盖住，连菜单栏都点不到。
+  bool _needsPermission = false;
 
   ScreenshotAnnotation? _textDraft;
   bool _textAutoSizing = false;
@@ -51,12 +74,44 @@ class _CapturePageState extends State<CapturePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _textController.addListener(_handleTextChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _capture());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 用户去系统设置授权再切回来时，比轮询更快地重查一次。
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_checkPermissionWhileWaiting());
+    }
+  }
+
+  void _startPermissionPolling() {
+    _permissionPoll ??= Timer.periodic(
+      _permissionPollInterval,
+      (_) => unawaited(_checkPermissionWhileWaiting()),
+    );
+  }
+
+  void _stopPermissionPolling() {
+    _permissionPoll?.cancel();
+    _permissionPoll = null;
+  }
+
+  /// 等待授权时的轮询回调：已授权就重启抓屏进程继续截图。
+  Future<void> _checkPermissionWhileWaiting() async {
+    if (!mounted || !_needsPermission) return;
+    if (!NativeBridge.instance.screenCaptureAuthorized()) return;
+    _stopPermissionPolling();
+    if (mounted) setState(() => _message = '检测到已授权，正在继续…');
+    await _relaunchCaptureProcess();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopPermissionPolling();
     _textController.removeListener(_handleTextChanged);
     _textController.dispose();
     _textFocusNode.dispose();
@@ -65,6 +120,13 @@ class _CapturePageState extends State<CapturePage> {
   }
 
   Future<void> _capture() async {
+    // 先问权限：没有屏幕录制授权时抓屏一定失败，这时必须显示引导，而不是把
+    // 全屏浮层弹出来盖住用户的桌面。
+    if (!NativeBridge.instance.screenCaptureAuthorized()) {
+      await _showGuide();
+      return;
+    }
+
     try {
       final path = await NativeBridge.instance.captureScreen();
       final file = File(path);
@@ -86,18 +148,105 @@ class _CapturePageState extends State<CapturePage> {
         _image = frame.image;
         _loading = false;
         _message = null;
+        _needsPermission = false;
       });
+      // 抓到画面之后才把窗口升格成铺满屏幕的浮层。
+      await CaptureOverlayWindow.instance.becomeOverlay();
       // Reveal the frozen screenshot only after native capture completes.
       await windowManager.show();
       await windowManager.focus();
+    } on ScreenCapturePermissionException catch (error) {
+      if (!mounted) return;
+      await _showGuide(message: error.message);
     } on Object catch (error) {
       if (!mounted) return;
+      // 其它失败也留在小窗口里说明情况，别让用户卡在全屏黑屏上。
       setState(() {
         _loading = false;
+        _needsPermission = true;
         _message = '截图失败：$error';
       });
       await windowManager.show();
       await windowManager.focus();
+    }
+  }
+
+  /// 没有授权（或抓屏失败）时显示引导页：普通小窗口，随时可以关掉。
+  Future<void> _showGuide({String? message}) async {
+    // 触发一次系统授权请求：这样 Hax Shot 才会出现在“屏幕录制”列表里，
+    // 用户点“打开系统设置”才能找到它。用户确认前返回值是 false。
+    NativeBridge.instance.requestScreenCaptureAccess();
+    _startPermissionPolling();
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        _needsPermission = true;
+        _message = message;
+      });
+    }
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  /// 用户在引导页点了“我已授权，重新检查”（轮询已经能自动发现，这里保留手动入口）。
+  ///
+  /// macOS 会把 TCC 结果缓存到进程结束，所以刚授权完这个进程通常还认为没权限；
+  /// 直接原地重试会一直失败。这里改成**重启一个新的抓屏进程**（新进程重新读授权
+  /// 状态），当前进程随即退出，用户只需要点一次。
+  Future<void> _retryAfterPermission() async {
+    if (NativeBridge.instance.screenCaptureAuthorized()) {
+      if (mounted) setState(() => _loading = true);
+      await _capture();
+      return;
+    }
+
+    await _relaunchCaptureProcess();
+  }
+
+  /// 重置系统的屏幕录制授权记录，然后重启抓屏进程重新申请授权。
+  ///
+  /// 针对“系统设置里开关是开的，但当前进程没有权限、也不再弹授权框”的死结：
+  /// 本地 ad-hoc 签名每次构建都会换指纹，旧记录和新二进制对不上。
+  Future<void> _resetPermission() async {
+    _stopPermissionPolling();
+    try {
+      await ScreenCapturePermission.instance.reset();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _message = '重置授权记录失败：$error');
+      return;
+    }
+    await _relaunchCaptureProcess();
+  }
+
+  Future<void> _relaunchCaptureProcess() async {
+    try {
+      final args = <String>[
+        '--capture',
+        if (widget.targetDisplay != null) ...[
+          '--display',
+          '${widget.targetDisplay}',
+        ],
+      ];
+      await Process.start(
+        Platform.resolvedExecutable,
+        args,
+        mode: ProcessStartMode.detached,
+      );
+      await _exitProcess();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _message = '重启抓屏进程失败：$error');
+    }
+  }
+
+  /// 结束当前捕获进程（窗口被 setPreventClose 拦着，必须显式退出）。
+  Future<void> _exitProcess() async {
+    try {
+      await windowManager.setPreventClose(false);
+      await windowManager.destroy();
+    } finally {
+      exit(0);
     }
   }
 
@@ -465,8 +614,10 @@ class _CapturePageState extends State<CapturePage> {
 
     try {
       final png = await _renderSelectedPngForAi(layout);
+      // AI 面板接管同一个窗口（app.dart 会把它改成面板尺寸并显示对话）。
+      // 这里刻意不再调用 _closeCapture()：以前靠一个“忽略下一次关闭”的标志来
+      // 阻止进程退出，一旦标志没被消费，窗口就会永远停在截图态且 Esc 失效。
       await onAiAction(action, png);
-      await _closeCapture();
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
@@ -526,16 +677,17 @@ class _CapturePageState extends State<CapturePage> {
     }
   }
 
+  /// 复制选区到剪贴板。
+  ///
+  /// 刻意不进入 busy/loading 状态：复制是“点一下就该进剪贴板”的操作，编码 + 写入
+  /// 通常几十毫秒，弹一个 loading 反而像卡住了。用一个私有标志只防重复点击，
+  /// 复制过程中窗口和工具条保持原样，成功就直接关掉浮层。
   Future<void> _copy(ScreenshotLayout layout) async {
     final selection = _session.selection;
     final image = _image;
-    if (selection == null || image == null || _busy) return;
+    if (selection == null || image == null || _busy || _copying) return;
+    _copying = true;
     _commitTextDraft();
-
-    setState(() {
-      _busy = true;
-      _message = '正在复制…';
-    });
 
     try {
       final png = await ScreenshotExporter.renderPng(
@@ -547,16 +699,19 @@ class _CapturePageState extends State<CapturePage> {
       await NativeBridge.instance.copyPngToClipboard(png);
       await _closeCapture();
     } on Object catch (error) {
+      _copying = false;
       if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _message = '复制失败：$error';
-      });
+      setState(() => _message = '复制失败：$error');
     }
   }
 
   Future<void> _cancel() => _closeCapture();
 
+  /// 关闭捕获窗口（Esc / 保存 / 复制 / 取消）。
+  ///
+  /// 必须走 `windowManager.close()`：AI 面板和框选界面共用同一个窗口，点 AI 时
+  /// `app.dart` 会把 `_ignoreNextWindowClose` 置位来吃掉这一次关闭请求，让进程
+  /// 继续跑 AI 对话。如果这里直接 exit 掉进程，AI 面板会立刻消失。
   Future<void> _closeCapture() async {
     if (mounted) {
       setState(() => _busy = true);
@@ -573,6 +728,15 @@ class _CapturePageState extends State<CapturePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_needsPermission) {
+      return CapturePermissionGuide(
+        message: _message,
+        onRetry: _retryAfterPermission,
+        onQuit: _closeCapture,
+        onResetPermission: Platform.isMacOS ? _resetPermission : null,
+      );
+    }
+
     final image = _image;
     if (_loading || image == null) {
       return Scaffold(
