@@ -82,6 +82,24 @@ flutter:
     - assets/icons/hax_shot.png
     - assets/icons/hax_shot.ico
 
+  # AI 对话里的等宽字体（行内代码 + 代码块）。family 名要和
+  # lib/features/ai/views/widgets/chat_bubble.dart 的 kCodeFontFamily 一致；
+  # 不声明的话 Flutter 会回退到系统默认字体，代码块就不是等宽观感了。
+  fonts:
+    - family: GoogleSansMono
+      fonts:
+        - asset: assets/fonts/Google-Sans-Mono-Regular.ttf
+        - asset: assets/fonts/Google-Sans-Mono-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Google-Sans-Mono-Italic.ttf
+          style: italic
+    # 正文/标题用的中文字体。注意这个字体文件内部的 family 名带版本号
+    # （OPPO Sans 4.0），pubspec 和 kMarkdownFontFamily 必须用同一个名字。
+    # 22MB 的可变字体，是聊天正文观感的关键，也显著影响包体积。
+    - family: OPPO Sans 4.0
+      fonts:
+        - asset: assets/fonts/OPPO-Sans-4.0.ttf
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

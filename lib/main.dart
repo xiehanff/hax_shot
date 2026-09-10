@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'features/app/hard_exit.dart';
+import 'features/app/single_instance_guard.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +21,12 @@ Future<void> main(List<String> args) async {
   await windowManager.ensureInitialized();
 
   final captureMode = args.contains('--capture');
+  if (!captureMode && !SingleInstanceGuard.acquire()) {
+    // 托盘宿主必须唯一：否则会出现“退出了一份，另一份还握着全局快捷键”。
+    // 放这里（而不是 runApp 之后）：拿不到锁就直接退出，用户看不到任何窗口。
+    stderr.writeln('已有 Hax Shot 在运行，本次启动退出');
+    exitProcessNow();
+  }
   final targetDisplay = _targetDisplay(args);
   // macOS 的浮层由 Runner 的 CaptureOverlayWindow 直接改窗口（borderless +
   // .screenSaver + 铺满目标显示器），不走 window_manager：setAlwaysOnTop 会把

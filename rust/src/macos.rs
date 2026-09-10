@@ -137,7 +137,7 @@ fn display_id_from_arguments<I: Iterator<Item = String>>(mut arguments: I) -> u3
 }
 
 fn is_active_display(id: u32) -> bool {
-    CGDisplay::active_displays().map_or(false, |displays| displays.contains(&id))
+    CGDisplay::active_displays().is_ok_and(|displays| displays.contains(&id))
 }
 
 /// 光标所在显示器；拿不到光标位置时返回 0。

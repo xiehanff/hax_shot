@@ -70,8 +70,10 @@ Alt+Z / 托盘“立即截屏”
 
 | 文件 | 职责 | 修改时的注意事项 |
 |---|---|---|
-| `lib/main.dart` | 解析 `--capture`，配置窗口 | `skipTaskbar` 必须保持为 `true`；捕获进程必须先隐藏 |
-| `lib/app.dart` | tray-only 宿主、快捷键设置页、菜单、启动子进程 | 不要重新添加主应用窗口；设置页是按需显示的临时窗口；菜单截图通过 `Platform.resolvedExecutable --capture` 启动独立进程 |
+| `lib/main.dart` | 解析 `--capture`，配置窗口，非捕获分支取单实例锁 | `skipTaskbar` 必须保持为 `true`；捕获进程必须先隐藏、且不能调 `SingleInstanceGuard` |
+| `lib/app.dart` | tray-only 宿主、快捷键设置页、菜单、启动子进程 | 不要重新添加主应用窗口；设置页是按需显示的临时窗口；菜单截图通过 `Platform.resolvedExecutable --capture` 启动独立进程；`_quit()` 里要 `release()` 单实例锁 |
+| `lib/features/app/single_instance_guard.dart` | 托盘宿主单实例保护 | 只在宿主进程用；判定存活必须同时看 PID 和 command name（PID 会被复用）；拿不到锁文件时不能阻止启动 |
+| `lib/hax_colors.dart` | 品牌色 `#F8C800` 和 `haxAccentTheme()` | 只包在授权引导和设置页外层；改色值要同步这两处 `Theme(data: haxAccentTheme(...))` |
 | `lib/features/settings/shortcut_settings_page.dart` | 快捷键录制、开机自启动开关 | 快捷键通过 `gsettings` 写入，启动项通过 `AutostartService` 写入当前用户 XDG 配置 |
 | `lib/features/capture/capture_page.dart` | 冻结图加载、框选、保存、复制 | `_capture()` 完成前不要显示捕获窗口；保存/复制使用同一份裁剪逻辑 |
 | `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
@@ -128,6 +130,54 @@ fvm flutter run -d linux -- --capture
 6. `Esc`、保存成功或复制成功后关闭进程。
 
 `linux/runner/my_application.cc` 中已经移除了旧的 `first-frame` 自动 `gtk_widget_show()`。这是故意的：如果 native first-frame 回调再次显示窗口，捕获时机就会被破坏。
+
+### 3.3 托盘宿主取单实例锁
+
+全局快捷键是**进程内**注册的（macOS 走 Carbon 的 `RegisterEventHotKey`），而系统只保证“同一个
+bundle 路径”不会重复启动。用户从 DMG 里跑一份、`/Applications` 里再跑一份是很容易的事，
+两份宿主各握一份快捷键，从其中一份的托盘菜单点“退出”，另一份照旧能截屏——表现就是
+“退出之后按快捷键还能截图”。所以宿主进程启动时先抢独占权：
+
+```text
+lib/main.dart（非 --capture 分支）
+SingleInstanceGuard.acquire()
+    ↓ open + lockSync(FileLock.exclusive)   ← 内核级独占锁，非阻塞：拿不到就抛异常
+    ├── 抛异常（已有宿主在跑）→ stderr 写一行，exitProcessNow()，不显示任何窗口
+    └── 拿到 → 写入自己的 pid，句柄一直持有到进程退出
+```
+
+- **不要退回“记 PID + 查进程 + SIGTERM”的写法**：那样至少有三种翻车方式——两个宿主同时
+  启动时的读-改-写竞态、PID 被复用后误杀别的进程（或误杀 `--capture` 进程）、以及旧宿主
+  不退出时的“超时后照样接管”。文件锁由内核维护、进程一退出就释放，这些问题都不存在；
+- 锁文件路径按平台选（macOS `~/Library/Application Support/<bundle id>/hax_shot.lock`，
+  Linux 优先 `$XDG_RUNTIME_DIR`，Windows `%LOCALAPPDATA%`），实际路径无关紧要，只要
+  两份宿主看到同一个文件；
+- `--capture` 进程（`lib/main.dart` 的 `captureMode` 分支）**不参与**：它本来就该能同时开多个；
+- `lib/app.dart` 的 `_quit()` 在 `finally` 里调 `SingleInstanceGuard.release()`（关句柄 +
+  删文件）。放在最后一步：放太早会让下一份实例在快捷键还没注销完的时候启动；
+- 拿不到/写不了锁文件时**不阻止启动**，只在 stderr 留一行（退化成允许多实例）：托盘工具
+  起不来比多跑一份更糟。
+
+### 3.4 托盘宿主的启动顺序
+
+`lib/app.dart` 的 `_initializeDesktopIntegration()` 里的顺序是刻意排的，不要按“先注册
+快捷键、再建图标”的直觉调换：
+
+```text
+lib/app.dart _initializeDesktopIntegration()
+windowManager.setPreventClose(true)
+    → windowManager.hide()
+    → trayManager.setIcon(trayIconAsset)      ← 用户看到的第一样东西
+    → trayManager.setContextMenu(...)
+    → shortcutService.activate(onTriggered: _startCapture)
+    → _presentFirstRunGuideIfNeeded()        ← 欢迎页
+```
+
+图标和菜单是用户唯一能操作托盘的入口，放最前面：`shortcutService.activate()` 要读
+`SharedPreferences` 并走一次 Carbon `RegisterEventHotKey`，欢迎页要读磁盘
+（`hax_shot.onboarding_seen`），这两步都会拖慢“菜单栏图标出现”。欢迎页放最后：它失败
+也只影响自己，图标和菜单已经建好了。这里整体包在 `try/catch` 里，缺 AppIndicator 扩展
+也不能阻断截图。
 
 ## 4. 无快门声截图管线
 
@@ -239,8 +289,8 @@ macOS 与 Linux 共用同一套 Flutter UI 和 Dart FFI 接口，平台差异全
 
 ```text
 Flutter（Linux / macOS 共用）
-        │ Dart FFI：hax_shot_capture_screen / hax_shot_copy_png_to_clipboard
-        │           hax_shot_register_capture_hotkey / hax_shot_last_error
+        │ Dart FFI：hax_shot_capture_screen / hax_shot_encode_png / hax_shot_png_buffer_size
+        │           hax_shot_copy_png_to_clipboard / hax_shot_last_error
         ├── rust/src/linux.rs   Mutter ScreenCast + GStreamer + wl-copy + GNOME gsettings
         └── rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard + Carbon
 ```
@@ -264,7 +314,46 @@ fvm flutter build macos --release
 `ARCHS = arm64`，脚本按 `$ARCHS` 的第一个架构构建对应 target，保证 dylib 和主程序同架构。
 要支持 Intel 时删掉 `ARCHS` 那一行，并把脚本改成按 `$ARCHS` 逐架构构建后 `lipo -create`。
 
+#### 本机安装：`scripts/install_macos_app.sh`
+
+开发时不要把 `build/` 里的产物一个个手动拷过去，用脚本：
+
+```bash
+scripts/install_macos_app.sh                 # 构建 release + 装到 /Applications
+scripts/install_macos_app.sh --dir ~/Apps    # 装到别的目录
+scripts/install_macos_app.sh --zip out.zip   # 顺带打一个 zip
+```
+
+脚本依次做：`fvm flutter build macos --release` → `pkill -x hax_shot` 结束旧实例（托盘宿主
+常驻，不退出会占住 bundle）→ 替换 bundle 并 `touch` → 用 LaunchServices 的
+`lsregister -f` **显式登记**新 bundle（路径写死成
+`/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister`，
+它是系统私有工具，不在 PATH 里）。
+
+不登记的话，安装后第一次启动要现场做一遍 LaunchServices 注册，用户看到的就是“双击了图标，
+菜单栏图标还要 3~5 秒才出来”；显式登记后第一次启动直接命中缓存。
+
 ### 6.2 屏幕录制权限
+
+#### 开发时不要用 `flutter run` 去授权
+
+macOS 把屏幕录制授权记在**责任进程**上。`flutter run` 启动的 app 是终端的子进程，
+责任进程是终端：系统弹窗写的是“终端想要录制屏幕”，授权也记在终端名下，
+**Hax Shot 自己不会出现在“屏幕录制”列表里**（macOS 15 的该面板还没有“+”可手动添加），
+于是怎么都授权不了。
+
+要调试权限相关功能，用 `open` 启动构建产物，让 Hax Shot 成为责任进程：
+
+```bash
+scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动
+scripts/run_macos_debug.sh --release
+# 等价于：
+open build/macos/Build/Products/Debug/hax_shot.app
+```
+
+`flutter run -d macos` 仍然适合调 UI —— 前提是你的**终端**已经有屏幕录制权限，
+这时子进程会继承终端的授权（不会弹窗、列表里也没有 Hax Shot）。
+
 
 macOS 不允许应用静默抓屏。关键是**没授权时绝对不能显示全屏浮层**：浮层是 borderless +
 `.screenSaver` 层级、铺满整块屏，一旦在失败路径上弹出来，用户会被一块盖住菜单栏和 Dock
@@ -408,7 +497,8 @@ B 屏”。所以托盘宿主只在**触发的那一瞬间**读一次光标，�
 固定下来：
 
 ```text
-按快捷键（Rust）／点托盘菜单（Dart）
+macOS：按快捷键（hotkey_manager 回调）／点托盘菜单 —— 都在宿主进程里读
+Linux：GNOME 自定义快捷键直接启动 hax_shot --capture，拿不到光标屏（见上面的硬约束）
     ↓ NativeBridge.cursorDisplay() → hax_shot_cursor_display()
     ↓ hax_shot --capture --display <id>
     ├── Rust：hax_shot_capture_screen 按 <id> 抓屏
@@ -440,13 +530,75 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
   抓屏成功后由 `CaptureOverlayWindow.becomeOverlay()` 改成全屏浮层。
   无边框窗口靠 Flutter 自己拖：引导页标题行绑定了 `windowManager.startDragging()`。
 
+#### 窗口圆角
+
+**macOS 只对 titled 窗口做原生圆角裁剪**：borderless 窗口不会被裁，四角外侧露出的是
+窗口自己的背景色，看起来就是“有圆角但不透”。所以捕获进程的窗口（授权引导、AI 面板
+都在这里面）和托盘宿主的窗口一样，用
+`CaptureOverlayWindow.applyPanelAppearance(to:)` 配成
+`.titled + .fullSizeContentView` + 透明隐藏标题栏：既拿到系统原生圆角（角外直接是
+桌面），又保持无标题栏观感，还不会出现 macOS 的红黄绿（没有 `.closable` 等，三个按钮
+是 nil）。`RunnerTests.testPanelAppearanceUsesNativeRoundedWindow` 守着这个配置。
+
+抓屏成功后 `becomeOverlay()` 会把它切成 `[.borderless]`：全屏浮层必须铺满屏幕、盖住
+菜单栏和 Dock，不能有圆角。`exitOverlay()` 再切回面板外观。
+
+Windows/Linux 的窗口本身没有圆角，靠 `RoundedWindow`（`ClipRRect`，半径 12）裁一刀 +
+窗口背景透明做出圆角；这两个平台上它才生效（见 `rounded_window.dart`）。**截图浮层
+（`CapturePage`）永远不要包 `RoundedWindow`**：那里必须直角铺满。
+
+#### 保存/复制：PNG 编码走 Rust，浮层先收起
+
+release 实测（1920x1080 真实截图，`--bench-export` 对比两条路径，解码后逐字节比对）：
+
+```text
+Skia  Image.toByteData(png)                        534ms   2037KB  ← 用户感觉“很慢”的原因
+Rust  toByteData(rawStraightRgba) + hax_shot_encode_png
+                                             6.6ms + 15ms  2389KB
+```
+
+所以 `ScreenshotExporter.renderPng` 取 `rawStraightRgba` 后交给
+`NativeBridge.encodePng`（worker isolate 里调 `hax_shot_encode_png`）。Rust 用
+`png` crate 的 `Compression::Fast`（底层 fdeflate，专为 PNG 调过），代价是体积约
++17%。同一张图在 Rust 侧的其它档位实测：`Balanced` 452ms、`High` 1753ms——别为了省
+那点体积换回去。
+
+FFI 约定：`hax_shot_png_buffer_size(width, height)` 给输出缓冲区容量上界（含每行
+filter 字节和 deflate 膨胀余量），`hax_shot_encode_png` 返回写入字节数，缓冲区不足
+返回 **-2**、其它失败返回 **-1**。缓冲区必须够大，否则编码是白做的。
+
+动作顺序是：**拿到路径/开始复制后先 `windowManager.hide()`，再编码、写盘或写剪贴板，
+最后调 `exitProcessNow()`**。用户点完“保存/复制”浮层立刻消失，不用盯着冻结画面等编码；
+人切换到目标应用再按 ⌘V 至少几百毫秒，编码早就完成了。出错时用 `_restoreOverlay()` 把
+浮层放回来，否则用户既没拿到图也看不到错误。
+
+**结束进程必须用 `lib/features/app/hard_exit.dart` 的 `exitProcessNow()`**（`SIGKILL`
+自己），不要用 `dart:io` 的 `exit(0)`：在 macOS 上 `exit(0)` 会挂在 Flutter 引擎注册的
+atexit 收尾里，进程继续活着——窗口和托盘图标都消失了，`pgrep -x hax_shot` 还能看到。
+捕获进程每次截图后走的就是这条路，泄漏的进程会越攒越多；托盘“退出”之后快捷键还生效
+也是同一个原因（Carbon 注册随进程存活）。`await windowManager.destroy()` 也不能替代：
+`main()` 早期插件通道还没注册，这个 Future 永远不返回。Swift 侧同理用 `_exit(0)`
+（见 `CaptureOverlayWindow.swift` 的 Esc 监听）。
+
+#### 启动时不能闪一个黑窗口（macOS）
+
+nib 会在启动阶段就把主窗口排到最前，而这时 Flutter 还没画出第一帧，用户会看到一个小黑
+窗口闪一下（托盘宿主和捕获进程都这样，实测 800x600 出现在 0.17–0.22s）。
+
+做法：`MainFlutterWindow.awakeFromNib` 里 `alphaValue = 0`，窗口可见性完全交给 Dart ——
+显示统一走 `lib/features/window/window_visibility.dart` 的 `showWindow()`（先
+`setOpacity(1)` 再 `show()`）；浮层由 `CaptureOverlayWindow.becomeOverlay()` 恢复。
+
+> 不要改成在 `MainMenu.xib` 上加 `visibleAtLaunch="NO"`：实测这样 Flutter 引擎根本不
+> 启动（窗口不创建、`awakeFromNib` 不执行），app 变成没有任何窗口的空壳。
+
 #### 浮层必须永远能退出（血泪教训）
 
 捕获进程是 `.screenSaver` 层级、铺满整块屏的浮层：**一旦它退不出去，用户连菜单栏都点不到，
 整台电脑就没法用了**。所以：
 
 - Esc 有**原生兜底**：`CaptureOverlayWindow.installEscapeMonitor()` 装 local monitor，
-  窗口覆盖整屏时直接 `exit(0)`。不依赖 Flutter 焦点树，也不依赖 `performClose`
+  窗口覆盖整屏时直接 `_exit(0)`。不依赖 Flutter 焦点树，也不依赖 `performClose`
   （后者对无边框窗口不一定生效）。
 - 引导页、AI 面板各有自己的 Esc 处理；AI 面板还有右上角 ✕。
 - **AI 面板接管同一个窗口前，必须先把浮层状态退掉**：`CaptureOverlayWindow.exitOverlay()`
@@ -658,6 +810,21 @@ lib/features/ai/
 
 AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口。标题栏支持拖动，右上角关闭按钮结束当前截图进程。API Key 保存到 `shared_preferences`，key 为 `hax_shot.deepseek_api_key`。
 
+### AI 面板顶部条
+
+`lib/features/ai/views/widgets/ai_sidebar.dart` 的 `_AiTitleBar` 只负责把顶部条和消息区
+区分开，**不放标题文字**（原来那个 “AI” 文本已经去掉）：
+
+```text
+高度       66 → 44
+底色       AppColors.titleBarBg = #0C0D11（比正文 scaffoldBg = #121318 更暗）
+关闭按钮   top: 10 / right: 16（原来是 top: 19 / right: 20）
+```
+
+整条仍然是 `DragToMoveArea`（窗口没有原生标题栏）；macOS 的窗口圆角由系统的 titled 窗口
+画，顶部条铺满即可，见 [窗口圆角](#窗口圆角)。`test/ai_panel_chrome_test.dart` 守着顶部条
+存在、且 `titleBarBg` 与 `scaffoldBg` 不同。
+
 ## 11. 图标更换流程
 
 当前图标由 `skills/icns-handle` 从外部 `.icns` 提取并生成 Linux PNG 组，源文件不进入仓库。
@@ -686,6 +853,21 @@ fvm flutter build linux --release
 ```
 
 正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
+
+### 品牌色（`lib/hax_colors.dart`）
+
+`haxAccent = #F8C800` 取自图标主色（`assets/icons/hax_shot_source.png`），配一个压暗的
+`_onHaxAccent = #1F1800`：深色背景上用亮姜黄，按钮里的文字/图标必须压暗才看得清。
+`haxAccentTheme(base)` 只覆盖 `colorScheme` 的 `primary/onPrimary/secondary/onSecondary` ——
+`FilledButton` / `OutlinedButton` / `TextButton` 的前景和背景都取 `colorScheme.primary`，
+覆盖它就够了。
+
+只用在这两个“要用户动手”的页面上，其余页面保持默认深色主题：
+
+```text
+lib/features/capture/capture_permission_guide.dart   Theme(data: haxAccentTheme(theme))
+lib/features/settings/shortcut_settings_page.dart    Theme(data: haxAccentTheme(Theme.of(context)))
+```
 
 ## 12. 调试和验证清单
 
@@ -791,6 +973,12 @@ macOS：
 - 暂不捕获鼠标光标；
 - 暂不支持 OCR、贴图、持久化会话、录屏和滚动截图；AI 会话仅在当前进程内保留；
 - 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
+- 托盘宿主有单实例保护（`lib/features/app/single_instance_guard.dart`）：`lib/main.dart`
+  的非 `--capture` 分支调 `acquire()`，用的是内核级文件锁（`FileLock.exclusive`，非阻塞），
+  拿不到就直接 `exitProcessNow()`；`lib/app.dart` 的 `_quit()` 在最后调 `release()`。**没有它会出现
+  “从托盘退出后按快捷键还能截图”**——两份宿主各自注册了进程内的全局快捷键，退出的只是
+  其中一份。不要改成“记 PID + SIGTERM”：有竞态和 PID 复用误杀的风险。Linux 上同类问题是
+  gsettings 里的快捷键指向旧的 release 路径，要重跑 `scripts/install-gnome-shortcut.sh`；
 - 还没有默认快捷键：Linux 需要运行 `scripts/install-gnome-shortcut.sh`，macOS 需要在设置页录制。
 
 ## 15. 给后续 Agent 的最短交接信息

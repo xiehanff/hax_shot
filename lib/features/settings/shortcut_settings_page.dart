@@ -4,8 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../hax_colors.dart';
 import 'autostart_service.dart';
 import 'shortcut_service.dart';
+import '../window/rounded_window.dart';
 
 class ShortcutSettingsPage extends StatefulWidget {
   const ShortcutSettingsPage({required this.onClose, super.key});
@@ -295,119 +297,130 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return KeyboardListener(
-      focusNode: _recordFocusNode,
-      onKeyEvent: _onShortcutKeyEvent,
-      child: Scaffold(
-        appBar: AppBar(
-          // 关闭按钮统一放右上角，和授权引导页/欢迎页保持一致。
-          automaticallyImplyLeading: false,
-          title: const Text('快捷键设置'),
-          actions: [
-            IconButton(
-              tooltip: '关闭',
-              onPressed: widget.onClose,
-              icon: const Icon(Icons.close),
+    // 只有按钮用图标同款的亮姜黄（见 lib/hax_colors.dart）：覆盖 colorScheme.primary
+    // 就够了，其余文字/底色保持主题中性色。
+    final accented = haxAccentTheme(Theme.of(context));
+    return Theme(
+      data: accented,
+      child: KeyboardListener(
+        focusNode: _recordFocusNode,
+        onKeyEvent: _onShortcutKeyEvent,
+        child: RoundedWindow(
+          child: Scaffold(
+            appBar: AppBar(
+              // 关闭按钮统一放右上角，和授权引导页/欢迎页保持一致。
+              automaticallyImplyLeading: false,
+              title: const Text('快捷键设置'),
+              actions: [
+                IconButton(
+                  tooltip: '关闭',
+                  onPressed: widget.onClose,
+                  icon: const Icon(Icons.close),
+                ),
+              ],
             ),
-          ],
-        ),
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: ListView(
-              padding: const EdgeInsets.all(32),
-              shrinkWrap: true,
-              children: [
-                Text('截图快捷键', style: Theme.of(context).textTheme.headlineSmall),
-                const SizedBox(height: 8),
-                Text(
-                  '按下快捷键后，Hax Shot 会启动全屏框选。',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 24),
-                Card(
-                  child: ListTile(
-                    onTap: _loading || _saving
-                        ? null
-                        : _recording
-                        ? _cancelRecording
-                        : _startRecording,
-                    leading: const Icon(Icons.keyboard_alt_outlined),
-                    title: Text(
-                      _loading
-                          ? '读取中…'
-                          : _binding == null
-                          ? '未设置'
-                          : bindingDisplayLabel(_binding!),
+            body: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: ListView(
+                  padding: const EdgeInsets.all(32),
+                  shrinkWrap: true,
+                  children: [
+                    Text(
+                      '截图快捷键',
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                    subtitle: const Text('当前快捷键'),
-                    trailing: _binding == null
-                        ? null
-                        : IconButton(
-                            tooltip: '删除快捷键',
-                            onPressed: _saving ? null : _deleteBinding,
-                            icon: const Icon(Icons.close),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: _loading || _saving
-                      ? null
-                      : _recording
-                      ? _cancelRecording
-                      : _startRecording,
-                  icon: Icon(
-                    _recording
-                        ? Icons.stop_circle_outlined
-                        : Icons.fiber_manual_record,
-                  ),
-                  label: Text(_recording ? '取消录制' : '录制新的快捷键'),
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.power_settings_new),
-                    title: const Text('开机自启动'),
-                    subtitle: Text(_autostartSubtitle),
-                    trailing: Switch(
-                      value: _autoLaunch,
-                      onChanged: _autoLaunchLoading || _autoLaunchSaving
+                    const SizedBox(height: 8),
+                    Text(
+                      '按下快捷键后，Hax Shot 会启动全屏框选。',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 24),
+                    Card(
+                      child: ListTile(
+                        onTap: _loading || _saving
+                            ? null
+                            : _recording
+                            ? _cancelRecording
+                            : _startRecording,
+                        leading: const Icon(Icons.keyboard_alt_outlined),
+                        title: Text(
+                          _loading
+                              ? '读取中…'
+                              : _binding == null
+                              ? '未设置'
+                              : bindingDisplayLabel(_binding!),
+                        ),
+                        subtitle: const Text('当前快捷键'),
+                        trailing: _binding == null
+                            ? null
+                            : IconButton(
+                                tooltip: '删除快捷键',
+                                onPressed: _saving ? null : _deleteBinding,
+                                icon: const Icon(Icons.close),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _loading || _saving
                           ? null
-                          : _setAutoLaunch,
+                          : _recording
+                          ? _cancelRecording
+                          : _startRecording,
+                      icon: Icon(
+                        _recording
+                            ? Icons.stop_circle_outlined
+                            : Icons.fiber_manual_record,
+                      ),
+                      label: Text(_recording ? '取消录制' : '录制新的快捷键'),
                     ),
-                  ),
-                ),
-                if (_recording) ...[
-                  const SizedBox(height: 16),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        '请按下新的组合键，例如 $_exampleShortcut。\n按 Esc 可取消录制。',
-                        style: TextStyle(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
+                    const SizedBox(height: 16),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.power_settings_new),
+                        title: const Text('开机自启动'),
+                        subtitle: Text(_autostartSubtitle),
+                        trailing: Switch(
+                          value: _autoLaunch,
+                          onChanged: _autoLaunchLoading || _autoLaunchSaving
+                              ? null
+                              : _setAutoLaunch,
                         ),
                       ),
                     ),
-                  ),
-                ],
-                if (_message != null) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    _message!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.secondary,
-                    ),
-                  ),
-                ],
-              ],
+                    if (_recording) ...[
+                      const SizedBox(height: 16),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text(
+                            '请按下新的组合键，例如 $_exampleShortcut。\n按 Esc 可取消录制。',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (_message != null) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        _message!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         ),

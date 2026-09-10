@@ -13,6 +13,8 @@ import 'features/ai/models/hax_ai_action.dart';
 import 'features/ai/services/hax_ai_service.dart';
 import 'features/ai/services/hax_ai_settings_store.dart';
 import 'features/ai/views/ai_page.dart';
+import 'features/app/hard_exit.dart';
+import 'features/app/single_instance_guard.dart';
 import 'features/capture/capture_overlay_window.dart';
 import 'features/capture/capture_page.dart';
 import 'features/capture/capture_permission_guide.dart';
@@ -21,6 +23,8 @@ import 'features/onboarding/first_run_onboarding.dart';
 import 'features/settings/screen_capture_permission.dart';
 import 'features/settings/shortcut_service.dart';
 import 'features/settings/shortcut_settings_page.dart';
+import 'features/window/window_visibility.dart';
+
 import 'native/native_bridge.dart';
 
 class HaxShotApp extends StatefulWidget {
@@ -79,7 +83,6 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   Future<void> _handleAiAction(HaxAiAction action, Uint8List pngBytes) async {
     final controller = _aiController;
     if (controller == null || _showAiPage) return;
-    var aiPageShown = false;
 
     try {
       // HaxAiController also starts this initialization in onInit. Waiting on
@@ -103,9 +106,8 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       await windowManager.setMinimumSize(const Size(320, 480));
       await windowManager.setSize(_aiWindowSize);
       await windowManager.center();
-      await windowManager.show();
+      await showWindow();
       await windowManager.focus();
-      aiPageShown = true;
       unawaited(_sendAiRequest(controller, action, pngBytes));
     } on Object catch (error) {
       // Keep the AI page visible even if initialization or the first request
@@ -133,7 +135,7 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
     } finally {
-      exit(0);
+      exitProcessNow();
     }
   }
 
@@ -216,12 +218,9 @@ class _TrayHostPageState extends State<TrayHostPage>
     try {
       await windowManager.setPreventClose(true);
       await windowManager.hide();
+      // 图标和菜单是用户看到的第一样东西，先建好再做别的：注册快捷键要读
+      // SharedPreferences、走一次 Carbon，欢迎页还要读磁盘，都会拖慢“图标出现”。
       await trayManager.setIcon(trayIconAsset);
-      // macOS 由这个常驻进程注册全局快捷键，按下时走和托盘菜单一样的启动流程；
-      // GNOME 侧快捷键由 gsettings 直接启动子进程，这个回调不会被用到。
-      await shortcutService.activate(
-        onTriggered: () => unawaited(_startCapture()),
-      );
       await trayManager.setContextMenu(
         Menu(
           items: [
@@ -251,7 +250,12 @@ class _TrayHostPageState extends State<TrayHostPage>
           ],
         ),
       );
-      // 托盘菜单先建好：即使欢迎页失败，用户也有入口。
+      // macOS 由这个常驻进程注册全局快捷键，按下时走和托盘菜单一样的启动流程；
+      // GNOME 侧快捷键由 gsettings 直接启动子进程，这个回调不会被用到。
+      await shortcutService.activate(
+        onTriggered: () => unawaited(_startCapture()),
+      );
+      // 欢迎页最后：即使它失败，图标和菜单也已经在上面建好了。
       await _presentFirstRunGuideIfNeeded();
     } on Object catch (error) {
       // A missing AppIndicator extension should not prevent screenshots.
@@ -276,7 +280,7 @@ class _TrayHostPageState extends State<TrayHostPage>
     });
     await windowManager.setSize(const Size(560, 460));
     await windowManager.center();
-    await windowManager.show();
+    await showWindow();
     await windowManager.focus();
   }
 
@@ -327,7 +331,7 @@ class _TrayHostPageState extends State<TrayHostPage>
     });
     await windowManager.setSize(const Size(560, 400));
     await windowManager.center();
-    await windowManager.show();
+    await showWindow();
     await windowManager.focus();
   }
 
@@ -362,7 +366,7 @@ class _TrayHostPageState extends State<TrayHostPage>
     setState(() => _showShortcutSettings = true);
     await windowManager.setSize(const Size(520, 400));
     await windowManager.center();
-    await windowManager.show();
+    await showWindow();
     await windowManager.focus();
   }
 
@@ -381,7 +385,9 @@ class _TrayHostPageState extends State<TrayHostPage>
       // GtkApplication event loop. Force-destroy it, then end the tray host.
       await windowManager.destroy();
     } finally {
-      exit(0);
+      // 最后才放锁：放出太早会让下一份实例在快捷键还没注销完的时候启动。
+      SingleInstanceGuard.release();
+      exitProcessNow();
     }
   }
 

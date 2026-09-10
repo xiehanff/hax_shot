@@ -22,3 +22,6 @@ core-graphics = "0.24"
 foreign-types = "0.5"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSPasteboard"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSData"] }
+
+[dependencies]
+png = "0.18.1"

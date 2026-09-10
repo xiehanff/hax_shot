@@ -126,6 +126,14 @@ fvm flutter build macos --release
 build/macos/Build/Products/Release/hax_shot.app
 ```
 
+macOS 常用脚本：
+
+```bash
+scripts/run_macos_debug.sh      # 构建 debug 并用 open 启动（调试期不要用 flutter run 授权，原因见文档）
+scripts/build_macos_dmg.sh      # 打可分发的 DMG（自动签名/可选公证 + 逐项验收）
+scripts/uninstall_macos_app.sh  # 卸载：应用、自启动项、授权记录、偏好设置（--dry-run 可先看）
+```
+
 macOS 首次启动会自动使用默认快捷键 `⌥Z`（菜单栏图标可能被 Bartender 这类工具收进
 隐藏区，所以默认就有一个不依赖图标的入口）；可以在托盘菜单“设置”里改。
 第一次截图时不会直接弹全屏框选，而是先弹一个小窗口的授权引导：点“打开系统设置”勾选

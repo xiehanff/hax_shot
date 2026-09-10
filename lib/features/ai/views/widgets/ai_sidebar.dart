@@ -123,34 +123,25 @@ class _AiTitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 顶部条比正文暗一点，只是用来和消息区做区分（不留标题文字）。窗口圆角由系统
+    // 画（macOS 的 titled 窗口），所以这里铺满即可。
     return SizedBox(
-      height: 66,
-      child: Stack(
-        children: <Widget>[
-          const Positioned.fill(
-            child: DragToMoveArea(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(21, 10, 60, 10),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'AI',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
+      height: 44,
+      child: ColoredBox(
+        color: AppColors.titleBarBg,
+        child: Stack(
+          children: <Widget>[
+            // 整条都是拖拽区，但没有文字。
+            const Positioned.fill(
+              child: DragToMoveArea(child: SizedBox.expand()),
             ),
-          ),
-          Positioned(
-            top: 19,
-            right: 20,
-            child: _AiCloseButton(onPressed: onClose),
-          ),
-        ],
+            Positioned(
+              top: 10,
+              right: 16,
+              child: _AiCloseButton(onPressed: onClose),
+            ),
+          ],
+        ),
       ),
     );
   }

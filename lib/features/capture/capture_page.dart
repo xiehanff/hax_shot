@@ -9,12 +9,14 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
+import '../app/hard_exit.dart';
 import '../settings/screen_capture_permission.dart';
 import '../ai/models/hax_ai_action.dart';
 import 'annotation.dart';
 import 'capture_overlay_window.dart';
 import 'capture_permission_guide.dart';
 import 'capture_session.dart';
+import '../window/window_visibility.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
 import 'screenshot_exporter.dart';
@@ -48,6 +50,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
 
   /// 复制进行中（只用于防重复点击，不驱动任何 loading UI）。
   bool _copying = false;
+
+  /// 正在关闭捕获进程（也刻意不驱动 loading UI）。
+  bool _closing = false;
 
   /// 等待授权期间的轮询：和 hax_pick 一样，授权成功后自动继续，不需要用户点按钮。
   ///
@@ -153,7 +158,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       // 抓到画面之后才把窗口升格成铺满屏幕的浮层。
       await CaptureOverlayWindow.instance.becomeOverlay();
       // Reveal the frozen screenshot only after native capture completes.
-      await windowManager.show();
+      await showWindow();
       await windowManager.focus();
     } on ScreenCapturePermissionException catch (error) {
       if (!mounted) return;
@@ -166,7 +171,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         _needsPermission = true;
         _message = '截图失败：$error';
       });
-      await windowManager.show();
+      await showWindow();
       await windowManager.focus();
     }
   }
@@ -184,7 +189,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         _message = message;
       });
     }
-    await windowManager.show();
+    await showWindow();
     await windowManager.focus();
   }
 
@@ -240,13 +245,33 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 结束当前捕获进程（窗口被 setPreventClose 拦着，必须显式退出）。
+  /// 结束当前捕获进程。
+  ///
+  /// 用硬退出（见 features/app/hard_exit.dart）：`exit(0)` 在 macOS 上会挂在引擎
+  /// 收尾里，进程会残留；`windowManager.destroy()` 又要多等几百毫秒。
   Future<void> _exitProcess() async {
+    exitProcessNow();
+  }
+
+  /// 收起浮层，让用户不用盯着冻结画面等编码/落盘。
+  ///
+  /// 实测一张 Retina 尺寸（3024x1964）选区的 PNG 编码约 100~300ms，退出进程还有
+  /// 几十毫秒；这些都必须发生在浮层消失之后，否则“保存/复制”看起来就是卡住。
+  /// 收起失败也不能中断后续动作，否则用户既没拿到图、窗口也没了。
+  Future<void> _hideOverlay() async {
     try {
-      await windowManager.setPreventClose(false);
-      await windowManager.destroy();
-    } finally {
-      exit(0);
+      await windowManager.hide();
+    } on Object catch (error) {
+      debugPrint('收起浮层失败：$error');
+    }
+  }
+
+  /// 出错时把浮层放回来，让用户看得见错误信息。
+  Future<void> _restoreOverlay() async {
+    try {
+      await windowManager.show();
+    } on Object catch (error) {
+      debugPrint('恢复浮层失败：$error');
     }
   }
 
@@ -633,18 +658,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     if (selection == null || image == null || _busy) return;
     _commitTextDraft();
 
-    setState(() {
-      _busy = true;
-      _message = '正在生成 PNG…';
-    });
-
     try {
-      final png = await ScreenshotExporter.renderPng(
-        image: image,
-        layout: layout,
-        selection: selection,
-        annotations: _session.annotations,
-      );
+      // 先弹保存对话框（用户需要看着冻结画面选目录），选完路径立刻收起浮层，
+      // 后面的编码和落盘都在浮层消失之后完成。
       final home = Platform.environment['HOME'];
       final location = await getSaveLocation(
         acceptedTypeGroups: const [
@@ -658,17 +674,23 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         suggestedName: 'hax-shot-${_timestamp()}.png',
         confirmButtonText: '保存',
       );
-      if (location == null) {
-        if (mounted) setState(() => _busy = false);
-        return;
-      }
+      if (location == null) return;
 
       final path = location.path.toLowerCase().endsWith('.png')
           ? location.path
           : '${location.path}.png';
+      await _hideOverlay();
+      final png = await ScreenshotExporter.renderPng(
+        image: image,
+        layout: layout,
+        selection: selection,
+        annotations: _session.annotations,
+      );
       await File(path).writeAsBytes(png, flush: true);
       await _closeCapture();
     } on Object catch (error) {
+      if (!mounted) return;
+      await _restoreOverlay();
       if (!mounted) return;
       setState(() {
         _busy = false;
@@ -679,9 +701,8 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
 
   /// 复制选区到剪贴板。
   ///
-  /// 刻意不进入 busy/loading 状态：复制是“点一下就该进剪贴板”的操作，编码 + 写入
-  /// 通常几十毫秒，弹一个 loading 反而像卡住了。用一个私有标志只防重复点击，
-  /// 复制过程中窗口和工具条保持原样，成功就直接关掉浮层。
+  /// 刻意不进入 busy/loading 状态：复制是“点一下就该进剪贴板”的操作，先收浮层
+  /// 再编码，用户看不到任何等待。用一个私有标志只防重复点击。
   Future<void> _copy(ScreenshotLayout layout) async {
     final selection = _session.selection;
     final image = _image;
@@ -690,6 +711,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     _commitTextDraft();
 
     try {
+      // 先收浮层再编码：编码要 100~300ms，用户点完“复制”就应该立刻回到原来的
+      // 界面。人切换到目标应用再按 ⌘V 至少也要几百毫秒，编码早就完成了。
+      await _hideOverlay();
       final png = await ScreenshotExporter.renderPng(
         image: image,
         layout: layout,
@@ -700,6 +724,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       await _closeCapture();
     } on Object catch (error) {
       _copying = false;
+      await _restoreOverlay();
       if (!mounted) return;
       setState(() => _message = '复制失败：$error');
     }
@@ -713,9 +738,17 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   /// `app.dart` 会把 `_ignoreNextWindowClose` 置位来吃掉这一次关闭请求，让进程
   /// 继续跑 AI 对话。如果这里直接 exit 掉进程，AI 面板会立刻消失。
   Future<void> _closeCapture() async {
-    if (mounted) {
-      setState(() => _busy = true);
-    }
+    if (_closing) return;
+    _closing = true;
+    // 不要在这里置 _busy：工具条会因此转圈，而复制/保存之后马上就要退出进程，
+    // 用户看到的就是一个没必要的 loading（关闭链路万一没生效还会一直卡着）。
+    // 正常路径是 close() → app.dart 的 onWindowClose → destroy + exit(0)；
+    // 下面的兜底保证即使那条链路没生效，窗口也不会带着 loading 留在屏幕上。
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 1200), () {
+        unawaited(_exitProcess());
+      }),
+    );
     await windowManager.close();
   }
 

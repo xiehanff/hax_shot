@@ -64,6 +64,12 @@ rm -rf "${install_dir:?}/$bundle"
 cp -R "$built" "$install_dir/$bundle"
 # 让 LaunchServices / Finder 立刻看到新的 bundle。
 touch "$install_dir/$bundle"
+# 显式登记到 LaunchServices：不登记的话，安装后第一次从 Finder/Dock 启动要现做一遍
+# 注册，托盘图标会晚 2~3 秒才出现（用户报过“启动很慢”）。
+lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [[ -x "$lsregister" ]]; then
+  "$lsregister" -f "$install_dir/$bundle" >/dev/null 2>&1 || true
+fi
 
 if [[ -n "$zip_path" ]]; then
   mkdir -p "$(dirname "$zip_path")"

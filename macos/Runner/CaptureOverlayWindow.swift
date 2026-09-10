@@ -16,6 +16,33 @@ final class CaptureOverlayWindow {
 
   private var escapeMonitor: Any?
 
+  /// 把窗口调成和托盘宿主（设置页 / 欢迎页）一样的“面板窗口”外观。
+  ///
+  /// macOS 只对 titled 窗口做原生圆角裁剪：borderless 窗口不会被裁，四角外侧露出的
+  /// 是窗口自己的背景色，看起来就是“有圆角但不透”。titled + 全尺寸内容视图 + 透明
+  /// 隐藏标题栏既拿到原生圆角（角外直接是桌面），又保持无标题栏的观感——容器边界和
+  /// 阴影都交给系统。
+  ///
+  /// 捕获浮层自己（becomeOverlay）必须是 borderless：它要铺满屏幕、盖住菜单栏和 Dock。
+  static func applyPanelAppearance(to window: NSWindow) {
+    window.styleMask = [.titled, .fullSizeContentView]
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    if #available(macOS 11.0, *) {
+      window.titlebarSeparatorStyle = .none
+    }
+    window.standardWindowButton(.closeButton)?.isHidden = true
+    window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+    window.standardWindowButton(.zoomButton)?.isHidden = true
+    // 有原生圆角裁剪，圆角外侧不会露出窗口背景，这里只需要一个不透明的深色兜底。
+    window.isOpaque = true
+    window.backgroundColor = NSColor(
+      srgbRed: 0x12 / 255, green: 0x13 / 255, blue: 0x18 / 255, alpha: 1)
+    window.isMovable = true
+    window.isMovableByWindowBackground = false
+    window.hasShadow = true
+  }
+
   func attach(messenger: FlutterBinaryMessenger, window: NSWindow) {
     self.window = window
     installEscapeMonitor()
@@ -57,7 +84,9 @@ final class CaptureOverlayWindow {
       NSLog("hax_shot: escape pressed on full-screen overlay, exiting")
       // 直接结束进程：performClose 对无边框窗口不一定生效，而这是用户唯一的出口，
       // 不能依赖任何一层可能失效的转发。
-      exit(0)
+      // 用 _exit 而不是 exit：exit 会跑 Flutter 引擎注册的 atexit 收尾，实测在
+      // macOS 上会挂住，进程残留在后台。
+      _exit(0)
     }
   }
 
@@ -72,8 +101,8 @@ final class CaptureOverlayWindow {
     window.collectionBehavior = []
     window.isMovableByWindowBackground = false
     window.sharingType = .readOnly
-    window.styleMask = [.borderless]
-    window.hasShadow = true
+    // AI 面板接管同一个窗口：回到原生圆角的面板外观（见 applyPanelAppearance）。
+    Self.applyPanelAppearance(to: window)
   }
 
   /// 抓到冻结画面之后调用：铺满目标显示器并盖住菜单栏和 Dock。
@@ -83,6 +112,11 @@ final class CaptureOverlayWindow {
   private func becomeOverlay() {
     guard let window else { return }
 
+    // 启动时窗口是全透明的（见 MainFlutterWindow），铺满屏幕时恢复。
+    window.alphaValue = 1
+    // 全屏浮层要铺满屏幕、必须是直角：不透明 + 纯黑背景。
+    window.isOpaque = true
+    window.backgroundColor = .black
     window.styleMask = [.borderless]
     window.level = .screenSaver
     window.collectionBehavior = [
@@ -91,7 +125,6 @@ final class CaptureOverlayWindow {
     window.isMovable = false
     window.isMovableByWindowBackground = false
     window.hasShadow = false
-    window.backgroundColor = .black
     // 浮层永远不应该被自己拍进截图。
     window.sharingType = .none
 

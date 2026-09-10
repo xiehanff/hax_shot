@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -32,6 +31,13 @@ final class NativeBridge {
     _lastError = _library.lookupFunction<_LastErrorNative, _LastErrorDart>(
       'hax_shot_last_error',
     );
+    _pngBufferSize = _library
+        .lookupFunction<_PngBufferSizeNative, _PngBufferSizeDart>(
+          'hax_shot_png_buffer_size',
+        );
+    _encodePng = _library.lookupFunction<_EncodePngNative, _EncodePngDart>(
+      'hax_shot_encode_png',
+    );
   }
 
   static const _textBufferCapacity = 4096;
@@ -48,6 +54,8 @@ final class NativeBridge {
   late final _ScreenCaptureAuthorizedDart _screenCaptureAuthorized;
   late final _RequestScreenCaptureAccessDart _requestScreenCaptureAccess;
   late final _LastErrorDart _lastError;
+  late final _PngBufferSizeDart _pngBufferSize;
+  late final _EncodePngDart _encodePng;
 
   /// Captures the target display and returns the temporary PNG path.
   ///
@@ -72,6 +80,62 @@ final class NativeBridge {
     return Isolate.run(
       () => NativeBridge.instance._copyPngToClipboardSync(pngBytes),
     );
+  }
+
+  /// 用 Rust 把 RGBA8 像素编码成 PNG。
+  ///
+  /// Skia 的 `Image.toByteData(png)` 走 zlib level 6，实测一张 1920x1080 的截图要
+  /// 几百毫秒；Rust 侧用 fdeflate（`png::Compression::Fast`）只要十几毫秒，代价是
+  /// 体积大约 +20%，对截图完全值得（实测见 docs/development-guide.md）。
+  ///
+  /// [pixels] 必须是 width*height*4 个字节、R,G,B,A 顺序、非预乘（PNG 就是非预乘）。
+  ///
+  /// 编码放在 worker isolate：native 调用是同步的，Retina 选区要几十毫秒，不该卡住
+  /// UI 线程（AI 那条路径不会先收起浮层）。
+  Future<Uint8List> encodePng(Uint8List pixels, int width, int height) {
+    if (width <= 0 || height <= 0) {
+      throw const NativeBridgeException('PNG 尺寸非法');
+    }
+    if (width > 0xFFFFFFFF || height > 0xFFFFFFFF) {
+      throw const NativeBridgeException('PNG 尺寸超出原生限制');
+    }
+    final expected = width * height * 4;
+    // 严格相等：多出来的字节说明调用方传错了缓冲区（例如带 stride 的整屏像素），
+    // 那样编码出来的图会静默错位。
+    if (pixels.length != expected) {
+      throw NativeBridgeException(
+        '像素字节数不对：${pixels.length}，期望 $expected（width*height*4）',
+      );
+    }
+    return Isolate.run(
+      () =>
+          NativeBridge.instance._encodePngSync(pixels, width, height, expected),
+    );
+  }
+
+  Uint8List _encodePngSync(
+    Uint8List pixels,
+    int width,
+    int height,
+    int expected,
+  ) {
+    final capacity = _pngBufferSize(width, height);
+    if (capacity <= 0) {
+      throw const NativeBridgeException('PNG 尺寸大到无法分配缓冲区');
+    }
+    final input = calloc<Uint8>(expected);
+    final output = calloc<Uint8>(capacity);
+    try {
+      input.asTypedList(expected).setAll(0, pixels);
+      final written = _encodePng(input, width, height, output, capacity);
+      if (written < 0) {
+        throw NativeBridgeException(_readLastError());
+      }
+      return Uint8List.fromList(output.asTypedList(written));
+    } finally {
+      calloc.free(input);
+      calloc.free(output);
+    }
   }
 
   /// Whether the app may capture the screen right now.
@@ -192,6 +256,26 @@ typedef _RequestScreenCaptureAccessDart = int Function();
 
 typedef _CursorDisplayNative = Uint32 Function();
 typedef _CursorDisplayDart = int Function();
+
+typedef _PngBufferSizeNative = Uint64 Function(Uint32 width, Uint32 height);
+typedef _PngBufferSizeDart = int Function(int width, int height);
+
+typedef _EncodePngNative =
+    Int32 Function(
+      Pointer<Uint8> pixels,
+      Uint32 width,
+      Uint32 height,
+      Pointer<Uint8> output,
+      IntPtr capacity,
+    );
+typedef _EncodePngDart =
+    int Function(
+      Pointer<Uint8> pixels,
+      int width,
+      int height,
+      Pointer<Uint8> output,
+      int capacity,
+    );
 
 typedef _LastErrorNative =
     IntPtr Function(Pointer<Uint8> buffer, IntPtr capacity);

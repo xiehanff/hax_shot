@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import '../window/rounded_window.dart';
 
 /// 首次启动的欢迎页。
 ///
@@ -26,67 +27,72 @@ class FirstRunGuide extends StatelessWidget {
     final trayLocation = Platform.isMacOS ? '菜单栏右侧' : '系统托盘';
     final shortcut = shortcutLabel.isEmpty ? '未设置' : shortcutLabel;
 
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('Hax Shot 已启动'),
-        actions: [
-          IconButton(
-            tooltip: '关闭',
-            onPressed: onClose,
-            icon: const Icon(Icons.close),
-          ),
-        ],
-      ),
-      body: Align(
-        alignment: Alignment.topLeft,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.celebration_outlined,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 10),
-                  Text('Hax Shot 已在后台运行', style: theme.textTheme.titleLarge),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '它没有主窗口，启动后只在$trayLocation显示一个小图标，'
-                '所有操作都从那个图标开始；想改快捷键或开机自启动，打开设置页即可。',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              _Fact(
-                icon: Icons.crop_free,
-                title: '截图快捷键：$shortcut',
-                detail: '按下即可框选屏幕区域。首次截图时系统会要求授予屏幕录制权限。',
-              ),
-              const SizedBox(height: 10),
-              _Fact(
-                icon: Icons.menu_open,
-                title: '$trayLocation的图标',
-                detail: '点它可以看到“立即截屏 / 设置 / 退出”。',
-              ),
-              const SizedBox(height: 22),
-              Wrap(
-                spacing: 12,
-                children: [
-                  FilledButton.icon(
-                    onPressed: onOpenSettings,
-                    icon: const Icon(Icons.settings_outlined),
-                    label: const Text('打开设置'),
-                  ),
-                  OutlinedButton(onPressed: onClose, child: const Text('知道了')),
-                ],
-              ),
-            ],
+    return RoundedWindow(
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: const Text('Hax Shot 已启动'),
+          actions: [
+            IconButton(
+              tooltip: '关闭',
+              onPressed: onClose,
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.celebration_outlined,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    Text('Hax Shot 已在后台运行', style: theme.textTheme.titleLarge),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '它没有主窗口，启动后只在$trayLocation显示一个小图标，'
+                  '所有操作都从那个图标开始；想改快捷键或开机自启动，打开设置页即可。',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                _Fact(
+                  icon: Icons.crop_free,
+                  title: '截图快捷键：$shortcut',
+                  detail: '按下即可框选屏幕区域。首次截图时系统会要求授予屏幕录制权限。',
+                ),
+                const SizedBox(height: 10),
+                _Fact(
+                  icon: Icons.menu_open,
+                  title: '$trayLocation的图标',
+                  detail: '点它可以看到“立即截屏 / 设置 / 退出”。',
+                ),
+                const SizedBox(height: 22),
+                Wrap(
+                  spacing: 12,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: onOpenSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('打开设置'),
+                    ),
+                    OutlinedButton(
+                      onPressed: onClose,
+                      child: const Text('知道了'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

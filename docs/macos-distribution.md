@@ -3,6 +3,19 @@
 这份文档只讲**分发给别人**（不是本机自测）的链路。本机开发请用
 [`development-guide.md`](./development-guide.md) 里的 `scripts/install_macos_app.sh`。
 
+## 0. 只支持 Apple Silicon（arm64）
+
+本项目**不支持 Intel Mac**，也不做通用二进制（universal）：
+
+- `macos/Runner/Configs/AppInfo.xcconfig` 里 `ARCHS = arm64`，`scripts/build_macos_rust.sh`
+  按 `$ARCHS` 逐架构构建 Rust dylib（当前只会走 `aarch64-apple-darwin`）；
+- 产物验证：`lipo -archs /Applications/hax_shot.app/Contents/MacOS/hax_shot` 应为 `arm64`，
+  `Contents/Frameworks/` 下所有框架和 `libhax_shot_native.dylib` 也都只能是 `arm64`；
+- DMG 文件名固定带 `-arm64`（例如 `HaxShot-1.3.0-arm64.dmg`）。
+
+在 Intel 机器上 macOS 自己会拦下：提示“不能打开，因为此类型 Mac 不支持”，这是预期行为，
+不需要我们额外做检测。
+
 ## 1. 一条命令
 
 ```bash
@@ -52,6 +65,15 @@ macOS 把“屏幕录制”授权绑在代码签名上：
 不折腾用户。`tccutil reset` 那种修复手段只是给本地开发兜底的（见
 `lib/features/settings/screen_capture_permission.dart`）。
 
+### 本机开发：别用 `flutter run` 授权
+
+`flutter run` 启动的 app 责任进程是终端，屏幕录制授权会记在终端上，Hax Shot 不会出现在
+系统设置列表里（macOS 15 的该面板也不能手动“+”添加）。开发时用：
+
+```bash
+scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Shot 成为责任进程）
+```
+
 ### 本机开发怎么办
 
 开发期是 ad-hoc 签名，会反复遇到上面的错位。当前实现按 `hax_pick` 的做法处理：
@@ -76,7 +98,14 @@ macOS 把“屏幕录制”授权绑在代码签名上：
 6. 想用 AI：AI 面板里填 DeepSeek API Key
 ```
 
-### 已知会让人困惑的点
+#### 升级后一定要退出旧实例
+
+全局快捷键是**正在运行的那个实例**注册的。如果旧版本还在跑（菜单栏里那个图标），
+即使你把新版本拷进 /Applications，按快捷键触发的仍然是旧实例 —— 表现就是“快捷键
+截屏看起来和托盘截屏不是同一个版本”。`scripts/install_macos_app.sh` 会先 `pkill`
+再替换 bundle，所以走脚本安装/升级不会踩这个坑。
+
+## 已知会让人困惑的点
 
 - **第 2 步**：菜单栏应用没有 Dock 图标，新用户容易以为没启动。已实现首次启动欢迎窗口
   （`lib/features/onboarding/first_run_guide.dart`，标记 `hax_shot.onboarding_seen`），
@@ -85,7 +114,22 @@ macOS 把“屏幕录制”授权绑在代码签名上：
   所以默认快捷键 `⌥Z` 是必需的兜底入口。
 - **API Key 目前存在 shared_preferences（明文 plist）**。正式分发建议改存 Keychain。
 
-## 5. 发布前检查清单
+## 5. 卸载
+
+```bash
+scripts/install_macos_app.sh                   # 重新安装（会先退出正在运行的旧实例）
+scripts/uninstall_macos_app.sh                 # 卸载并清掉用户数据
+scripts/uninstall_macos_app.sh --dry-run       # 先看会做什么
+scripts/uninstall_macos_app.sh --keep-prefs    # 保留快捷键等偏好设置
+scripts/uninstall_macos_app.sh --dir ~/Apps    # 应用装在别处
+```
+
+清掉的东西：运行中的进程、`<dir>/hax_shot.app`、`~/Library/LaunchAgents/<bundle id>.plist`
+（含 `launchctl bootout`）、屏幕录制授权记录（`tccutil reset`）、偏好设置 plist，以及系统
+生成的 `Saved Application State` / `Caches` / `HTTPStorages` 目录。开发用自签名证书和
+`build/macos/` 里的构建产物不在范围里，脚本结尾会提示对应命令。
+
+## 6. 发布前检查清单
 
 ```bash
 scripts/generate_macos_icons.sh    # 从 assets/icons/hax_shot.svg 更新 AppIcon

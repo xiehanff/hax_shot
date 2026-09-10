@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../native/native_bridge.dart';
 import 'annotation.dart';
 import 'screenshot_canvas.dart';
 
@@ -62,11 +63,21 @@ final class ScreenshotExporter {
     final picture = recorder.endRecording();
     final cropped = await picture.toImage(width, height);
     picture.dispose();
-    final data = await cropped.toByteData(format: ui.ImageByteFormat.png);
+
+    // 像素交给 Rust 编码：Skia 的 toByteData(png) 是 zlib level 6，一张
+    // 3024x1964 的选区要几百毫秒；原生侧 fdeflate 只要几十毫秒（体积约 +20%）。
+    // rawStraightRgba 是非预乘的 RGBA，正好是 PNG 需要的格式。
+    final raw = await cropped.toByteData(
+      format: ui.ImageByteFormat.rawStraightRgba,
+    );
     cropped.dispose();
-    if (data == null) {
-      throw StateError('PNG 编码失败');
+    if (raw == null) {
+      throw StateError('读取截图像素失败');
     }
-    return data.buffer.asUint8List();
+    return NativeBridge.instance.encodePng(
+      raw.buffer.asUint8List(raw.offsetInBytes, raw.lengthInBytes),
+      width,
+      height,
+    );
   }
 }

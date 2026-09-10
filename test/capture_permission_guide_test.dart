@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hax_shot/features/capture/capture_permission_guide.dart';
@@ -22,7 +24,6 @@ void main() {
   }
 
   testWidgets('关闭按钮在窗口右上角，且没有重复的退出按钮', (tester) async {
-    const size = Size(560, 400);
     await pumpGuide(tester);
 
     // 以引导页自身占据的矩形为基准算相对位置。
@@ -52,6 +53,16 @@ void main() {
     final buttons = tester.getRect(find.text('打开系统设置'));
     expect(buttons.bottom, lessThan(box.bottom));
     expect(box.height, 400);
+  });
+
+  testWidgets('macOS 上提示“从终端启动会导致授权记在终端身上”', (tester) async {
+    await pumpGuide(tester);
+    final hint = find.textContaining('授权会记在终端上');
+    if (Platform.isMacOS) {
+      expect(hint, findsOneWidget);
+    } else {
+      expect(hint, findsNothing);
+    }
   });
 
   testWidgets('没有授权信息时显示引导文案', (tester) async {

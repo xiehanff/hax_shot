@@ -14,7 +14,7 @@ import 'ai_colors.dart';
 
 /// 聊天 markdown 统一字体：正文（含标题、思考面板）使用 OPPO Sans，
 /// 代码（行内与代码块）使用 GoogleSansMono。
-const String kMarkdownFontFamily = 'OPPO Sans';
+const String kMarkdownFontFamily = 'OPPO Sans 4.0';
 const String kCodeFontFamily = 'GoogleSansMono';
 
 const List<String> kMarkdownFontFallback = <String>[

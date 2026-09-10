@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 abstract final class HaxAiColors {
   static const scaffoldBg = Color(0xFF121318);
+
+  /// AI 面板顶部条：比 scaffoldBg 略暗，用来和消息区区分（不放标题文字）。
+  static const titleBarBg = Color(0xFF0C0D11);
   static const surfaceBg = Color(0xFF1D2028);
   static const fieldBg = Color(0xFF17191F);
   static const fillSubtle = Color(0xFF242832);

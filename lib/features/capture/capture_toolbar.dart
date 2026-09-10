@@ -98,7 +98,9 @@ class CaptureToolbar extends StatelessWidget {
                         onPressed: () => onToolSelected(CaptureTool.selection),
                       ),
                       _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedRectangular01,
+                        // 用 rectangular-stroke-rounded 那个扁平矩形，和“框选”
+                        // （cursor-rectangle-selection）在形状上区分得开。
+                        icon: HugeIcons.strokeRoundedRectangular,
                         tooltip: '标注矩形',
                         selected: activeTool == CaptureTool.rectangle,
                         onPressed: () => onToolSelected(CaptureTool.rectangle),

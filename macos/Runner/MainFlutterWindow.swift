@@ -24,9 +24,11 @@ class MainFlutterWindow: NSWindow {
       // 我们自己的关闭按钮上）。不要在这里设 level，也不要 titleBarStyle：
       // window_manager 的 setTitleBarStyle 会在没有标题栏按钮的窗口上强解包 nil 崩溃，
       // 所以 lib/main.dart 只在 macOS 捕获模式之外传该选项。
-      styleMask = [.borderless]
-      isMovableByWindowBackground = false
-      hasShadow = true
+      //
+      // 用 titled + 全尺寸内容视图而不是 borderless：授权引导和 AI 面板都显示在这个
+      // 窗口里，需要系统给的原生圆角（borderless 不会被裁，四角会露出窗口背景）。
+      // 抓屏成功后 becomeOverlay() 会把它改成 borderless 并铺满目标显示器。
+      CaptureOverlayWindow.applyPanelAppearance(to: self)
       CaptureOverlayWindow.shared.attach(
         messenger: flutterViewController.engine.binaryMessenger,
         window: self
@@ -36,5 +38,10 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     super.awakeFromNib()
+
+    // nib 加载后 AppKit 会把窗口排到最前，而这时 Flutter 还没画出第一帧，
+    // 用户会看到一个小黑窗口闪一下（托盘宿主和捕获进程都这样）。把它设成全透明，
+    // 可见性完全交给 Dart：显示前会调用 showWindow() 恢复不透明度。
+    alphaValue = 0
   }
 }

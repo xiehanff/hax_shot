@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controllers/hax_ai_controller.dart';
+import '../../window/rounded_window.dart';
 import 'widgets/ai_colors.dart';
 import 'widgets/ai_sidebar.dart';
 
@@ -21,9 +22,11 @@ class AiPage extends StatelessWidget {
       },
       child: Focus(
         autofocus: true,
-        child: Scaffold(
-          backgroundColor: AppColors.scaffoldBg,
-          body: AiSidebar(controller: controller, onClose: onClose),
+        child: RoundedWindow(
+          child: Scaffold(
+            backgroundColor: AppColors.scaffoldBg,
+            body: AiSidebar(controller: controller, onClose: onClose),
+          ),
         ),
       ),
     );
