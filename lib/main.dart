@@ -35,7 +35,11 @@ Future<void> main(List<String> args) async {
   final nativeCaptureOverlay = captureMode && Platform.isMacOS;
   final options = WindowOptions(
     title: 'Hax Shot',
-    backgroundColor: Colors.black,
+    // Linux 的窗口没有原生圆角：Dart 侧用 RoundedWindow 裁一刀，窗口背景必须透明，
+    // 否则被裁掉的四角会露出 window_manager 写进 GTK CSS 的那层背景色（看起来就是
+    // “有圆角但角外是方块”）。macOS 的圆角由系统的 titled 窗口画，窗口保持不透明黑。
+    // 详见 docs/development-guide.md 的“窗口圆角”。
+    backgroundColor: Platform.isLinux ? Colors.transparent : Colors.black,
     // The tray host only reveals the shortcut settings page on demand; keep
     // that temporary window compact instead of inheriting a full-screen size.
     // 捕获进程先只用一个小窗口：抓屏失败（没授权等）时用户看到的是引导，
