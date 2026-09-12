@@ -675,6 +675,19 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
 桌面），又保持无标题栏观感，还不会出现 macOS 的红黄绿（没有 `.closable` 等，三个按钮
 是 nil）。`RunnerTests.testPanelAppearanceUsesNativeRoundedWindow` 守着这个配置。
 
+这个测试是 **app-hosted** 的（`@testable import hax_shot`，宿主就是应用本体），所以本地跑它有三条硬要求，不然报的错跟真实问题毫无关系：
+
+```bash
+# 1. 先跑一次 build：macos/Flutter/ephemeral/*.xcfilelist 和 Pods 的文件列表都由它生成，
+#    直接 xcodebuild 会报 “Unable to load contents of file list”（flutter pub get 不够）
+fvm flutter build macos --debug
+# 2. 必须 Debug 配置：Release 关掉了 testability，会报 “not compiled for testing”
+# 3. 先退出正在运行的 Hax Shot：单实例锁会让宿主 app 启动即退出，
+#    XCTest 只会说 “Early unexpected exit / Test crashed with signal kill”
+xcodebuild test -workspace macos/Runner.xcworkspace -scheme Runner \
+  -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO
+```
+
 抓屏成功后 `becomeOverlay()` 会把它切成 `[.borderless]`：全屏浮层必须铺满屏幕、盖住
 菜单栏和 Dock，不能有圆角。`exitOverlay()` 再切回面板外观。
 
