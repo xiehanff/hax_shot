@@ -18,7 +18,7 @@ env:
 
 jobs:
   verify:
-    name: Analyze, test, and build
+    name: Linux analyze, test, and build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -78,3 +78,55 @@ jobs:
         run: |
           test -x build/linux/x64/release/bundle/hax_shot
           test -f build/linux/x64/release/bundle/lib/libhax_shot_native.so
+
+  # macOS 已经是正式平台（有 RunnerTests 守着窗口/TCC 相关行为），但 Release workflow
+  # 只构建、不跑测试，所以这里补一个 PR 级门禁：Swift/ObjC 改坏了、macOS 编不过，要在
+  # 合入前发现，而不是等打 tag 的时候才发现。
+  macos:
+    name: macOS tests and build
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+          targets: aarch64-apple-darwin
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      - name: Run Dart tests
+        run: flutter test
+
+      - name: Run Rust checks
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --check
+          cargo check --manifest-path rust/Cargo.toml
+          cargo test --manifest-path rust/Cargo.toml
+
+      # RunnerTests 是 macOS 侧唯一的行为门禁（窗口 styleMask / 圆角 / traffic light），
+      # 之前只存在于本地。CODE_SIGNING_ALLOWED=NO：CI 没有证书，测试也不需要签名。
+      - name: Run RunnerTests (XCTest)
+        run: |
+          xcodebuild test \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build macOS release bundle
+        run: flutter build macos --release

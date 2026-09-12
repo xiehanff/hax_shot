@@ -50,7 +50,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   bool _busy = false;
 
   /// 复制进行中（只用于防重复点击，不驱动任何 loading UI）。
+  /// 保存/复制各自的重入标志：它们都不进入 busy/loading 状态，只防重复触发。
   bool _copying = false;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -213,7 +215,10 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   Future<void> _save(ScreenshotLayout layout) async {
     final selection = _session.selection;
     final image = _image;
-    if (selection == null || image == null || _busy) return;
+    if (selection == null || image == null || _busy || _saving) return;
+    // 保存要弹系统对话框，用户等的是对话框而不是 loading，所以和 _copy 一样用
+    // 私有标志防重复触发：连点两次不能弹两个对话框、更不能两条落盘链路竞争。
+    _saving = true;
     _annotation.commitDraft();
 
     try {
@@ -232,7 +237,10 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         suggestedName: 'hax-shot-${_timestamp()}.png',
         confirmButtonText: '保存',
       );
-      if (location == null) return;
+      if (location == null) {
+        _saving = false;
+        return;
+      }
 
       final path = location.path.toLowerCase().endsWith('.png')
           ? location.path
@@ -247,6 +255,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       await File(path).writeAsBytes(png, flush: true);
       await _process.close();
     } on Object catch (error) {
+      _saving = false;
       if (!mounted) return;
       await _process.restoreOverlay();
       if (!mounted) return;

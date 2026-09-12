@@ -9,8 +9,9 @@ import 'dart:io';
 /// 快捷键照样能截图”，像流氓软件。
 ///
 /// 做法是**操作系统级的文件锁**：锁由内核维护、进程一退出就自动释放，所以不需要
-/// 记录 PID、不需要查进程、也不存在 PID 复用误杀的风险。第二份实例拿不到锁就直接
-/// 退出（`main()` 里在 `runApp` 之前调用，用户看不到任何窗口）。
+/// 记录 PID、不需要查进程、也不存在 PID 复用误杀的风险。锁文件本身永久保留——删它
+/// 反而会引入竞态（见 `release()` 的注释）。第二份实例拿不到锁就直接退出（`main()`
+/// 里在 `runApp` 之前调用，用户看不到任何窗口）。
 ///
 /// 捕获进程（`--capture`）不参与：它本来就该能同时启动多个。
 final class SingleInstanceGuard {
@@ -56,6 +57,9 @@ final class SingleInstanceGuard {
         handle.closeSync();
         return false;
       }
+      // 拿到锁之后才能截断：锁文件是永久存在的（release 不删除），截断保证
+      // 里面只留当前持有者的 pid，而不是历次启动的累加。
+      handle.truncateSync(0);
       handle.writeStringSync('$pid\n');
       handle.flushSync();
       _held = handle;
@@ -66,15 +70,19 @@ final class SingleInstanceGuard {
     }
   }
 
-  /// 正常退出时释放锁。清理失败无所谓：进程结束内核也会释放。
+  /// 正常退出时释放锁。
+  ///
+  /// **不删除锁文件**：删了会开一个真实的竞态——A 关掉 fd（锁被内核释放）到 A 删掉
+  /// 路径之间存在窗口，B 可能正好打开这个旧 inode 拿到锁，随后 A 的删除让 C 新建一个
+  /// 同名文件也能拿到锁，于是 B、C 同时认为自己是唯一实例。锁文件永久存在时，这份
+  /// 竞态根本不存在：`flock`/`FileLock` 绑在 inode 上，进程退出内核就释放。
   static void release() {
     final handle = _held;
     _held = null;
     try {
       handle?.closeSync();
-      _lockFile.deleteSync();
     } on Object catch (_) {
-      // 忽略：锁文件残留不会影响下一次启动（锁本身已经随进程释放）。
+      // 忽略：进程结束内核也会释放锁。
     }
   }
 }

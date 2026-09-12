@@ -99,17 +99,24 @@ git push origin v1.3.0
 
 每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
 
-Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main` push 上的 `verify.yml` 负责，
-tag 应该指向已经过检查的 commit。
+Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
+（Linux 与 macOS 两个 job），tag 应该指向已经过检查的 commit。
 
 如果同一个 tag 的 Release 已经存在（例如补传 macOS 产物），`release` job 会用
 `--clobber` 覆盖同名资产，而不会创建第二个 Release。
 
-## 5. macOS 签名与公证（可选，但分发必需）
+## 5. macOS 签名与公证（分发必需）
 
-DMG 默认是 **ad-hoc 签名**：能下载、能挂载，但在别人的 Mac 上会被 Gatekeeper 拒绝
-（原因见 [macOS 打包与分发](./macos-distribution.md)）。要在 CI 里签名并公证，需要在仓库
-的 **Settings → Secrets and variables → Actions** 里配置：
+策略是**不允许静默发出未公证的 DMG**：
+
+| 仓库 secret 情况 | 行为 |
+|---|---|
+| 没有 `MACOS_CERTIFICATE_P12` | 构建 ad-hoc DMG，文件名写成 `HaxShot-<版本>-arm64-unsigned.dmg`，并在 Release 正文顶部加一段“未签名/未公证、不能当常规安装包分发”的警告 |
+| 有证书但缺 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` | **macOS job 直接失败**：半配置状态不允许发布未公证的包 |
+| 证书 + 公证凭据齐全 | 必须签名 + 公证 + staple（`build_macos_dmg.sh --notarize`），任何一步失败都会让 job 挂掉 |
+
+也就是说：ad-hoc 包只能以 `-unsigned` 的内部测试包形式出现，永远不会冒充成正式安装包。
+要对外分发 macOS 版本，需要在仓库 **Settings → Secrets and variables → Actions** 里配置：
 
 | Secret | 说明 |
 |---|---|
@@ -121,19 +128,18 @@ DMG 默认是 **ad-hoc 签名**：能下载、能挂载，但在别人的 Mac �
 | `APPLE_APP_PASSWORD` | 该 Apple ID 的 app-specific password |
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 
-规则：
-
-- 没有 `MACOS_CERTIFICATE_P12`：跳过签名，工作流打 warning，产物是 ad-hoc DMG；
-- 有证书但没有 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID`：只签名不公证；
-- 三者齐全：签名 + 公证 + staple（`scripts/build_macos_dmg.sh --notarize`）。
+配好之后，打 tag 前先干跑一次确认签名/公证链路通，再推 tag。缺证书阶段的公开版本，按
+[macOS 打包与分发](./macos-distribution.md) 的说明告知用户 DMG 只用于内部测试。
 
 ## 6. 发布后的检查
 
 在仓库的 **Releases** 页面确认：
 
 - Release tag 与 `pubspec.yaml` 版本一致，且不是 Draft；
-- Assets 里三个文件都在：`HaxShot-<版本>-arm64.dmg`、`hax-shot_<版本>_amd64.deb`、
+- Assets 里三个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
+  `HaxShot-<版本>-arm64-unsigned.dmg`）、`hax-shot_<版本>_amd64.deb`、
   `hax-shot-<版本>-<release>.x86_64.rpm`；
+- 如果只有 `-unsigned` DMG，Release 正文顶部应该已经有未签名警告；
 - Release notes 由 `--generate-notes` 生成（会带上本次 tag 之前的 PR/commit 列表）。
 
 验证 macOS 产物：

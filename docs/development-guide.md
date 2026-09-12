@@ -1147,7 +1147,7 @@ pkill -x hax_shot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布（`main` push 只跑 `verify.yml` 的 analyze/test/build）。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。
 
 发布前本地执行：
 
@@ -1166,7 +1166,7 @@ tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 version: 1.3.0+1  →  git push origin v1.3.0
 ```
 
-推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；`macos` job 的签名/公证依赖仓库 secrets（未配置时退化为 ad-hoc DMG），完整操作见 [`ci-release.md`](./ci-release.md)。
+推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run release.yml` 干跑。macOS 签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`ci-release.md`](./ci-release.md)。
 
 ## 14. 已知限制和未完成项
 
