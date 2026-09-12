@@ -1,4 +1,4 @@
-library plume_ai_chat;
+library;
 
 export 'src/backend/ai_backend.dart';
 export 'src/backend/deepseek_backend.dart';

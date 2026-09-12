@@ -51,7 +51,7 @@ void main() {
         home: AiChatMessageList(
           controller: controller,
           messages: const <ChatMessage>[],
-          messageBuilder: (_, __, ___) => const SizedBox.shrink(),
+          messageBuilder: (_, _, _) => const SizedBox.shrink(),
           emptyBuilder: (_) => const Text('custom empty'),
         ),
       ),

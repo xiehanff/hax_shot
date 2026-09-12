@@ -55,7 +55,7 @@ void main() {
 
     final Future<AiChatTurnResult> future = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'hello'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
 
     await backend.waitForCalls(1);
@@ -81,7 +81,7 @@ void main() {
 
     final Future<AiChatTurnResult> future = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'hello'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await backend.waitForCalls(1);
     expect(view.map((e) => e.content), <String>['hello']);
@@ -124,7 +124,7 @@ void main() {
 
     final Future<AiChatTurnResult> future = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'hello'),
-      onPreview: (_, __) => previewCount++,
+      onPreview: (_, _) => previewCount++,
     );
     await backend.waitForCalls(1);
 
@@ -145,7 +145,7 @@ void main() {
 
     final Future<AiChatTurnResult> future = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'hello'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
 
     await backend.waitForCalls(1);
@@ -166,7 +166,7 @@ void main() {
 
       final Future<AiChatTurnResult> future = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'hello'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
       backend.streams.single.add(const AiStreamEvent(text: 'partial'));
@@ -195,7 +195,7 @@ void main() {
 
       final Future<AiChatTurnResult> first = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'first'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
       backend.streams[0].add(const AiStreamEvent(text: 'partial answer'));
@@ -204,7 +204,7 @@ void main() {
 
       final Future<AiChatTurnResult> second = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'second'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await Future<void>.delayed(Duration.zero);
       expect(backend.requests, hasLength(1));
@@ -243,14 +243,14 @@ void main() {
 
       final Future<AiChatTurnResult> first = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'old'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
       expect(session.stopActiveTurn(), isTrue);
 
       final Future<AiChatTurnResult> second = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'new'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await Future<void>.delayed(Duration.zero);
       expect(backend.requests, hasLength(1));
@@ -282,7 +282,7 @@ void main() {
 
     final Future<AiChatTurnResult> first = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'first'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await backend.waitForCalls(1);
     backend.streams[0].add(const AiStreamEvent(text: 'partial'));
@@ -291,7 +291,7 @@ void main() {
 
     final Future<AiChatTurnResult> second = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'second'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await Future<void>.delayed(Duration.zero);
     expect(session.stopActiveTurn(), isTrue);
@@ -315,7 +315,7 @@ void main() {
       final Future<AiChatTurnResult> future = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'tool prompt'),
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
 
       await backend.waitForCalls(1);
@@ -346,7 +346,7 @@ void main() {
         userMessage: const AiChatHistoryMessage.user(content: 'A'),
         stopPrevious: true,
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
 
@@ -354,13 +354,13 @@ void main() {
         userMessage: const AiChatHistoryMessage.user(content: 'B'),
         stopPrevious: true,
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       final Future<AiChatTurnResult> third = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'C'),
         stopPrevious: true,
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
 
       backend.firstCancelGate.complete();
@@ -393,7 +393,7 @@ void main() {
         userMessage: const AiChatHistoryMessage.user(content: 'tool A'),
         stopPrevious: true,
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
       backend.streams[0].add(const AiStreamEvent(text: 'A partial'));
@@ -403,7 +403,7 @@ void main() {
         userMessage: const AiChatHistoryMessage.user(content: 'tool B'),
         stopPrevious: true,
         deferHistoryCommit: true,
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await Future<void>.delayed(Duration.zero);
       expect(backend.requests, hasLength(1));
@@ -440,7 +440,7 @@ void main() {
 
     final Future<AiChatTurnResult> running = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'old'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await backend.waitForCalls(1);
     backend.streams[0].add(const AiStreamEvent(text: 'partial'));
@@ -465,14 +465,14 @@ void main() {
 
       final Future<AiChatTurnResult> oldTurn = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'old'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
       await backend.waitForCalls(1);
 
       session.clear();
       final Future<AiChatTurnResult> newTurn = session.send(
         userMessage: const AiChatHistoryMessage.user(content: 'new'),
-        onPreview: (_, __) {},
+        onPreview: (_, _) {},
       );
 
       // clear() gives the new generation an independent Turn chain.

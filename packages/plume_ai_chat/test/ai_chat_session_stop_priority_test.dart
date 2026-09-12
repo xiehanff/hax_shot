@@ -50,13 +50,13 @@ void main() {
 
     final Future<AiChatTurnResult> first = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'first'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await backend.waitForCalls(1);
 
     final Future<AiChatTurnResult> second = session.send(
       userMessage: const AiChatHistoryMessage.user(content: 'second'),
-      onPreview: (_, __) {},
+      onPreview: (_, _) {},
     );
     await Future<void>.delayed(Duration.zero);
     expect(backend.requests, hasLength(1));
