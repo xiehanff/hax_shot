@@ -98,6 +98,10 @@ patchelf --set-rpath '$ORIGIN/lib' "$pkg_root/opt/hax-shot/hax_shot"
 find "$pkg_root/opt/hax-shot/lib" -type f -name '*.so*' \
   -exec patchelf --set-rpath '$ORIGIN' {} +
 
+# 与 RPM spec 的 Requires 对齐：GNOME/Mutter、GStreamer 和 PipeWire 都不随包捆绑；
+# keybinder 是 hotkey_manager_linux 链接的全局快捷键库。t64 后缀是 Ubuntu 24.04 的
+# 时间戳 ABI 重命名，别名写在前面让两边都能装上。
+# note: control 文件不能带注释行，说明只能写在这里。
 cat > "$pkg_root/DEBIAN/control" <<EOF
 Package: hax-shot
 Version: $full_version
@@ -105,8 +109,6 @@ Section: graphics
 Priority: optional
 Architecture: amd64
 Maintainer: xiehan <chinkout@163.com>
-# 与 RPM spec 的 Requires 对齐：GNOME/Mutter、GStreamer 和 PipeWire 都不随包捆绑。
-# t64 后缀是 Ubuntu 24.04 的时间戳 ABI 重命名，别名写在前面让两边都能装上。
 Depends: libc6, libgtk-3-0 | libgtk-3-0t64, libglib2.0-0 | libglib2.0-0t64, libstdc++6,
  libkeybinder-3.0-0,
  libgstreamer1.0-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
