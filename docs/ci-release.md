@@ -28,6 +28,10 @@ on:
 - 修改 PR；
 - 手动 `workflow_dispatch` 干跑（见下文）。
 
+补充：`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`。发布流程是先推
+`release: vX.Y.Z`（只改版本号）再推 tag，这个提交不会触发 Verify——同一个 commit 由
+Release 跑一遍就够，否则两个 workflow 会把它各构建一次。带代码的提交不受影响。
+
 以下操作会触发打包：
 
 ```bash
@@ -78,6 +82,9 @@ git add .
 git commit -m "release: v1.3.0"
 git push origin main
 ```
+
+这一步只改 `pubspec.yaml`，不会触发 `verify.yml`（见第 1 节的 `paths-ignore`）：这个
+commit 马上就会被 tag 的 Release workflow 完整构建一遍，没必要再跑一次 Verify。
 
 需要发布时，在**已经推送的**那个 commit 上创建带注释的 tag：
 

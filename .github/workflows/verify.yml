@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    # 发布提交只改 pubspec.yaml 的版本号。那种提交紧接着就会打 v* tag，由 release.yml
+    # 完整跑一遍构建/打包；这里跳过，免得同一个 commit 被 Verify 和 Release 各跑一遍
+    # （paths-ignore 只在本次 push 的全部改动都命中时才跳过，带代码的提交仍会跑）。
+    paths-ignore:
+      - 'pubspec.yaml'
   pull_request:
 
 permissions:

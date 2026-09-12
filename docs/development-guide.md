@@ -1220,7 +1220,7 @@ pkill -x hax_shot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`：发布提交只改版本号，紧接着就会被 tag 的 Release workflow 构建，不需要再跑一次 Verify。
 
 发布前本地执行：
 
