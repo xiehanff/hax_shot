@@ -119,14 +119,16 @@ jobs:
 
       # RunnerTests 是 macOS 侧唯一的行为门禁（窗口 styleMask / 圆角 / traffic light），
       # 之前只存在于本地。两个约束：
-      #   1. 必须先跑一次 `flutter build macos`：`macos/Flutter/ephemeral/*.xcfilelist`
-      #      和 Pods 的 xcfilelist 都由那一步生成，直接 xcodebuild 会报
-      #      “Unable to load contents of file list”（`flutter pub get` 不够）；
+      #   1. `macos/Flutter/ephemeral/*.xcfilelist` 和 Pods 的 xcfilelist 必须先由 Flutter
+      #      生成，直接 xcodebuild 会报 “Unable to load contents of file list”
+      #      （`flutter pub get` 不够）。用 `--config-only`：只生成这些配置 + 跑 pod install，
+      #      不编译 app —— Debug app 由下面的 xcodebuild test 自己编，不要在这里先整包
+      #      构建一遍，否则白花约两分钟；
       #   2. 测试必须用 Debug 配置：RunnerTests 是 `@testable import hax_shot`，
       #      Release 关掉了 testability，会报 “Module 'hax_shot' was not compiled for testing”。
       # CODE_SIGNING_ALLOWED=NO：CI 没有证书，测试也不需要签名。
-      - name: Build macOS debug bundle
-        run: flutter build macos --debug
+      - name: Generate macOS Xcode config
+        run: flutter build macos --config-only --debug
 
       - name: Run RunnerTests (XCTest)
         run: |

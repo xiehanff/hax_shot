@@ -730,9 +730,11 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
 这个测试是 **app-hosted** 的（`@testable import hax_shot`，宿主就是应用本体），所以本地跑它有三条硬要求，不然报的错跟真实问题毫无关系：
 
 ```bash
-# 1. 先跑一次 build：macos/Flutter/ephemeral/*.xcfilelist 和 Pods 的文件列表都由它生成，
-#    直接 xcodebuild 会报 “Unable to load contents of file list”（flutter pub get 不够）
-fvm flutter build macos --debug
+# 1. 先让 Flutter 生成 macos/Flutter/ephemeral/*.xcfilelist 和 Pods 的文件列表：直接
+#    xcodebuild 会报 “Unable to load contents of file list”（flutter pub get 不够）。
+#    用 --config-only 就够：只生成配置 + 跑 pod install（几秒），Debug app 交给下面的
+#    xcodebuild test 自己编；先整包 `flutter build macos --debug` 会白花约两分钟。
+fvm flutter build macos --config-only --debug
 # 2. 必须 Debug 配置：Release 关掉了 testability，会报 “not compiled for testing”
 # 3. 先退出正在运行的 Hax Shot：单实例锁会让宿主 app 启动即退出，
 #    XCTest 只会说 “Early unexpected exit / Test crashed with signal kill”
@@ -1218,7 +1220,7 @@ pkill -x hax_shot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。
 
 发布前本地执行：
 
