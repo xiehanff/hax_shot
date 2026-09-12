@@ -1,11 +1,13 @@
 name: Release
 
-# 只在推送版本 tag 时发布：main push / PR / 手动运行都不打包。
+# 只在推送版本 tag 时发布：main push / PR 不打包；手动 workflow_dispatch 用于干跑
+# （构建 job 全跑，但不发布 Release），新改打包链路时先用干跑验证再打 tag。
 # 普通提交的检查由 verify.yml 负责（analyze、test、linux build）。
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 concurrency:
   group: hax-shot-release-${{ github.ref_name }}
@@ -34,6 +36,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
+            echo "Dry run on '${GITHUB_REF_NAME}': skipping tag/version check."
+            exit 0
+          fi
           tag_version="${GITHUB_REF_NAME#v}"
           pubspec_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)"
           app_version="${pubspec_version%%+*}"
@@ -245,6 +251,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
+    # 只在真正的 tag push 时发布；workflow_dispatch 干跑只验证构建产物。
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [preflight, linux, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -264,6 +272,7 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |

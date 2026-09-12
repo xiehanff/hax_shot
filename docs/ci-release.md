@@ -22,17 +22,24 @@ on:
       - 'v*'
 ```
 
-因此以下操作不会打包或创建 Release：
+因此以下操作不会发布 Release：
 
 - `git push origin main`；
 - 修改 PR；
-- 在 Actions 页面手动点击运行（工作流没有 `workflow_dispatch`）。
+- 手动 `workflow_dispatch` 干跑（见下文）。
 
 以下操作会触发打包：
 
 ```bash
 git push origin v1.3.0
 ```
+
+### 干跑（不发布）
+
+`release.yml` 还支持 `workflow_dispatch`：构建 job（Linux、macOS）全部执行并上传
+Actions artifact，但最后一步发布 Release 只在 tag push 时运行。改打包脚本或工作流
+之后，先在 Actions 页面手动 Run workflow（或 `gh workflow run release.yml`）干跑一次，
+确认绿了再打 tag——不要用真 tag 试错。
 
 ## 2. 版本约定
 
