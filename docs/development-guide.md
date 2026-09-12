@@ -271,6 +271,41 @@ gst-inspect-1.0 pngenc
 
 常见误区：Rust 的 `cargo build` 只会编译 Rust binding，不会把系统的 GStreamer/PipeWire 插件打包进 Flutter bundle。目标机器仍必须安装 `pipewiresrc`、`pngenc` 和 PipeWire 服务。
 
+### `hotkey_manager_linux` 在 clang 22 上编译失败
+
+`fvm flutter build linux --release` 编译插件时用的是本项目 `linux/CMakeLists.txt` 里的
+`apply_standard_settings`，它带 `-Wall -Werror`。`hotkey_manager_linux 0.2.0` 的
+`linux/hotkey_manager_linux_plugin.cc` 有两处局部指针可能未初始化（`handle_key_down` 的
+`identifier`、`hkm_unregister` 的 `keystring`），clang 22 会直接把警告升级成错误：
+
+```text
+error: variable 'identifier' is used uninitialized whenever 'if' condition is false [-Werror,-Wsometimes-uninitialized]
+error: variable 'keystring' is used uninitialized whenever 'if' condition is false [-Werror,-Wsometimes-uninitialized]
+```
+
+这是上游插件的真实 bug：`hotkey_id_map` 里查不到 key 时，未初始化的指针会被交给
+`fl_value_new_string` / `keybinder_unbind`。文件不在本仓库，改的是 pub 缓存：
+
+```text
+~/.pub-cache/hosted/pub.dev/hotkey_manager_linux-0.2.0/linux/hotkey_manager_linux_plugin.cc
+```
+
+把两处 `if (result != hotkey_id_map.end())` 赋值改成“找不到就先退出”：
+
+```cpp
+  if (result == hotkey_id_map.end())
+    return;                       // handle_key_down
+  const char* identifier = result->first.c_str();
+
+  if (result == hotkey_id_map.end())
+    return FL_METHOD_RESPONSE(    // hkm_unregister
+        fl_method_success_response_new(fl_value_new_bool(true)));
+  const char* keystring = result->second.c_str();
+```
+
+patch 只存在于 pub 缓存，`flutter pub cache clean` / `pub cache repair`、切换 pub 镜像
+或升级 `hotkey_manager` 之后都会丢失，届时按上面的方式重新打一遍。
+
 ### Rust 构建
 
 ```bash
@@ -653,6 +688,29 @@ Windows/Linux 用透明，否则 `ClipRRect` 剪掉的四角露出的是一块�
 （它自己画满冻结画面）。这条改动没有 Windows/Linux 实机验证过。Windows 平台未实现
 （见 §14），那里同样的分支只是 Flutter 模板遗留。**截图浮层
 （`CapturePage`）永远不要包 `RoundedWindow`**：那里必须直角铺满。
+
+#### Linux 的窗口透明是怎么来的
+
+Linux 只裁 `ClipRRect` 是不够的：窗口自己有背景色，裁掉的那四个角会露出方形底色
+（用户报的就是“背景方形 + Flutter UI 有圆角”）。要真正透明，下面几处缺一不可：
+
+1. `linux/runner/my_application.cc` 把窗口的 visual 换成 RGBA，并 `app_paintable`，
+   否则合成到桌面的帧没有 alpha 通道；
+2. 同一个文件里给窗口加 `hax-shot-rounded` CSS 类，把 `window` / `decoration` 的
+   `background-color`、`background-image`、`border`、`box-shadow` 全部清掉：Adwaita
+   会在这些节点上画底色和 CSD 阴影，不清就还是一圈方形边框；
+3. `fl_view_set_background_color(view, "#00000000")`。引擎里 `paint_background` 在
+   alpha 为 0 时直接跳过绘制（见 `shell/platform/linux/fl_view.cc`），所以这一步是让
+   引擎不再在图没铺到的地方画黑底；
+4. `lib/main.dart` 的 `WindowOptions.backgroundColor` 在 Linux 传 `Colors.transparent`：
+   window_manager 的 Linux 实现会把它写成全局 CSS `window { background-color: ... }`，
+   传黑色就等于又给窗口涂了一层黑底。
+
+拿不到 RGBA visual（例如 X11 没开合成器）时 runner 会退回不透明黑底：那种环境下
+透明窗口露出的是未初始化的画面。所以“圆角处是黑的”先确认会话是 Wayland/GNOME，
+再看上面四处是否都在。
+
+macOS 不受影响：它靠系统 titled 窗口画原生圆角，`RoundedWindow` 在那边不生效。
 
 #### 保存/复制：PNG 编码走 Rust，浮层先收起
 

@@ -35,10 +35,12 @@ Future<void> main(List<String> args) async {
   final nativeCaptureOverlay = captureMode && Platform.isMacOS;
   final options = WindowOptions(
     title: 'Hax Shot',
-    // Win/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
-    // 只有底色透明，剪掉的四角才会露出桌面。macOS 不能一起改：titled 窗口由系统
-    // 自己裁圆角，透明底色会露出 NSWindow 底色/桌面，且本机浮层依赖不透明底色兜底。
-    // 全屏浮层不受影响：它自己画满冻结画面，不依赖窗口底色。
+    // Windows/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
+    // 只有底色透明，剪掉的四角才会露出桌面，而不是 window_manager 写进 GTK CSS 的
+    // 那层背景色（看起来就是“有圆角但角外是方块”）。macOS 不能一起改：titled 窗口
+    // 由系统自己裁圆角，透明底色会露出 NSWindow 底色/桌面，且本机浮层依赖不透明底色
+    // 兜底。全屏浮层不受影响：它自己画满冻结画面，不依赖窗口底色。
+    // 详见 docs/development-guide.md 的“窗口圆角”。
     backgroundColor: Platform.isMacOS ? Colors.black : Colors.transparent,
     // The tray host only reveals the shortcut settings page on demand; keep
     // that temporary window compact instead of inheriting a full-screen size.

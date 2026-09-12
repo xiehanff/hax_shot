@@ -126,10 +126,44 @@ static void my_application_activate(GApplication* application) {
 #endif
 
   FlView* view = fl_view_new(project);
+
+  // 圆角窗口：Dart 侧用 RoundedWindow（ClipRRect，半径 12）裁圆角，只有窗口本身
+  // 透明，裁掉的四个角才会露出桌面；否则看到的是窗口背景色的方形色块。
+  // macOS 不需要这一段：它的 titled 窗口由系统裁原生圆角。
+  //
+  // 三件事缺一不可：
+  //   1. 窗口换 RGBA visual：合成到桌面的那一帧才带 alpha 通道；
+  //   2. window/decoration 背景透明 + app_paintable：GTK 主题不替窗口涂底色，
+  //      也不留 CSD 阴影边框；
+  //   3. FlView 背景全透明：引擎不再在图没铺到的地方画黑底
+  //      （fl_view.cc 的 paint_background 在 alpha 为 0 时直接跳过绘制）。
+  GdkScreen* window_screen = gtk_widget_get_screen(GTK_WIDGET(window));
+  GdkVisual* rgba_visual = gdk_screen_get_rgba_visual(window_screen);
   GdkRGBA background_color;
-  // Background defaults to black, override it here if necessary, e.g. #00000000
-  // for transparent.
-  gdk_rgba_parse(&background_color, "#000000");
+  if (rgba_visual != nullptr && gdk_screen_is_composited(window_screen)) {
+    gtk_widget_set_visual(GTK_WIDGET(window), rgba_visual);
+    gtk_widget_set_app_paintable(GTK_WIDGET(window), TRUE);
+
+    GtkCssProvider* provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(
+        provider,
+        "window.hax-shot-rounded, window.hax-shot-rounded:backdrop,"
+        " window.hax-shot-rounded decoration {"
+        " background-color: transparent; background-image: none;"
+        " border: none; box-shadow: none; }",
+        -1, nullptr);
+    GtkStyleContext* style = gtk_widget_get_style_context(GTK_WIDGET(window));
+    gtk_style_context_add_class(style, "hax-shot-rounded");
+    gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(provider),
+                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(provider);
+
+    gdk_rgba_parse(&background_color, "#00000000");
+  } else {
+    // 没有 RGBA visual（例如 X11 没开合成器）时保持不透明黑底：透明窗口在那种
+    // 环境下会露出未初始化的画面。
+    gdk_rgba_parse(&background_color, "#000000");
+  }
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
