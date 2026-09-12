@@ -1147,7 +1147,7 @@ pkill -x hax_shot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/build-rpm.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行。普通 `main` push、Pull Request 和手动运行不会触发发布（`main` push 只跑 `verify.yml` 的 analyze/test/build）。
 
 发布前本地执行：
 
@@ -1166,7 +1166,7 @@ tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 version: 1.3.0+1  →  git push origin v1.3.0
 ```
 
-推送 tag 后，工作流会重新执行 Dart/Rust 检查，构建 Fedora x86_64 RPM，保存 Actions artifact，并把 RPM 上传到对应 GitHub Release。不要为普通开发 commit 创建 `v*` tag；完整操作见 [`ci-release.md`](./ci-release.md)。
+推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；`macos` job 的签名/公证依赖仓库 secrets（未配置时退化为 ad-hoc DMG），完整操作见 [`ci-release.md`](./ci-release.md)。
 
 ## 14. 已知限制和未完成项
 

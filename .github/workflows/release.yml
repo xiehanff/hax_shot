@@ -1,0 +1,280 @@
+name: Release
+
+# 只在推送版本 tag 时发布：main push / PR / 手动运行都不打包。
+# 普通提交的检查由 verify.yml 负责（analyze、test、linux build）。
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: hax-shot-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.44.8'
+  NOTARY_PROFILE: hax-shot-notary
+
+jobs:
+  preflight:
+    name: Verify tag matches pubspec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches pubspec version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          pubspec_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1)"
+          app_version="${pubspec_version%%+*}"
+          if [[ -z "${pubspec_version}" || "${tag_version}" != "${app_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} must match pubspec version ${app_version}." >&2
+            echo "The build metadata (+N) becomes the Fedora RPM release number." >&2
+            exit 1
+          fi
+          echo "Releasing Hax Shot ${tag_version} (pubspec ${pubspec_version})."
+
+  linux:
+    name: Linux (.deb + .rpm)
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
+            patchelf \
+            rpm \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      - name: Build Linux release bundle
+        run: flutter build linux --release
+
+      - name: Package DEB
+        run: ./scripts/build_linux_deb.sh --skip-build
+
+      - name: Package RPM
+        run: ./scripts/build_linux_rpm.sh --skip-build
+
+      - name: Verify packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=(build/linux/x64/release/hax-shot_*.deb)
+          rpm=(build/linux/x64/release/hax-shot-*.rpm)
+          test -f "${deb[0]}"
+          test -f "${rpm[0]}"
+          # 两个包都必须带上 Rust 原生库，缺了就是 bundle 没打全。
+          dpkg-deb -c "${deb[0]}" | grep -q 'opt/hax-shot/lib/libhax_shot_native.so'
+          rpm -qlp "${rpm[0]}" | grep -q '/opt/hax-shot/lib/libhax_shot_native.so'
+          printf 'DEB: %s\nRPM: %s\n' "${deb[0]}" "${rpm[0]}"
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: hax-shot-linux-${{ github.ref_name }}
+          path: |
+            build/linux/x64/release/hax-shot_*.deb
+            build/linux/x64/release/hax-shot-*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: macOS (.dmg)
+    needs: preflight
+    # 项目只支持 Apple Silicon（macos/Runner/Configs/AppInfo.xcconfig 里 ARCHS = arm64），
+    # 所以固定用 arm64 的 runner 镜像。
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          if [[ "${arch}" != "arm64" ]]; then
+            echo "This runner is ${arch}; Hax Shot only ships arm64 macOS builds." >&2
+            exit 1
+          fi
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      # 没有配置 Developer ID 证书时，脚本会退化成 ad-hoc 签名：DMG 仍然能下载，
+      # 但在别人的 Mac 上会被 Gatekeeper 拦。这些 secret 见 docs/ci-release.md。
+      - name: Configure macOS signing
+        id: signing
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CERTIFICATE_P12:-}" ]]; then
+            echo "::warning::未配置 Developer ID 证书，本次 DMG 是 ad-hoc 签名，别人的 Mac 上会被 Gatekeeper 拒绝"
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          keychain="$RUNNER_TEMP/hax-shot-signing.keychain-db"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain"
+          echo "${MACOS_CERTIFICATE_P12}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # 不给 keychain 里的私钥授权，codesign 会静默取不到身份。
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+            xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID"
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::已配置 Developer ID 证书但没有公证凭据，DMG 已签名但未公证"
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build, sign and package DMG
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.signing.outputs.notarize }}" == "true" ]]; then
+            ./scripts/build_macos_dmg.sh --notarize
+          else
+            ./scripts/build_macos_dmg.sh
+          fi
+
+      - name: Verify DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=(build/macos/HaxShot-*-arm64.dmg)
+          test -f "${dmg[0]}"
+          app="build/macos/Build/Products/Release/hax_shot.app"
+          test "$(lipo -archs "$app/Contents/MacOS/hax_shot")" = "arm64"
+          test "$(lipo -archs "$app/Contents/Frameworks/libhax_shot_native.dylib")" = "arm64"
+          printf 'DMG: %s\n' "${dmg[0]}"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hax-shot-macos-${{ github.ref_name }}
+          path: build/macos/HaxShot-*-arm64.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [preflight, linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh dist
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No assets were downloaded from the build jobs." >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" \
+              --title "Hax Shot ${TAG}" \
+              --generate-notes \
+              --verify-tag
+          fi

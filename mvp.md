@@ -1,6 +1,6 @@
 # Hax Shot Flutter + Rust MVP1 方案
 
-> 本文记录基础截图链路的 MVP1 方案和历史验收标准。当前 MVP2 已增加自启动、矩形、箭头和文字标注；发布 RPM 的流程见 [`docs/ci-release.md`](docs/ci-release.md)。参考源码阅读报告见 [`docs/README.md`](docs/README.md)，实现前先阅读 `docs/reference-decisions.md`。
+> 本文记录基础截图链路的 MVP1 方案和历史验收标准。当前 MVP2 已增加自启动、矩形、箭头和文字标注；发布安装包（DMG/DEB/RPM）的流程见 [`docs/ci-release.md`](docs/ci-release.md)。参考源码阅读报告见 [`docs/README.md`](docs/README.md)，实现前先阅读 `docs/reference-decisions.md`。
 
 ## 1. 目标
 

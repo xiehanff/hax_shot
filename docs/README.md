@@ -16,7 +16,7 @@
 | — | [当前实现与开发指南](./development-guide.md) | 当前代码入口、运行方式、坑点、验证和交接信息 |
 | — | [MVP2 功能说明](./mvp2.md) | 自启动、矩形、箭头、文字标注和导出坐标 |
 | — | [Linux 打包与分发](./packaging.md) | Fedora RPM、Rust 动态库、系统运行依赖和安装流程 |
-| — | [CI 与 GitHub Release](./ci-release.md) | 版本 tag 触发 RPM 构建并上传 GitHub Release |
+| — | [CI 与 GitHub Release](./ci-release.md) | 版本 tag 触发 DMG/DEB/RPM 构建并上传 GitHub Release |
 | — | [Hax Shot AI](./ai.md) | 截图视觉 AI、对话侧栏和 DeepSeek 流式请求 |
 
 ## 结论先看

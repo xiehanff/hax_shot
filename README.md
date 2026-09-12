@@ -179,21 +179,21 @@ Alt+Z → hax_shot --capture
 - [MVP2 功能说明](./docs/mvp2.md)
 - [Linux 打包与分发](./docs/packaging.md)
 - [macOS 打包与分发](./docs/macos-distribution.md)
-- [CI 与 GitHub Release](./docs/ci-release.md)
+- [CI 与 GitHub Release](./docs/ci-release.md)（tag 触发 DMG/DEB/RPM 构建与发布）
 - [许可证与第三方声明](./THIRD_PARTY_NOTICES.md)
 
 ## CI 与 GitHub Release
 
-GitHub Actions 只在推送版本 tag 时运行打包流程，不会因为普通 `main` 分支 push 或手动运行 workflow 而发布 RPM：
+GitHub Actions 只在推送版本 tag 时运行打包流程，不会因为普通 `main` 分支 push 或手动运行 workflow 而发布安装包：
 
 ```bash
 git tag -a v1.3.0 -m "Release v1.3.0"
 git push origin v1.3.0
 ```
 
-tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.3.0+1` 使用 `v1.3.0`。`+1` 会成为 Fedora RPM 的 Release 字段。构建通过后，RPM 会自动上传到对应的 GitHub Release 页面。
+tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.3.0+1` 使用 `v1.3.0`。发布流程会构建三平台安装包（macOS arm64 DMG、Debian/Ubuntu DEB、Fedora RPM），全部上传到对应的 GitHub Release 页面；RPM 的 Release 字段和 DEB 的版本号取自 `+1`。普通 `main` push 上的 analyze/test 由 `verify.yml` 负责。
 
-详细流程见 [CI 与 GitHub Release](./docs/ci-release.md)。
+详细流程（含 macOS 签名/公证 secrets）见 [CI 与 GitHub Release](./docs/ci-release.md)。
 
 ## 许可证
 
