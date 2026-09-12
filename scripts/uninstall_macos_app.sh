@@ -95,7 +95,18 @@ echo "== 5/5 清理用户数据 =="
 if [[ $keep_prefs -eq 1 ]]; then
   echo "   --keep-prefs：保留偏好设置"
 else
-  remove_path "$HOME/Library/Preferences/${bundle_id}.plist"
+  # 必须走 defaults delete（cfprefsd API），不能直接 rm plist：直接删文件会让 cfprefsd
+  # 留着坏掉的 domain，下一次启动的 SharedPreferences 调用会一直不返回，表现出来就是
+  # 那次启动没有全局快捷键（菜单能用）。见 docs/development-guide.md 6.6。
+  if [[ $dry_run -eq 1 ]]; then
+    echo "   [dry-run] defaults delete $bundle_id"
+  else
+    if defaults delete "$bundle_id" >/dev/null 2>&1; then
+      echo "   已删除偏好设置：$bundle_id"
+    else
+      echo "   跳过（不存在）：偏好设置 $bundle_id"
+    fi
+  fi
   # 系统给应用生成的缓存/状态目录（不一定存在，存在才删）。
   remove_path "$HOME/Library/Saved Application State/${bundle_id}.savedState"
   remove_path "$HOME/Library/Caches/${bundle_id}"

@@ -133,6 +133,10 @@ scripts/uninstall_macos_app.sh --dir ~/Apps    # 应用装在别处
 生成的 `Saved Application State` / `Caches` / `HTTPStorages` 目录。开发用自签名证书和
 `build/macos/` 里的构建产物不在范围里，脚本结尾会提示对应命令。
 
+清偏好设置用的是 `defaults delete <bundle id>`，不是 `rm` 那个 plist：直接删文件会让
+cfprefsd 留着坏掉的 domain，卸载后**第一次**启动会没有全局快捷键（菜单栏图标仍在，
+再启动一次才自愈），原因和排查见 [开发指南 6.6](./development-guide.md)。
+
 ## 6. 发布前检查清单
 
 ```bash

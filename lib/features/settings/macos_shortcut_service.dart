@@ -27,19 +27,39 @@ final class MacosShortcutService implements ShortcutService {
 
   HotKey? _registered;
 
+  /// 读取/写入偏好设置的上限。
+  ///
+  /// `SharedPreferences` 底层是原生 `NSUserDefaults`；正常情况下一瞬间就返回，但它
+  /// 会卡住时**永远不会**返回：偏好 plist 被 `rm` 直接删掉（而不是用 `defaults delete`）
+  /// 后，cfprefsd 会留着坏掉的 domain，下一次启动的读写就吊在那里。菜单栏图标可能被
+  /// Bartender 这类工具藏起来，快捷键是唯一的兜底入口，所以这里必须给它一个上限：
+  /// 宁可退回内置默认值，也不能因为偏好层故障就没有快捷键。
+  static const _preferenceTimeout = Duration(seconds: 2);
+
   @override
   Future<void> activate({required void Function() onTriggered}) async {
     // 读配置、注册失败都不能冒泡出去：托盘菜单的创建排在后面，一旦中断用户就没有
     // 任何入口了（托盘菜单里才有“立即截屏”）。
     try {
-      var binding = await readBinding();
+      var binding = await readBinding().timeout(
+        _preferenceTimeout,
+        onTimeout: () {
+          debugPrint('读取快捷键设置超时，先用默认值注册');
+          return null;
+        },
+      );
       if (binding == null || binding == _legacyDefaultBinding) {
         final migrated = binding == _legacyDefaultBinding;
         binding = defaultBinding;
-        await _writeBinding(binding);
-        debugPrint(
-          migrated ? '已把旧默认快捷键迁移为：$binding' : '首次启动，使用默认全局快捷键：$binding',
-        );
+        try {
+          await _writeBinding(binding).timeout(_preferenceTimeout);
+          debugPrint(
+            migrated ? '已把旧默认快捷键迁移为：$binding' : '首次启动，使用默认全局快捷键：$binding',
+          );
+        } on Object catch (error) {
+          // 写不进去只影响下次启动能不能记住，不影响本次注册。
+          debugPrint('保存默认快捷键失败（仍然注册）：$error');
+        }
       }
       await _register(binding, onTriggered);
     } on Object catch (error) {

@@ -586,6 +586,13 @@ macOS 没有 gsettings，用成熟的第三方包 **`hotkey_manager`**（macOS �
 菜单栏图标可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
 旧版本自动写入的 `<Alt>z` 会在启动时迁移到新默认值，确保已有安装也立即生效。
 
+读取/写入偏好设置都带 2 秒超时（`_preferenceTimeout`）：偏好层故障时退回内置默认值，
+仍然把热键注册上。这不是多余的防御——已经实测复现过：直接用 `rm` 删掉
+`~/Library/Preferences/com.github.xiehanff.haxShot.plist`（而不是走 `defaults delete`）
+会让 cfprefsd 留着坏掉的 domain，下一次启动的 `SharedPreferences` 调用**永远不返回**，
+表现为“菜单栏能用、快捷键完全没反应、偏好设置里什么都没有”；再启动一次就自愈。
+所以 `scripts/uninstall_macos_app.sh` 清偏好必须用 `defaults delete`，不要改成 `rm`。
+
 ```text
 托盘宿主启动
     ↓ shortcutService.activate(onTriggered: _startCapture)
