@@ -127,8 +127,14 @@ fvm flutter run -d linux -- --capture
 2. `CapturePage` 首帧后调用 `NativeBridge.captureScreen()`；
 3. Rust 完成 ScreenCast + GStreamer 单帧 PNG；
 4. Dart 解码 PNG；
-5. 窗口才 `show()`、`focus()`；
+5. 窗口才 `show()`、`focus()`；macOS 先在 `becomeOverlay()` 里激活 LSUIElement 应用，
+   避免 AppKit 把快捷键启动的浮层排到当前前台窗口后面；
 6. `Esc`、保存成功或复制成功后关闭进程。
+
+隐藏阶段的原生抓屏最多等 5 秒；否则用户只看到“快捷键没反应”，后台捕获进程却会一直存在
+并占住捕获锁。`Future.timeout` 不能可靠取消已经进入 FFI 的 worker isolate，因此超时后不能进入
+带“重试”的普通失败面板，而要直接 `exitProcessNow()`，由操作系统同时清掉 worker 和捕获锁；
+用户随后再次触发会得到一份全新的捕获进程。
 
 `linux/runner/my_application.cc` 中已经移除了旧的 `first-frame` 自动 `gtk_widget_show()`。这是故意的：如果 native first-frame 回调再次显示窗口，捕获时机就会被破坏。
 
@@ -576,8 +582,9 @@ frame              = CaptureDisplay.targetScreen().frame
 macOS 没有 gsettings，用成熟的第三方包 **`hotkey_manager`**（macOS 端依赖 soffes/HotKey，
 底层是 Carbon `RegisterEventHotKey`）注册全局热键，不自己写 Carbon 调用。
 
-首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Alt>z`（即 `⌥Z`）——菜单栏图标
-可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
+首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Super><Shift>z`（即 `⌘⇧Z`）——
+菜单栏图标可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
+旧版本自动写入的 `<Alt>z` 会在启动时迁移到新默认值，确保已有安装也立即生效。
 
 ```text
 托盘宿主启动
@@ -820,9 +827,15 @@ nib 会在启动阶段就把主窗口排到最前，而这时 Flutter 还没画�
 捕获进程是 `.screenSaver` 层级、铺满整块屏的浮层：**一旦它退不出去，用户连菜单栏都点不到，
 整台电脑就没法用了**。所以：
 
+- 快捷键触发时 Hax Shot 通常不是前台应用；`becomeOverlay()` 必须先
+  `NSApp.activate(ignoringOtherApps: true)`，再由 Dart `show()`。不能继续依赖
+  `window_manager.show()` 里“先显示、后异步激活”的顺序，否则 AppKit 可能把已经抓完屏的浮层
+  排到当前应用后面，用户看到的就是快捷键没反应；
 - Esc 有**原生兜底**：`CaptureOverlayWindow.installEscapeMonitor()` 装 local monitor，
   窗口覆盖整屏时直接 `_exit(0)`。不依赖 Flutter 焦点树，也不依赖 `performClose`
-  （后者对无边框窗口不一定生效）。
+  （后者对无边框窗口不一定生效）。但如果重复触发叠了多层浮层，每次 Esc 只能结束最上面
+  一个进程，看起来仍像“Esc 失效”；所以 `main.dart` 的捕获分支必须先取得捕获专用文件锁，
+  拿不到就在窗口插件初始化前硬退出。
 - 引导页、AI 面板各有自己的 Esc 处理；AI 面板还有右上角 ✕。
 - **AI 面板接管同一个窗口前，必须先把浮层状态退掉**：`CaptureOverlayWindow.exitOverlay()`
   恢复 `level = .normal` 和 `collectionBehavior = []`，再让 Dart 改尺寸。顺序反了的话，
@@ -1263,14 +1276,21 @@ Windows（未实现）：
 
 - 暂不捕获鼠标光标；
 - 暂不支持 OCR、贴图、持久化会话、录屏和滚动截图；AI 会话仅在当前进程内保留；
-- 快捷键每次启动独立 `--capture` 进程，尚未实现多次触发的单实例锁；
-- 托盘宿主有单实例保护（`lib/features/app/single_instance_guard.dart`）：`lib/main.dart`
+- 快捷键每次启动独立 `--capture` 进程，但同一时间只允许一个进程进入全屏捕获：
+  `lib/main.dart` 的捕获分支调用 `acquireCapture()`，拿不到捕获专用文件锁就在窗口插件初始化前
+  `exitProcessNow()`。捕获锁检查失败必须 fail-close，宁可少截一次也不能叠全屏窗口。进入普通
+  AI 面板后释放锁，用户仍可开始下一次截图；授权后重启则由旧进程持锁启动带
+  `--capture-handoff <旧 PID>` 的接替者。接替者先持有预约锁并写 ready 文件，旧进程确认后才
+  硬退出；预约期间普通快捷键进程直接退出，不能争抢刚释放的捕获锁。这个约束不能删，
+  否则一次重复菜单/热键事件会叠出多个 `.screenSaver`
+  浮层，每按一次 Esc 只退出一层，表现成主屏卡死；
+- 托盘宿主也有单实例保护（`lib/features/app/single_instance_guard.dart`）：`lib/main.dart`
   的非 `--capture` 分支调 `acquire()`，用的是内核级文件锁（`FileLock.exclusive`，非阻塞），
   拿不到就直接 `exitProcessNow()`；`lib/app.dart` 的 `_quit()` 在最后调 `release()`。**没有它会出现
   “从托盘退出后按快捷键还能截图”**——两份宿主各自注册了进程内的全局快捷键，退出的只是
   其中一份。不要改成“记 PID + SIGTERM”：有竞态和 PID 复用误杀的风险。Linux 上同类问题是
   gsettings 里的快捷键指向旧的 release 路径，要重跑 `scripts/install-gnome-shortcut.sh`；
-- 还没有默认快捷键：Linux 需要运行 `scripts/install-gnome-shortcut.sh`，macOS 需要在设置页录制。
+- Linux 需要运行 `scripts/install-gnome-shortcut.sh` 安装默认快捷键；macOS 首次启动会自动注册 `⌘⇧Z`，也可以在设置页重新录制。
 
 ## 15. 给后续 Agent 的最短交接信息
 

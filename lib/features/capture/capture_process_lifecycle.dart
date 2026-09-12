@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../app/hard_exit.dart';
+import '../app/single_instance_guard.dart';
 import '../window/window_visibility.dart';
 import 'capture_overlay_window.dart';
 
@@ -80,18 +81,32 @@ class CaptureProcessLifecycle {
 
   /// 重启一个新的抓屏进程，然后把当前进程结束掉。
   Future<void> relaunch() async {
+    final token = '$pid';
+    Process? child;
     try {
+      // 接替者先取得预约锁并写 ready 文件；旧进程收到确认后才硬退出。预约期间
+      // 普通快捷键进程会直接退出，不会和接替者争抢刚释放的捕获锁。
+      SingleInstanceGuard.prepareCaptureHandoff(token);
       final args = <String>[
         '--capture',
+        SingleInstanceGuard.captureHandoffArgument,
+        token,
         if (targetDisplay != null) ...['--display', '$targetDisplay'],
       ];
-      await Process.start(
+      child = await Process.start(
         Platform.resolvedExecutable,
         args,
         mode: ProcessStartMode.detached,
       );
+      if (!await SingleInstanceGuard.waitForCaptureHandoff(token)) {
+        child.kill(ProcessSignal.sigkill);
+        throw StateError('新的抓屏进程未能接管捕获锁');
+      }
       await exitProcess();
     } on Object catch (error) {
+      child?.kill(ProcessSignal.sigkill);
+      SingleInstanceGuard.cancelCaptureHandoff(token);
+      // 启动/预约失败时旧进程仍持锁，当前引导/错误窗口继续保持唯一。
       onRelaunchError(error);
     }
   }

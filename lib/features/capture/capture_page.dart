@@ -38,6 +38,8 @@ class CapturePage extends StatefulWidget {
 }
 
 class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
+  static const _captureTimeout = Duration(seconds: 5);
+
   final CaptureSession _session = CaptureSession();
 
   /// 抓屏进程/窗口生命周期。流程与文案状态在 [_flow]，文字编辑状态在 [_annotation]，
@@ -110,7 +112,12 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       // 预检的两种收尾（引导页 / 失败面板）都由 flow 负责，这里只看能不能继续。
       if (!await _flow.allowCapture()) return;
 
-      final path = await NativeBridge.instance.captureScreen();
+      // 捕获窗口此时仍隐藏；原生抓屏若永久不返回，用户只会看到“快捷键没反应”，
+      // 进程却一直占着捕获锁。超时后由下面的分支硬退出，释放进程内全部资源。
+      final path = await NativeBridge.instance.captureScreen().timeout(
+        _captureTimeout,
+        onTimeout: () => throw TimeoutException('抓屏超过 5 秒仍未完成'),
+      );
       final file = File(path);
       final bytes = await file.readAsBytes();
       final codec = await ui.instantiateImageCodec(bytes);
@@ -130,6 +137,11 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       _flow.markCaptureSucceeded();
       // 抓到画面之后才把窗口升格成铺满屏幕的浮层。
       await _process.showCaptureOverlay();
+    } on TimeoutException catch (error) {
+      // Future.timeout 不能可靠取消正在执行 FFI 的 worker isolate。直接硬退出整个
+      // 短生命周期捕获进程，才能保证原生调用、临时文件和捕获锁都不会继续残留。
+      debugPrint('截图超时，结束捕获进程：$error');
+      await _process.exitProcess();
     } on ScreenCapturePermissionException catch (error) {
       if (!mounted) return;
       await _flow.showGuide(message: error.message);

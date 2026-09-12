@@ -24,12 +24,10 @@ final class CaptureOverlayWindow {
   /// “全屏 + .screenSaver 层级”——菜单栏点不到、Esc 也退不出去。
   Future<void> exitOverlay() async {
     if (_enabled) {
-      try {
-        await _channel.invokeMethod<void>('exitOverlay');
-        return;
-      } on Object catch (error) {
-        debugPrint('退出浮层失败：$error');
-      }
+      // macOS 只有原生层能恢复 `.screenSaver` level/collectionBehavior。失败时必须
+      // 向上传播，调用方不能误以为已经安全退出并释放捕获锁。
+      await _channel.invokeMethod<void>('exitOverlay');
+      return;
     }
     await windowManager.setFullScreen(false);
   }

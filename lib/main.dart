@@ -18,15 +18,28 @@ Future<void> main(List<String> args) async {
     unawaited(_writeErrorLog(details.exception, details.stack));
     return _ErrorDetailsView(details: details);
   };
-  await windowManager.ensureInitialized();
-
   final captureMode = args.contains('--capture');
-  if (!captureMode && !SingleInstanceGuard.acquire()) {
+  if (captureMode) {
+    // 同一轮菜单/热键事件可能重复启动多个进程。必须在窗口插件初始化前抢锁，
+    // 失败者直接退出，绝不能让多个 `.screenSaver` 浮层叠在桌面上。
+    final handoff = args.contains(SingleInstanceGuard.captureHandoffArgument);
+    final handoffToken = _captureHandoffToken(args);
+    final acquired = handoff
+        ? handoffToken != null &&
+              await SingleInstanceGuard.acquireCaptureAfterHandoff(handoffToken)
+        : SingleInstanceGuard.acquireCapture();
+    if (!acquired) {
+      stderr.writeln('已有 Hax Shot 截图流程在运行，本次启动退出');
+      exitProcessNow();
+    }
+  } else if (!SingleInstanceGuard.acquire()) {
     // 托盘宿主必须唯一：否则会出现“退出了一份，另一份还握着全局快捷键”。
     // 放这里（而不是 runApp 之后）：拿不到锁就直接退出，用户看不到任何窗口。
     stderr.writeln('已有 Hax Shot 在运行，本次启动退出');
     exitProcessNow();
   }
+
+  await windowManager.ensureInitialized();
   final targetDisplay = _targetDisplay(args);
   // macOS 的浮层由 Runner 的 CaptureOverlayWindow 直接改窗口（borderless +
   // .screenSaver + 铺满目标显示器），不走 window_manager：setAlwaysOnTop 会把
@@ -84,6 +97,13 @@ Future<void> main(List<String> args) async {
       debugAiPanel: debugAiPanel,
     ),
   );
+}
+
+String? _captureHandoffToken(List<String> args) {
+  final index = args.indexOf(SingleInstanceGuard.captureHandoffArgument);
+  if (index < 0 || index + 1 >= args.length) return null;
+  final token = args[index + 1];
+  return int.tryParse(token) == null ? null : token;
 }
 
 /// 托盘宿主用 `--display <id>` 指定主浮层落在哪块显示器；授权后重启抓屏进程时

@@ -135,7 +135,7 @@ scripts/build_macos_dmg.sh --debug --install   # 本机联调用 debug DMG 并�
 scripts/uninstall_macos_app.sh  # 卸载：应用、自启动项、授权记录、偏好设置（--dry-run 可先看）
 ```
 
-macOS 首次启动会自动使用默认快捷键 `⌥Z`（菜单栏图标可能被 Bartender 这类工具收进
+macOS 首次启动会自动使用默认快捷键 `⌘⇧Z`（菜单栏图标可能被 Bartender 这类工具收进
 隐藏区，所以默认就有一个不依赖图标的入口）；可以在托盘菜单“设置”里改。
 第一次截图时不会直接弹全屏框选，而是先弹一个小窗口的授权引导：点“打开系统设置”勾选
 Hax Shot，再点“我已授权，重新检查”即可（没授权时不会盖住整个屏幕）。

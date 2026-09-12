@@ -20,7 +20,10 @@ final class MacosShortcutService implements ShortcutService {
   ///
   /// 菜单栏图标可能被 Bartender 这类菜单栏管理工具收进隐藏区，所以截图工具必须有
   /// 一个不依赖图标的入口；用户可以在设置页随时改掉它。
-  static const defaultBinding = '<Alt>z';
+  static const defaultBinding = '<Super><Shift>z';
+
+  /// 1.4.1 及更早版本自动写入的默认值；启动时迁移到新的 ⌘⇧Z。
+  static const _legacyDefaultBinding = '<Alt>z';
 
   HotKey? _registered;
 
@@ -30,10 +33,13 @@ final class MacosShortcutService implements ShortcutService {
     // 任何入口了（托盘菜单里才有“立即截屏”）。
     try {
       var binding = await readBinding();
-      if (binding == null) {
+      if (binding == null || binding == _legacyDefaultBinding) {
+        final migrated = binding == _legacyDefaultBinding;
         binding = defaultBinding;
         await _writeBinding(binding);
-        debugPrint('首次启动，使用默认全局快捷键：$binding');
+        debugPrint(
+          migrated ? '已把旧默认快捷键迁移为：$binding' : '首次启动，使用默认全局快捷键：$binding',
+        );
       }
       await _register(binding, onTriggered);
     } on Object catch (error) {

@@ -131,6 +131,9 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       // 顺序反了的话，一旦 setSize 失败，窗口会停在“全屏 + .screenSaver 层级”，
       // 菜单栏点不到、Esc 也退不出去，整台电脑就没法用了。
       await CaptureOverlayWindow.instance.exitOverlay();
+      // 窗口已从 `.screenSaver` 浮层退成普通面板，不再占用捕获独占权；此后用户
+      // 可以再次按快捷键开启新的截图，而当前 AI 会话继续保留。
+      SingleInstanceGuard.releaseCapture();
       await windowManager.setFullScreen(false);
       await windowManager.setAlwaysOnTop(false);
       await windowManager.unmaximize();
@@ -142,10 +145,10 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       await _configureAiWindow();
       unawaited(_sendAiRequest(controller, action, pngBytes));
     } on Object catch (error) {
-      // Keep the AI page visible even if the window setup fails; the sidebar
-      // can still be used to configure the API key.
-      // 请求失败的日志在 _sendAiRequest 里，这里只管窗口/面板准备。
+      // 尤其不能吞掉 exitOverlay 失败：调用方需要恢复截图交互并提示错误，捕获锁
+      // 也会因为异常发生在 releaseCapture 之前而继续持有，避免叠出第二层浮层。
       debugPrint('打开 AI 面板失败：$error');
+      rethrow;
     }
   }
 
@@ -231,6 +234,10 @@ class _TrayHostPageState extends State<TrayHostPage>
   /// 新用户很容易以为没启动（hax_pick 用一次性标记做同样的提示）。
   bool _showFirstRunGuide = false;
   String _firstRunShortcutLabel = '';
+
+  /// 同一轮原生菜单/热键事件可能连续回调；Process.start 完成前先挡住 Dart 重入。
+  /// 跨进程的最终兜底在 SingleInstanceGuard.acquireCapture()。
+  bool _startingCapture = false;
 
   @override
   void initState() {
@@ -362,6 +369,8 @@ class _TrayHostPageState extends State<TrayHostPage>
   }
 
   Future<void> _startCapture() async {
+    if (_startingCapture) return;
+    _startingCapture = true;
     try {
       await Process.start(Platform.resolvedExecutable, [
         '--capture',
@@ -369,6 +378,8 @@ class _TrayHostPageState extends State<TrayHostPage>
       ], mode: ProcessStartMode.detached);
     } on Object catch (error) {
       debugPrint('启动截图失败：$error');
+    } finally {
+      _startingCapture = false;
     }
   }
 

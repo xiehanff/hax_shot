@@ -132,5 +132,11 @@ final class CaptureOverlayWindow {
     if let screen = CaptureDisplay.targetScreen() {
       window.setFrame(screen.frame, display: true)
     }
+
+    // Hax Shot 是 LSUIElement 菜单栏应用，快捷键触发时通常不是前台应用。若等
+    // window_manager.show() 先 orderFront、再异步 activate，AppKit 会把浮层排到当前
+    // 应用窗口后面（日志："ordered front from a non-active application"），表现为
+    // 进程已经抓完屏但用户看不到。这里先激活；Dart 随后才显示窗口，不会被截进画面。
+    NSApp.activate(ignoringOtherApps: true)
   }
 }

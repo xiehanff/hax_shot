@@ -94,11 +94,11 @@ scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Sh
 1. 挂载 DMG → 拖 hax_shot.app 到“应用程序” → 打开
    （已公证：直接打开；未公证：右键→打开，或去“隐私与安全性”里放行）
 2. 没有 Dock 图标！它是菜单栏应用（LSUIElement），只在菜单栏右侧出现一个小图标
-3. 按 ⌥Z 或点菜单栏图标 → “立即截屏”
+3. 按 ⌘⇧Z 或点菜单栏图标 → “立即截屏”
 4. 第一次会弹出自己的授权引导（小窗口，不是全屏）：
    「打开系统设置」→ 在“隐私与安全性 → 屏幕录制”勾选 Hax Shot → 回到 app
    → 检测到授权后自动继续截图
-5. 想换快捷键：菜单栏图标 → “设置” → 录制组合键（默认已经是 ⌥Z）
+5. 想换快捷键：菜单栏图标 → “设置” → 录制组合键（默认已经是 ⌘⇧Z）
 6. 想用 AI：AI 面板里填 DeepSeek API Key
 ```
 
@@ -115,7 +115,7 @@ scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Sh
   （`lib/features/onboarding/first_run_guide.dart`，标记 `hax_shot.onboarding_seen`），
   说明图标位置、快捷键和首次授权，并带「打开设置」入口。
 - **菜单栏图标可能被菜单栏管理工具藏起来**（本机就是 Bartender 把它收进隐藏区），
-  所以默认快捷键 `⌥Z` 是必需的兜底入口。
+  所以默认快捷键 `⌘⇧Z` 是必需的兜底入口。
 - **API Key 目前存在 shared_preferences（明文 plist）**。正式分发建议改存 Keychain。
 
 ## 5. 卸载
