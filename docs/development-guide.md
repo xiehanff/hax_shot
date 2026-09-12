@@ -582,9 +582,10 @@ frame              = CaptureDisplay.targetScreen().frame
 macOS 没有 gsettings，用成熟的第三方包 **`hotkey_manager`**（macOS 端依赖 soffes/HotKey，
 底层是 Carbon `RegisterEventHotKey`）注册全局热键，不自己写 Carbon 调用。
 
-首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Super><Shift>z`（即 `⌘⇧Z`）——
+首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Alt><Shift>z`（即 `⌥⇧Z`）——
 菜单栏图标可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
-旧版本自动写入的 `<Alt>z` 会在启动时迁移到新默认值，确保已有安装也立即生效。
+历史上自动写入过的旧默认值（`<Alt>z`、`<Super><Shift>z`）会在启动时迁移到当前默认值，
+确保已有安装也立即生效；用户自己在设置页录制的组合键不会被改掉。
 
 读取/写入偏好设置都带 2 秒超时（`_preferenceTimeout`）：偏好层故障时退回内置默认值，
 仍然把热键注册上。这不是多余的防御——已经实测复现过：直接用 `rm` 删掉
@@ -605,7 +606,7 @@ onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标�
 绑定字符串与 Linux 共用同一种格式，由 `lib/features/settings/hotkey_binding.dart` 解析：
 
 ```text
-<Super><Shift>z   →  macOS ⌘⇧Z
+<Alt><Shift>z     →  macOS ⌥⇧Z
 <Alt>z            →  Linux Alt+Z
 ```
 
@@ -1299,7 +1300,7 @@ Windows（未实现）：
   “从托盘退出后按快捷键还能截图”**——两份宿主各自注册了进程内的全局快捷键，退出的只是
   其中一份。不要改成“记 PID + SIGTERM”：有竞态和 PID 复用误杀的风险。Linux 上同类问题是
   gsettings 里的快捷键指向旧的 release 路径，要重跑 `scripts/install-gnome-shortcut.sh`；
-- Linux 需要运行 `scripts/install-gnome-shortcut.sh` 安装默认快捷键；macOS 首次启动会自动注册 `⌘⇧Z`，也可以在设置页重新录制。
+- Linux 需要运行 `scripts/install-gnome-shortcut.sh` 安装默认快捷键；macOS 首次启动会自动注册 `⌥⇧Z`，也可以在设置页重新录制。
 
 ## 15. 给后续 Agent 的最短交接信息
 
