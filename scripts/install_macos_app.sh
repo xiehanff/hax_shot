@@ -70,6 +70,19 @@ if [[ "$dev_cert" == true ]]; then
     exit 1
   fi
   echo "note: 用 ${identity} 重新签名（保留 entitlements，换成证书形式的 requirement）"
+  # codesign 只在「keychain 搜索列表」里的 keychain 中找签名身份：证书放进独立
+  # keychain 后必须把它加进搜索列表，否则即使 find-identity 能列出这个身份，
+  # codesign --sign 也会报 "The specified item could not be found in the keychain"。
+  if ! security list-keychains -d user | grep -qF "$dev_keychain"; then
+    echo "note: 把 ${identity} 的 keychain 加入用户搜索列表"
+    # `security list-keychains -d user` 每行是带缩进和引号的路径，拼回参数时要清掉。
+    search_list=()
+    while IFS= read -r line; do
+      line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/^"//' -e 's/"$//')"
+      if [[ -n "$line" ]]; then search_list+=("$line"); fi
+    done < <(security list-keychains -d user)
+    security list-keychains -d user -s "${search_list[@]}" "$dev_keychain"
+  fi
   security unlock-keychain -p hax-shot-dev "$dev_keychain" >/dev/null 2>&1 || true
   # --deep 连带签 Frameworks / 插件 / Rust dylib；--preserve-metadata=entitlements 保留
   # Xcode 已经写进去的 get-task-allow / disable-library-validation（debug 需要）。
@@ -107,7 +120,7 @@ fi
 
 echo
 echo "已安装: $install_dir/$bundle"
-echo "签名  : $(codesign -dv "$install_dir/$bundle" 2>&1 | grep -m1 'Signature=' || true)"
+echo "签名  : $(codesign -dvv "$install_dir/$bundle" 2>&1 | grep -m1 'Authority=' || echo 'ad-hoc（无证书）')"
 echo
 cat <<'TIP'
 测试步骤：
@@ -120,13 +133,17 @@ cat <<'TIP'
      复制 / 保存 / 让 AI 翻译、解释、深入理解
   5. 想用快捷键：菜单栏图标 → “设置” → 录制一个组合键（例如 ⌘⇧Z）
 
-注意：本机没有可用的代码签名证书（Apple Development 证书已被吊销），当前是
-ad-hoc 签名。ad-hoc 签名每次重新构建都会换一个签名指纹，macOS 会认为这是“新的
-app”，屏幕录制授权会失效、而且不一定再弹窗。遇到“截图失败：未授予屏幕录制权限”
-时，去“系统设置 → 隐私与安全性 → 屏幕录制”把 Hax Shot 删掉再重新加一次即可。
-想要以后重构建不用重新授权，用固定证书签名：
+TIP
+
+if [[ "$dev_cert" != true ]]; then
+  cat <<'TIP'
+注意：本次没有用固定证书（--dev-cert），是 ad-hoc 签名。ad-hoc 签名每次重新构建
+都会换一个签名指纹，macOS 会认为这是“新的 app”，屏幕录制授权会失效、而且不一定
+再弹窗。遇到“截图失败：未授予屏幕录制权限”时，去“系统设置 → 隐私与安全性 →
+屏幕录制”把 Hax Shot 删掉再重新加一次即可。想要以后重构建不用重新授权：
 
   scripts/macos_dev_cert.sh --trust     # 一次：建证书并信任（会弹系统授权）
   scripts/install_macos_app.sh --dev-cert
 
 TIP
+fi

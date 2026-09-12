@@ -20,6 +20,13 @@ hax_shot 的项目级约定。和 `~/.pi/agent/AGENTS.md` 的通用约定冲突�
 
 - 技术细节、踩过的坑、为什么不能那么写，都记在 `docs/development-guide.md`，改代码时
   顺手同步它；
+- macOS 本机构建一律用 `scripts/install_macos_app.sh --dev-cert`。ad-hoc 签名没有证书，
+  屏幕录制授权只能绑 cdhash，**每次重建都会失效**；而系统设置里的开关看着还是开的、
+  并且不再弹授权框——表现是“快捷键/截图没反应”而不是报错，极易被当成代码 bug。
+  绑定证书后重建不掉授权，记录形态与恢复办法见 `docs/development-guide.md` 6.2。
+- 排查 macOS “按了没反应/不起作用”类问题，先看进程和权限（`pgrep -f -- '--capture'`、
+  读 `kTCCServiceScreenCapture` 那条记录），确认了再动代码；两个进程共用
+  `_startCapture()`，先点菜单栏“立即截屏”也能一步分叉。
 - 构建产物：`build/macos/Build/Products/Release/hax_shot.app`，分发镜像
   `build/macos/HaxShot-<版本>-arm64.dmg`；debug 镜像
   `build/macos/HaxShot-<版本>-arm64-debug.dmg`（`scripts/build_macos_dmg.sh --debug [--install]`，

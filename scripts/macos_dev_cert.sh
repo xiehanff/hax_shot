@@ -54,7 +54,7 @@ if security find-identity -p codesigning "$keychain" 2>/dev/null | grep -q "$ide
   security find-identity -p codesigning "$keychain" | sed -n '1,4p'
   if [[ "${1:-}" == "--trust" ]]; then
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    security find-certificate -c "$identity_name" -p -k "$keychain" > "$tmp/cert.pem"
+    security find-certificate -c "$identity_name" -p "$keychain" > "$tmp/cert.pem"
     trust_cert "$tmp/cert.pem"
     security find-identity -v -p codesigning "$keychain"
     exit 0

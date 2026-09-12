@@ -495,6 +495,9 @@ sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
 `SecurityPrivacyExtension` 会弹那个“「hax_shot.app」想要录制此电脑的屏幕和音频”的系统框，
 点“打开系统设置”就会把它登记进列表。引导页的步骤 2 和“重置授权记录”的提示里都写了这条。
 
+实测（macOS 15，2026-09）：`tccutil reset` 之后 hax_shot **仍然留在列表里，只是开关变成
+关的**（同一列表里其他 app 都是开的），这时直接把那个开关打开就行，不需要走 `+`。
+
 #### 想“构建多少次都不用重新授权”
 
 用固定证书签名（自签名即可，TCC 绑「bundle id + 证书」而不是 cdhash）：
@@ -512,6 +515,23 @@ scripts/install_macos_app.sh --dev-cert
   `codesign --sign "Hax Shot Dev"` 会报 “The specified item could not be found in the
   keychain.” —— 必须先 `add-trusted-cert -r trustRoot -p codeSign`（就是上面的 `--trust`）。
   这一步要弹系统授权，脚本不能替你点。
+- 证书放在独立 keychain 里时，还必须把该 keychain 加进**用户 keychain 搜索列表**。
+  `codesign` 只在搜索列表里的 keychain 中查找签名身份，**只传 `--keychain` 不够**：即使
+  `security find-identity -v -p codesigning <keychain>` 能列出这个身份，`codesign --sign`
+  依旧报“The specified item could not be found in the keychain.”。
+  `install_macos_app.sh --dev-cert` 现在会自己幂等地补这一步；另外
+  `macos_dev_cert.sh --trust` 里导出证书原本写成 `security find-certificate -k <keychain>`，
+  `-k` 不是合法选项（keychain 只能当位置参数），会直接报 illegal option——已修。
+
+切到证书签名之后，TCC 里那条记录的**形态**会变，可以查出来确认（见上文的读取命令）：
+
+```text
+ad-hoc：000000010000000800000014 <20 字节裸 cdhash>              ← 一重建就失配
+证书  ：FADE0C… com.github.xiehanff.haxShot … <证书 SHA-1>      ← 不含 cdhash，重建不掉
+```
+
+第二条里那个 40 位十六进制就是证书指纹，和 `security find-identity -v -p codesigning
+"$HOME/Library/Keychains/hax-shot-dev.keychain-db"` 列出来的对得上就说明已经绑到证书了。
 
 安全提示：`--trust` 会往用户信任设置里加一条代码签名信任，而该私钥所在 keychain 的密码是固定的
 （`hax-shot-dev`）——只在本机开发用，不用了就 `scripts/macos_dev_cert.sh --delete` 并删掉信任项。
@@ -578,6 +598,31 @@ onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标�
 热键**不走 FFI**：macOS 由**宿主进程**的 `hotkey_manager` 注册（底层 Carbon
 `RegisterEventHotKey`），Linux 不动、由 GNOME gsettings 直接启动 `hax_shot --capture`；
 Rust 原生层不参与热键注册，`--capture` 进程也不注册热键。
+
+#### 排查“快捷键没反应”先分叉，别直接查热键
+
+菜单栏的「立即截屏」和全局快捷键最终调的是**同一个 `_startCapture()`**，所以先点一次
+菜单就能一步分叉，不用猜：
+
+| 菜单「立即截屏」 | 全局快捷键 | 结论 |
+| --- | --- | --- |
+| 能截图 | 没反应 | 问题在宿主进程的热键注册 / 回调 |
+| 也没反应 | —— | **不是快捷键问题**，去查 `--capture` 与屏幕录制授权（见 6.2） |
+
+本机实测过的那次“⌥Z 没反应”，最后查出来是第二类：热键本身一直是好的（按下去能跑到
+`_startCapture()`、子进程也起来了），真正卡住的是抓屏进程拿不到屏幕录制授权。
+
+另外两个容易误判的点：
+
+- `hotkey_manager_macos 0.2.0` 的 Swift `register()` **无条件 `result(true)`**，它不检查
+  soffes/HotKey 内部 `RegisterEventHotKey` 的返回值。所以 Dart 侧
+  `await hotKeyManager.register(...)` 正常返回**不等于**系统真的记住了这个组合。
+- Carbon 的 `RegisterEventHotKey` **跨进程不独占**：别的 app 已经占了同一个组合，本进程
+  注册依然返回 `noErr`。所以“用探针试一下能不能注册”不能用来判断热键是否被占用。
+
+真要定位时，先看抓屏进程有没有起来（`pgrep -f -- '--capture'`），再给 `_startCapture()`
+临时加文件日志。从 Finder 启动的 Release 版 `stdout` 落到 launchd，`debugPrint` 看不到，
+所以这类环境差异只能写文件。
 
 ### 6.7 开机自启动
 
