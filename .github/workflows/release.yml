@@ -109,8 +109,12 @@ jobs:
           test -f "${deb[0]}"
           test -f "${rpm[0]}"
           # 两个包都必须带上 Rust 原生库，缺了就是 bundle 没打全。
-          dpkg-deb -c "${deb[0]}" | grep -q 'opt/hax-shot/lib/libhax_shot_native.so'
-          rpm -qlp "${rpm[0]}" | grep -q '/opt/hax-shot/lib/libhax_shot_native.so'
+          # 先把文件列表写到文件再 grep：`dpkg-deb -c | grep -q` 会在命中时提前
+          # 关掉管道，dpkg-deb 收到 EPIPE 后在 pipefail 下会把整个 step 判失败。
+          dpkg-deb -c "${deb[0]}" > deb-list.txt
+          rpm -qlp "${rpm[0]}" > rpm-list.txt
+          grep -q 'opt/hax-shot/lib/libhax_shot_native.so' deb-list.txt
+          grep -q '/opt/hax-shot/lib/libhax_shot_native.so' rpm-list.txt
           printf 'DEB: %s\nRPM: %s\n' "${deb[0]}" "${rpm[0]}"
 
       - name: Upload Linux packages
