@@ -108,6 +108,7 @@ Maintainer: xiehan <chinkout@163.com>
 # 与 RPM spec 的 Requires 对齐：GNOME/Mutter、GStreamer 和 PipeWire 都不随包捆绑。
 # t64 后缀是 Ubuntu 24.04 的时间戳 ABI 重命名，别名写在前面让两边都能装上。
 Depends: libc6, libgtk-3-0 | libgtk-3-0t64, libglib2.0-0 | libglib2.0-0t64, libstdc++6,
+ libkeybinder-3.0-0,
  libgstreamer1.0-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
  libpipewire-0.3-0, wl-clipboard, libayatana-appindicator3-1
 Recommends: gnome-shell-extension-appindicator

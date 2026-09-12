@@ -23,6 +23,7 @@ BuildRequires:  patchelf
 Requires:       gtk3
 Requires:       glib2
 Requires:       libstdc++
+Requires:       keybinder3
 Requires:       gstreamer1
 Requires:       gstreamer1-plugins-base
 Requires:       gstreamer1-plugins-good

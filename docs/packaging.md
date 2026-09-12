@@ -121,12 +121,15 @@ sudo apt remove hax-shot
 ## 运行时依赖
 
 两个包都不捆绑 GNOME/Mutter、GTK、PipeWire、GStreamer 和 Wayland 工具，而是在包元数据里
-声明运行依赖。Fedora 侧（RPM）：
+声明运行依赖。其中的 `keybinder3` / `libkeybinder-3.0-0` 是 `hotkey_manager_linux` 链接的
+全局快捷键库，Linux 构建也需要对应的开发包（`keybinder3-devel` / `libkeybinder-3.0-dev`）。
+Fedora 侧（RPM）：
 
 ```text
 gtk3
 glib2
 libstdc++
+keybinder3
 gstreamer1
 gstreamer1-plugins-base
 gstreamer1-plugins-good
@@ -142,6 +145,7 @@ Debian/Ubuntu 侧（DEB，`build_linux_deb.sh` 的 `Depends`）：
 libgtk-3-0 (或 Ubuntu 24.04 的 libgtk-3-0t64)
 libglib2.0-0 (或 libglib2.0-0t64)
 libstdc++6
+libkeybinder-3.0-0
 libgstreamer1.0-0
 gstreamer1.0-plugins-base
 gstreamer1.0-plugins-good

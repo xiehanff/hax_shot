@@ -67,6 +67,7 @@ jobs:
             patchelf \
             rpm \
             libgtk-3-dev \
+            libkeybinder-3.0-dev \
             libayatana-appindicator3-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
