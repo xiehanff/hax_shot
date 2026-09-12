@@ -1,7 +1,7 @@
 //! Hax Shot 原生层：Flutter 通过 `dart:ffi` 只看到下面这几个 C ABI 函数。
 //!
 //! 平台实现分别放在 `linux` 和 `macos` 模块里，Flutter 侧看不到
-//! Mutter / PipeWire / CoreGraphics / Carbon 这些平台细节。
+//! Mutter / PipeWire / CoreGraphics 这些平台细节。
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -65,14 +65,8 @@ use linux::{
 #[cfg(target_os = "macos")]
 use macos::{
     capture_screen_impl, copy_png_impl, cursor_display_impl, request_screen_capture_access_impl,
-    screen_capture_authorized_impl,
+    screen_capture_authorized_impl, target_display_id_impl,
 };
-
-/// Return the native library version used by the Flutter smoke test.
-#[no_mangle]
-pub extern "C" fn hax_shot_native_version() -> u32 {
-    5
-}
 
 /// Whether the app may capture the screen right now.
 ///
@@ -104,11 +98,26 @@ pub extern "C" fn hax_shot_cursor_display() -> u32 {
     cursor_display_impl()
 }
 
+/// 解析本次截图的目标显示器，返回 `CGDirectDisplayID`。
+///
+/// 供 macOS Runner 的 Swift 把冻结画面浮层摆到抓屏用的那块屏上；规则与抓屏
+/// （[`hax_shot_capture_screen`]）共用 `macos::resolve_target_display` 这一份实现，
+/// 两边不会再各自维护一套候选顺序。`requested` 由调用方从 `--display <id>` 解析，
+/// 拿不到时传 0。
+///
+/// 只在 macOS 编译：Linux 的窗口摆位完全由 Flutter 负责，没有这个概念。
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn hax_shot_target_display(requested: u32) -> u32 {
+    target_display_id_impl(requested)
+}
+
 /// Capture one frame of the target display and write it to a temporary PNG.
 ///
 /// The target display is `--display <id>` when the tray host passed one, then the
 /// display under the pointer, then the main display (see `rust/src/macos.rs`).
-/// This must stay consistent with the display the Runner puts the overlay on.
+/// The Runner calls [`hax_shot_target_display`] to place the overlay on the same
+/// display, so both paths share one rule.
 ///
 /// On success, writes a NUL-terminated temporary PNG path to `out_path` and
 /// returns 0. On failure returns -1, when the output buffer is too small returns

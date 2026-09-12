@@ -99,6 +99,12 @@ flutter:
     - family: OPPO Sans 4.0
       fonts:
         - asset: assets/fonts/OPPO-Sans-4.0.ttf
+    # AI 面板顶部条中间那个 “HaxShot” 字标专用（从 cliper 项目复制过来的
+    # 马克笔手写体，文件内部 family 叫 “851 GBai Marker”，这里用别名即可）。
+    # 只服务一个标题，但字体本身 10MB，包体积会跟着涨。
+    - family: GBaiMarkerPen
+      fonts:
+        - asset: assets/fonts/GBaiMarkerPen.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -130,3 +136,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# macOS 的 tray_manager 上游实现把空的 NSView 覆盖在 status button 上，导致
+# button.image 不显示；本地副本改用原生 NSStatusBarButton target/action。
+dependency_overrides:
+  tray_manager:
+    path: packages/tray_manager

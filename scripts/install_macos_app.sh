@@ -8,6 +8,7 @@
 #
 # 用法：
 #   scripts/install_macos_app.sh                # 构建 + 安装到 /Applications
+#   scripts/install_macos_app.sh --dev-cert     # 顺手用本地自签名证书签名（见 6.2）
 #   scripts/install_macos_app.sh --dir ~/Apps   # 装到别的目录
 set -euo pipefail
 
@@ -15,9 +16,17 @@ app_name="hax_shot"
 bundle="hax_shot.app"
 install_dir="/Applications"
 zip_path=""
+dev_cert=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --dev-cert)
+      # 用本地自签名证书签名（scripts/macos_dev_cert.sh 创建）。理由见
+      # docs/development-guide.md 6.2：ad-hoc 签名下屏幕录制授权绑 cdhash，
+      # 每次构建都失效、而且会从“屏幕录制”列表里消失；固定证书后授权不再丢。
+      dev_cert=true
+      shift
+      ;;
     --dir)
       install_dir="${2:?--dir 需要参数}"
       shift 2
@@ -50,6 +59,24 @@ built="$repo_root/build/macos/Build/Products/Release/$bundle"
 if [[ ! -d "$built" ]]; then
   echo "error: 没有找到构建产物 $built" >&2
   exit 1
+fi
+
+if [[ "$dev_cert" == true ]]; then
+  identity="Hax Shot Dev"
+  dev_keychain="$HOME/Library/Keychains/hax-shot-dev.keychain-db"
+  if ! security find-identity -v -p codesigning "$dev_keychain" 2>/dev/null | grep -q "$identity"; then
+    echo "error: 找不到可用的签名身份“${identity}”。先跑：" >&2
+    echo "         scripts/macos_dev_cert.sh --trust" >&2
+    exit 1
+  fi
+  echo "note: 用 ${identity} 重新签名（保留 entitlements，换成证书形式的 requirement）"
+  security unlock-keychain -p hax-shot-dev "$dev_keychain" >/dev/null 2>&1 || true
+  # --deep 连带签 Frameworks / 插件 / Rust dylib；--preserve-metadata=entitlements 保留
+  # Xcode 已经写进去的 get-task-allow / disable-library-validation（debug 需要）。
+  # 不要 preserve requirements：那会把 ad-hoc 的旧 requirement 留下来。
+  codesign --force --deep --sign "$identity" --keychain "$dev_keychain" \
+    --preserve-metadata=entitlements,flags "$built"
+  codesign --verify --deep --strict "$built" && echo "note: 签名校验通过"
 fi
 
 # 正在运行的实例会占住 bundle，替换前先退出（托盘宿主是常驻进程）。
@@ -97,6 +124,9 @@ cat <<'TIP'
 ad-hoc 签名。ad-hoc 签名每次重新构建都会换一个签名指纹，macOS 会认为这是“新的
 app”，屏幕录制授权会失效、而且不一定再弹窗。遇到“截图失败：未授予屏幕录制权限”
 时，去“系统设置 → 隐私与安全性 → 屏幕录制”把 Hax Shot 删掉再重新加一次即可。
-想要以后重构建不用重新授权，可以做一个自签名证书（可以在 Keychain 里建，也可以
-让我加一个 --dev-cert 到脚本里）。
+想要以后重构建不用重新授权，用固定证书签名：
+
+  scripts/macos_dev_cert.sh --trust     # 一次：建证书并信任（会弹系统授权）
+  scripts/install_macos_app.sh --dev-cert
+
 TIP

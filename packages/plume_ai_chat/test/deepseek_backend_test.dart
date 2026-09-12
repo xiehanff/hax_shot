@@ -169,7 +169,7 @@ void main() {
     expect(calls, 0);
   });
 
-  test('401 authentication failure cannot fallback to text', () async {
+  test('401 authentication failure keeps its statusCode', () async {
     final DeepSeekBackend backend = DeepSeekBackend(
       apiKeyProvider: () => 'bad-key',
       httpClient: MockClient((http.Request request) async {
@@ -196,45 +196,6 @@ void main() {
     } on DeepSeekBackendException catch (error) {
       expect(error.statusCode, 401);
       expect(error.message, contains('认证失败'));
-      expect(error.canFallbackToText, isFalse);
-    }
-  });
-
-  test('400 image capability rejection can fallback to text', () async {
-    final DeepSeekBackend backend = DeepSeekBackend(
-      apiKeyProvider: () => 'key',
-      httpClient: MockClient((http.Request request) async {
-        return http.Response(
-          jsonEncode(<String, dynamic>{
-            'error': <String, dynamic>{
-              'message': 'This model does not support image input',
-            },
-          }),
-          400,
-        );
-      }),
-    );
-
-    try {
-      await backend
-          .chat(
-            AiBackendRequest(
-              history: <AiChatHistoryMessage>[
-                AiChatHistoryMessage.user(
-                  content: 'analyze',
-                  image: AiImageAttachment(
-                    bytes: Uint8List.fromList(<int>[1]),
-                    mimeType: 'image/png',
-                  ),
-                ),
-              ],
-            ),
-          )
-          .toList();
-      fail('expected DeepSeekBackendException');
-    } on DeepSeekBackendException catch (error) {
-      expect(error.statusCode, 400);
-      expect(error.canFallbackToText, isTrue);
     }
   });
 }

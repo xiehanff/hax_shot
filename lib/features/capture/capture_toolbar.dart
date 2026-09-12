@@ -5,6 +5,8 @@ import 'package:hugeicons/hugeicons.dart';
 
 import 'annotation.dart';
 
+import '../../hax_colors.dart';
+
 class CaptureToolbar extends StatelessWidget {
   const CaptureToolbar({
     required this.busy,
@@ -48,13 +50,12 @@ class CaptureToolbar extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(2),
             decoration: BoxDecoration(
+              // 外圈 2px 玻璃边：灰蓝渐变（亮 → 暗），和 app 主题同一份色源；
+              // 原来是紫 #71488B → 靛 #5F3AA8，和改后的灰蓝主题不搭。
               gradient: const LinearGradient(
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
-                colors: [
-                  ui.Color.fromARGB(255, 113, 72, 139),
-                  ui.Color.fromARGB(255, 95, 58, 168),
-                ],
+                colors: [haxAccent, haxAccentDeep],
               ),
               borderRadius: BorderRadius.circular(999),
               boxShadow: const [

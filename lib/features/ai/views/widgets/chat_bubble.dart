@@ -300,7 +300,7 @@ class _ReasoningPanelState extends State<ReasoningPanel> {
           padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
           decoration: BoxDecoration(
             color: const Color(0xFF20242B),
-            border: Border.all(color: const Color(0xFF343A46)),
+            border: Border.all(color: AppColors.borderSoft),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -318,7 +318,7 @@ class _ReasoningPanelState extends State<ReasoningPanel> {
                   const Text(
                     '思考过程',
                     style: TextStyle(
-                      color: Color(0xFFB8C0CC),
+                      color: AppColors.textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -341,7 +341,7 @@ class _ReasoningPanelState extends State<ReasoningPanel> {
                   child: TextButton(
                     onPressed: () => setState(() => _expanded = !_expanded),
                     style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF98B8FF),
+                      foregroundColor: AppColors.accentBright,
                       padding: EdgeInsets.zero,
                       minimumSize: const Size(0, 24),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,

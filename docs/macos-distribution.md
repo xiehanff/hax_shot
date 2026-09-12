@@ -28,6 +28,10 @@ MACOS_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
 
 # 只对已有产物做验收检查
 scripts/build_macos_dmg.sh --verify-only
+
+# 本机联调用的 debug 镜像（ad-hoc 签名、不公证）：
+scripts/build_macos_dmg.sh --debug            # → build/macos/HaxShot-<版本>-arm64-debug.dmg
+scripts/build_macos_dmg.sh --debug --install   # 再把 app 从 DMG 装进 /Applications
 ```
 
 产出：
@@ -68,7 +72,7 @@ macOS 把“屏幕录制”授权绑在代码签名上：
 ### 本机开发：别用 `flutter run` 授权
 
 `flutter run` 启动的 app 责任进程是终端，屏幕录制授权会记在终端上，Hax Shot 不会出现在
-系统设置列表里（macOS 15 的该面板也不能手动“+”添加）。开发时用：
+系统设置列表里。开发时用：
 
 ```bash
 scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Shot 成为责任进程）

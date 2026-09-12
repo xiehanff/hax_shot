@@ -8,7 +8,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:get/get.dart';
 import 'package:plume_ai_chat/plume_ai_chat.dart';
 
-import '../models/hax_ai_action.dart';
+import '../../../models/hax_ai_action.dart';
 import '../models/hax_ai_state.dart';
 import '../services/hax_ai_prompts.dart';
 import '../services/hax_ai_service.dart';
@@ -37,6 +37,11 @@ class HaxAiController extends GetxController {
       AiChatUpdateId.messages,
       _handleChatChanged,
     );
+    // 本 controller 由宿主持有，不经过 GetX 的 registry。但生命周期是 registry 驱动的：
+    // `Get.put` 内部会做 `$configureLifeCycle()` + `onStart()`，少了这一步 `onInit()`
+    // 永远不会跑，`_initializeService()` 就不会在服务初始化后把状态刷回 UI。这里自己启动。
+    $configureLifeCycle();
+    onStart();
   }
 
   static const double _kBottomFollowThreshold = 80;
@@ -70,6 +75,9 @@ class HaxAiController extends GetxController {
   VoidCallback get onNewSession => newConversation;
   VoidCallback get onStopChat => stop;
 
+  /// 最后一条是完整的正常回答时才给追问建议。
+  ///
+  /// 错误占位由 [ChatMessage.isError] 标记，不看文案前缀（`❌` 只是观感）。
   bool get showFollowUpSuggestions {
     if (isLoading || followUpSuggestions.isEmpty || messages.isEmpty) {
       return false;
@@ -78,7 +86,7 @@ class HaxAiController extends GetxController {
     return last.author == MessageAuthor.ai &&
         !last.isLoading &&
         last.text.trim().isNotEmpty &&
-        !last.text.startsWith('❌');
+        !last.isError;
   }
 
   @override
@@ -323,6 +331,30 @@ class HaxAiController extends GetxController {
     _userScrollDirection = ScrollDirection.idle;
     _scrollRequestId++;
     _hasDeferredStreamingUpdate = false;
+  }
+
+  bool _disposed = false;
+
+  /// 本 controller 由宿主持有，不经过 GetX registry，所以 `isClosed` 要自己护一层。
+  /// 注意 `GetLifeCycleBase.onClose()` 是空实现，**直接调 `onClose()` 不会置位**——
+  /// 只有 `_onDelete()`（`onDelete()` 的回调）才置 `_isClosed`，而
+  /// `hax_ai_controller.dart:96/114/276/283/289` 的异步保护全部依赖它。
+  @override
+  bool get isClosed => _disposed || super.isClosed;
+
+  /// 幂等销毁入口，供宿主（`app.dart`）在 dispose 时调用。
+  ///
+  /// 走 GetX 的 `onDelete()`（和 `Get.delete` 同一条路径，构造函数里已
+  /// `$configureLifeCycle()`）：它置 `_isClosed` 后调 `onClose()`，清理恰好一次；
+  /// 之后 `super.dispose()` 只释放 GetX 的监听列表（`ListNotifierMixin.dispose`
+  /// 不会重复调 `onClose()`）。
+  @override
+  void dispose() {
+    if (isClosed) return;
+    _disposed = true;
+    onDelete();
+    // 放在最后：此时页面已卸载，不会再有人订阅。
+    super.dispose();
   }
 
   @override

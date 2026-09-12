@@ -1,6 +1,6 @@
-//! macOS 平台后端：CoreGraphics 抓屏、NSPasteboard 写剪贴板、Carbon 全局快捷键。
+//! macOS 平台后端：CoreGraphics 抓屏、NSPasteboard 写剪贴板。
 //!
-//! 平台差异只允许留在本模块，Flutter 侧看不到 CoreGraphics / Carbon / AppKit。
+//! 平台差异只允许留在本模块，Flutter 侧看不到 CoreGraphics / AppKit。
 
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
@@ -105,18 +105,32 @@ fn capture_screen_inner() -> Result<PathBuf, CaptureError> {
 /// 托盘宿主在触发截图时写入的目标显示器参数。
 const DISPLAY_ARGUMENT: &str = "--display";
 
-/// 本次截图要抓的显示器。
+/// 选屏规则的核心实现，也是全工程唯一一份：
+/// `requested` → 光标所在显示器 → 主显示器（`!= 0` 且仍处于活动状态才采用）。
 ///
-/// 顺序与 Runner 的 `CaptureDisplay.targetScreen()` 保持一致：
-/// `--display <id>` → 光标所在显示器 → 主显示器。两边一旦不一致，就会出现
-/// “浮层在 A 屏、画面是 B 屏”。
-fn target_display() -> CGDisplay {
-    for candidate in [requested_display_id(), cursor_display_impl()] {
+/// Runner 摆冻结画面浮层时通过 [`target_display_id_impl`] 复用同一份规则，
+/// 一旦两边不一致就会出现“浮层在 A 屏、画面是 B 屏”。
+fn resolve_target_display(requested: u32) -> CGDisplay {
+    for candidate in [requested, cursor_display_impl()] {
         if candidate != 0 && is_active_display(candidate) {
             return CGDisplay::new(candidate);
         }
     }
     CGDisplay::main()
+}
+
+/// 本次截图要抓的显示器。行为与抽出 `resolve_target_display` 之前逐字一致。
+fn target_display() -> CGDisplay {
+    resolve_target_display(requested_display_id())
+}
+
+/// [`resolve_target_display`] 的 id 形式，供 macOS Runner 的 Swift 摆浮层用。
+///
+/// 命令行参数由调用方自己解析（Runner 拿的是同一个 `--display <id>`），
+/// 这里只负责选屏规则，保证浮层和画面永远落在同一块屏上。
+pub(crate) fn target_display_id_impl(requested: u32) -> u32 {
+    // `CGDisplay::id` 是 core-graphics 暴露的公开字段。
+    resolve_target_display(requested).id
 }
 
 /// 读取托盘宿主通过命令行传进来的显示器标识；没传或不是合法数字时返回 0。

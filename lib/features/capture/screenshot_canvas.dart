@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'annotation.dart';
+import 'text_annotation_style.dart';
 
 final class ScreenshotLayout {
   const ScreenshotLayout({
@@ -229,10 +230,9 @@ void paintScreenshotAnnotation(
     final textPainter = TextPainter(
       text: TextSpan(
         text: annotation.text,
-        style: TextStyle(
+        style: textAnnotationStyle(
+          annotation.fontSize,
           color: annotation.color,
-          fontSize: annotation.fontSize,
-          height: 1,
         ),
       ),
       textDirection: TextDirection.ltr,

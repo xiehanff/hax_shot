@@ -77,7 +77,13 @@ hax_shot.deepseek_api_key
 
 ## AI 窗口
 
-AI 页面复用截图子进程，不创建第二个原生窗口。标题栏支持拖动窗口，关闭按钮结束当前截图进程。AI 侧栏尺寸、输入框和消息列表遵循 Plume AI Chat 的布局结构。
+AI 页面复用截图子进程，不创建第二个原生窗口。顶部条中间是 `HaxShot` 字标
+（`GBaiMarkerPen` 马克笔手写体，`assets/fonts/GBaiMarkerPen.ttf`），标题栏支持拖动
+窗口，关闭按钮结束当前截图进程。AI 侧栏尺寸、输入框和消息列表遵循 Plume AI Chat
+的布局结构。
+
+调 AI 面板 UI 不需要真的截图：debug 构建的托盘菜单有“调试：AI 对话窗口”，它启动
+`hax_shot --capture --debug-ai`，捕获进程启动后跳过抓屏、直接把窗口显示成 AI 面板。
 
 ## 本地验证
 

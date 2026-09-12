@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:plume_ai_chat/plume_ai_chat.dart'
     show AiChatMessageList, ChatMessage;
@@ -20,10 +19,11 @@ class AiSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GetBuilder<HaxAiController>(
-      init: controller,
-      global: false,
-      builder: (HaxAiController controller) {
+    // 控制器由宿主持有，这里只订阅它的 update() 通知（语义等价于原来的
+    // GetBuilder：GetxController.addListener 注册的就是 update() 通知的那份列表）。
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (BuildContext context, Widget? _) {
         // HaxShot uses the chat as a standalone window, so the Plume sidebar
         // content fills that window instead of reserving a PDF reader area.
         return SizedBox.expand(
@@ -123,17 +123,35 @@ class _AiTitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 顶部条比正文暗一点，只是用来和消息区做区分（不留标题文字）。窗口圆角由系统
-    // 画（macOS 的 titled 窗口），所以这里铺满即可。
+    // 顶部条比正文暗一点，用来和消息区做区分；中间放 HaxShot 字标（GBaiMarkerPen
+    // 是 assets/fonts/GBaiMarkerPen.ttf 里的马克笔手写体，见 pubspec 的 fonts）。
+    // 窗口圆角由系统画（macOS 的 titled 窗口），所以这里铺满即可。
     return SizedBox(
       height: 44,
       child: ColoredBox(
         color: AppColors.titleBarBg,
         child: Stack(
           children: <Widget>[
-            // 整条都是拖拽区，但没有文字。
+            // 整条都是拖拽区，包括标题那一段。
             const Positioned.fill(
               child: DragToMoveArea(child: SizedBox.expand()),
+            ),
+            // 字标居中，但必须让开拖拽：文字自己会吃掉 hit test，不套 IgnorePointer
+            // 的话按住标题拖不动窗口。
+            const Positioned.fill(
+              child: IgnorePointer(
+                child: Center(
+                  child: Text(
+                    'HaxShot',
+                    style: TextStyle(
+                      fontFamily: 'GBaiMarkerPen',
+                      fontSize: 21,
+                      height: 1,
+                      color: AppColors.accentBright,
+                    ),
+                  ),
+                ),
+              ),
             ),
             Positioned(
               top: 10,

@@ -131,6 +131,7 @@ macOS 常用脚本：
 ```bash
 scripts/run_macos_debug.sh      # 构建 debug 并用 open 启动（调试期不要用 flutter run 授权，原因见文档）
 scripts/build_macos_dmg.sh      # 打可分发的 DMG（自动签名/可选公证 + 逐项验收）
+scripts/build_macos_dmg.sh --debug --install   # 本机联调用 debug DMG 并装到 /Applications
 scripts/uninstall_macos_app.sh  # 卸载：应用、自启动项、授权记录、偏好设置（--dry-run 可先看）
 ```
 

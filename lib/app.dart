@@ -4,12 +4,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'features/ai/controllers/hax_ai_controller.dart';
-import 'features/ai/models/hax_ai_action.dart';
+import 'models/hax_ai_action.dart';
 import 'features/ai/services/hax_ai_service.dart';
 import 'features/ai/services/hax_ai_settings_store.dart';
 import 'features/ai/views/ai_page.dart';
@@ -24,16 +23,25 @@ import 'features/settings/screen_capture_permission.dart';
 import 'features/settings/shortcut_service.dart';
 import 'features/settings/shortcut_settings_page.dart';
 import 'features/window/window_visibility.dart';
+import 'hax_colors.dart';
 
 import 'native/native_bridge.dart';
 
 class HaxShotApp extends StatefulWidget {
-  const HaxShotApp({required this.captureMode, this.targetDisplay, super.key});
+  const HaxShotApp({
+    required this.captureMode,
+    this.targetDisplay,
+    this.debugAiPanel = false,
+    super.key,
+  });
 
   final bool captureMode;
 
   /// `--display <id>`：主浮层要落在哪块显示器（重启抓屏进程时原样带上）。
   final int? targetDisplay;
+
+  /// debug 构建的 `--capture --debug-ai`：不抓屏，直接把窗口显示成 AI 面板。
+  final bool debugAiPanel;
 
   @override
   State<HaxShotApp> createState() => _HaxShotAppState();
@@ -55,10 +63,41 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
     if (!widget.captureMode) return;
 
     final service = HaxAiService(settingsStore: HaxAiSettingsStore());
-    _aiController = Get.put(HaxAiController(service: service));
+    // 控制器由本 State 显式拥有（不经 GetX registry），dispose 时自己销毁。
+    _aiController = HaxAiController(service: service);
     _aiInitialization = _initializeAi(service);
     windowManager.addListener(this);
     unawaited(windowManager.setPreventClose(true));
+    if (widget.debugAiPanel) {
+      // UI 调试：不经过抓屏/浮层，直接把窗口配成 AI 面板的尺寸并显示。
+      _showAiPage = true;
+      unawaited(_presentDebugAiWindow());
+    }
+  }
+
+  /// 调试用：把“抓屏前的小窗口”直接改成 AI 面板尺寸并显示。
+  ///
+  /// 正式流程里的窗口尺寸切换在 [_handleAiAction]（先退出浮层再改尺寸）；
+  /// 这里窗口从没进过浮层，所以不需要 exitOverlay / setAlwaysOnTop。
+  Future<void> _presentDebugAiWindow() async {
+    try {
+      await _configureAiWindow();
+    } on Object catch (error) {
+      debugPrint('打开 AI 面板调试窗口失败：$error');
+    }
+  }
+
+  /// 把窗口配成 AI 面板尺寸并显示。
+  ///
+  /// debug 入口与正式入口（[_handleAiAction]）共用同一套尺寸/时序；调用方
+  /// 负责前置条件与异常处理，这里不吞异常。
+  Future<void> _configureAiWindow() async {
+    await WidgetsBinding.instance.endOfFrame;
+    await windowManager.setMinimumSize(const Size(320, 480));
+    await windowManager.setSize(_aiWindowSize);
+    await windowManager.center();
+    await showWindow();
+    await windowManager.focus();
   }
 
   Future<void> _initializeAi(HaxAiService service) async {
@@ -73,9 +112,7 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   void dispose() {
     if (widget.captureMode) {
       windowManager.removeListener(this);
-      if (Get.isRegistered<HaxAiController>()) {
-        unawaited(Get.delete<HaxAiController>(force: true));
-      }
+      _aiController?.dispose();
     }
     super.dispose();
   }
@@ -102,17 +139,13 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       // Replace the wide capture toolbar before resizing. On GTK the current
       // child can contribute a minimum width while setSize is processed.
       setState(() => _showAiPage = true);
-      await WidgetsBinding.instance.endOfFrame;
-      await windowManager.setMinimumSize(const Size(320, 480));
-      await windowManager.setSize(_aiWindowSize);
-      await windowManager.center();
-      await showWindow();
-      await windowManager.focus();
+      await _configureAiWindow();
       unawaited(_sendAiRequest(controller, action, pngBytes));
     } on Object catch (error) {
-      // Keep the AI page visible even if initialization or the first request
-      // fails; the sidebar can still be used to configure the API key.
-      debugPrint('AI 请求失败：$error');
+      // Keep the AI page visible even if the window setup fails; the sidebar
+      // can still be used to configure the API key.
+      // 请求失败的日志在 _sendAiRequest 里，这里只管窗口/面板准备。
+      debugPrint('打开 AI 面板失败：$error');
     }
   }
 
@@ -152,7 +185,8 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.lightBlue,
+          // 主题色统一灰蓝，别再回姜黄/浅蓝（见 lib/hax_colors.dart）。
+          seedColor: haxAccent,
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
@@ -180,8 +214,8 @@ class TrayHostPage extends StatefulWidget {
   State<TrayHostPage> createState() => _TrayHostPageState();
 }
 
-/// 托盘图标：Windows 的 tray_manager 用 LoadImage(IMAGE_ICON) 读取，必须是 .ico；
-/// Linux AppIndicator 和 macOS 菜单栏用 PNG。
+/// 托盘图标：Windows 的 tray_manager 用 `LoadImage(IMAGE_ICON)` 读取，必须是 .ico；
+/// macOS / Linux 都用应用图标 `hax_shot.png`（同一张彩色图）。
 String get trayIconAsset => Platform.isWindows
     ? 'assets/icons/hax_shot.ico'
     : 'assets/icons/hax_shot.png';
@@ -218,8 +252,13 @@ class _TrayHostPageState extends State<TrayHostPage>
     try {
       await windowManager.setPreventClose(true);
       await windowManager.hide();
+      // window_manager 在 runApp 前已经把原生窗口藏起来了，但 Flutter 首帧之前
+      // AppKit 的菜单栏布局还没稳定。此时创建 status item 偶尔会先拿到临时 frame，
+      // 图标要等下一次窗口活动（例如快捷键截图）才出现；等首帧后再创建可避免这个竞态。
+      await WidgetsBinding.instance.endOfFrame;
       // 图标和菜单是用户看到的第一样东西，先建好再做别的：注册快捷键要读
       // SharedPreferences、走一次 Carbon，欢迎页还要读磁盘，都会拖慢“图标出现”。
+      // 不要传 isTemplate: true：那是单色遮罩模式，会把应用图标渲染成纯色剪影。
       await trayManager.setIcon(trayIconAsset);
       await trayManager.setContextMenu(
         Menu(
@@ -234,13 +273,36 @@ class _TrayHostPageState extends State<TrayHostPage>
               label: '设置',
               onClick: (_) => unawaited(_openShortcutSettings()),
             ),
-            // 调试期方便反复调授权引导的 UI，发布版不出现。
-            if (kDebugMode)
+            // UI 调试入口：debug 构建里把每个界面都单独列出来，不用真的截图/
+            // 等授权就能直接打开。发布版不出现。
+            if (kDebugMode) ...[
+              MenuItem.separator(),
+              MenuItem(
+                key: 'debug_welcome',
+                label: '调试：欢迎页',
+                onClick: (_) => unawaited(_presentFirstRunGuide()),
+              ),
+              MenuItem(
+                key: 'debug_shortcut_settings',
+                label: '调试：快捷键设置',
+                onClick: (_) => unawaited(_openShortcutSettings()),
+              ),
               MenuItem(
                 key: 'debug_permission_guide',
-                label: '权限引导（调试）',
+                label: '调试：权限引导',
                 onClick: (_) => unawaited(_openPermissionGuide()),
               ),
+              MenuItem(
+                key: 'debug_capture_overlay',
+                label: '调试：截图浮层',
+                onClick: (_) => unawaited(_startCapture()),
+              ),
+              MenuItem(
+                key: 'debug_ai_panel',
+                label: '调试：AI 对话窗口',
+                onClick: (_) => unawaited(_openAiPanel()),
+              ),
+            ],
             MenuItem.separator(),
             MenuItem(
               key: 'exit_app',
@@ -269,6 +331,11 @@ class _TrayHostPageState extends State<TrayHostPage>
 
     // 展示时就记下来，避免用户刚看到就退出、下次启动又弹一次。
     await FirstRunOnboarding.instance.markSeen();
+    await _presentFirstRunGuide();
+  }
+
+  /// 显示欢迎页。调试入口也会调它，但不会写“已看过”标记。
+  Future<void> _presentFirstRunGuide() async {
     final binding = await shortcutService.readBinding();
     if (!mounted) return;
 
@@ -321,6 +388,21 @@ class _TrayHostPageState extends State<TrayHostPage>
     }
   }
 
+  /// 调试入口：直接打开 AI 对话窗口（跳过抓屏与浮层）。
+  ///
+  /// AI 面板在正式流程里属于 `--capture` 进程，所以这里同样起一个子进程，只是多带
+  /// 上 `--debug-ai` 让它在启动时就把窗口显示成 AI 面板。
+  Future<void> _openAiPanel() async {
+    try {
+      await Process.start(Platform.resolvedExecutable, [
+        '--capture',
+        '--debug-ai',
+      ], mode: ProcessStartMode.detached);
+    } on Object catch (error) {
+      debugPrint('打开 AI 对话窗口失败：$error');
+    }
+  }
+
   /// 调试入口：直接打开授权引导页调 UI（不影响真实的权限状态）。
   Future<void> _openPermissionGuide() async {
     if (!mounted) return;
@@ -329,7 +411,8 @@ class _TrayHostPageState extends State<TrayHostPage>
       _showShortcutSettings = false;
       _permissionGuideMessage = null;
     });
-    await windowManager.setSize(const Size(560, 400));
+    // 和捕获进程的窗口尺寸保持一致（见 lib/main.dart）：授权引导要一屏放得下。
+    await windowManager.setSize(const Size(560, 480));
     await windowManager.center();
     await showWindow();
     await windowManager.focus();

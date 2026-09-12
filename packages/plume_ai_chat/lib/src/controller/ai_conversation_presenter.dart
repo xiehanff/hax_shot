@@ -79,7 +79,12 @@ class AiConversationPresenter {
     if (errorMessage != null && errorMessage != _lastResult) {
       _lastResult = errorMessage;
       _lastReasoning = null;
-      _replaceLoadingOrAdd(author: MessageAuthor.ai, text: '❌ $errorMessage');
+      // 文案保持原样（用户观感不变），语义状态用 isError 显式标记。
+      _replaceLoadingOrAdd(
+        author: MessageAuthor.ai,
+        text: '❌ $errorMessage',
+        isError: true,
+      );
       if (!loading) {
         _finishLastAiMessage();
       }
@@ -106,14 +111,21 @@ class AiConversationPresenter {
     _lastResult = result;
     switch (updateMode) {
       case _ResultUpdateMode.replace:
+        // 真实结果显式清掉错误标记，避免占位语义残留。
         _replaceLoadingOrAdd(
           author: MessageAuthor.ai,
           text: result,
           reasoning: reasoning,
           isLoading: loading,
+          isError: false,
         );
       case _ResultUpdateMode.incremental:
-        _updateLastAiMessage(result, reasoning: reasoning, isLoading: loading);
+        _updateLastAiMessage(
+          result,
+          reasoning: reasoning,
+          isLoading: loading,
+          isError: false,
+        );
     }
   }
 
@@ -131,6 +143,7 @@ class AiConversationPresenter {
         id: previous.id,
         isLoading: loading,
         reasoning: reasoning,
+        isError: previous.isError,
       );
       return;
     }
@@ -144,6 +157,7 @@ class AiConversationPresenter {
         id: previous.id,
         isLoading: previous.isLoading,
         reasoning: reasoning,
+        isError: previous.isError,
       );
       return;
     }
@@ -181,6 +195,7 @@ class AiConversationPresenter {
       text: previous.text,
       id: previous.id,
       reasoning: previous.reasoning,
+      isError: previous.isError,
     );
   }
 
@@ -199,6 +214,7 @@ class AiConversationPresenter {
     required String text,
     String? reasoning,
     bool isLoading = false,
+    bool isError = false,
   }) {
     final int loadingIndex = _messages.indexWhere(
       (ChatMessage message) =>
@@ -212,13 +228,24 @@ class AiConversationPresenter {
         id: loadingMessage.id,
         isLoading: isLoading,
         reasoning: reasoning,
+        isError: isError,
       );
       return;
     }
-    _updateLastAiMessage(text, reasoning: reasoning, isLoading: isLoading);
+    _updateLastAiMessage(
+      text,
+      reasoning: reasoning,
+      isLoading: isLoading,
+      isError: isError,
+    );
   }
 
-  void _updateLastAiMessage(String text, {String? reasoning, bool? isLoading}) {
+  void _updateLastAiMessage(
+    String text, {
+    String? reasoning,
+    bool? isLoading,
+    bool? isError,
+  }) {
     final int lastIndex = _messages.length - 1;
     if (lastIndex >= 0 && _messages[lastIndex].author == MessageAuthor.ai) {
       final ChatMessage previous = _messages[lastIndex];
@@ -228,6 +255,7 @@ class AiConversationPresenter {
         id: previous.id,
         isLoading: isLoading ?? previous.isLoading,
         reasoning: reasoning ?? previous.reasoning,
+        isError: isError ?? previous.isError,
       );
       return;
     }
@@ -239,6 +267,7 @@ class AiConversationPresenter {
         id: _nextId(),
         isLoading: isLoading ?? false,
         reasoning: reasoning,
+        isError: isError ?? false,
       ),
     );
   }

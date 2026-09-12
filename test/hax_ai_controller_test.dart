@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hax_shot/features/ai/controllers/hax_ai_controller.dart';
-import 'package:hax_shot/features/ai/models/hax_ai_action.dart';
+import 'package:hax_shot/models/hax_ai_action.dart';
 import 'package:hax_shot/features/ai/services/hax_ai_prompts.dart';
 import 'package:hax_shot/features/ai/services/hax_ai_service.dart';
 import 'package:hax_shot/features/ai/services/hax_ai_settings_store.dart';

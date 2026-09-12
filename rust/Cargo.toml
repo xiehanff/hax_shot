@@ -2,7 +2,7 @@
 name = "hax_shot_native"
 version = "0.1.0"
 edition = "2021"
-description = "Native capture, clipboard and global shortcut bridge for Hax Shot."
+description = "Native capture and clipboard backend for Hax Shot."
 license = "MIT"
 rust-version = "1.87"
 

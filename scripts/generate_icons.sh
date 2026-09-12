@@ -15,6 +15,10 @@
 #   assets/generated_icons/linux/...          同一套图的副本，myblog 的项目卡片引用这个路径
 #   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_<size>.png
 #   windows/runner/resources/app_icon.ico     Windows 可执行文件/窗口图标
+#
+# 注意：Windows 平台本身未实现（Rust 后端、Windows 构建规则、原生边界都缺，
+# flutter build windows 不可用，见 docs/development-guide.md §14）。ICO 与 windows/
+# 下的资源仍照常生成，只是为将来保留。
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -55,6 +59,8 @@ for size in 16 32 64 128 256 512 1024; do
 done
 
 # ---------------------------------------------------------------- Windows .ico
+# Windows 平台未实现（见 docs/development-guide.md §14），这段仍保留：ICO 只是给将来
+# 的 Windows 支持预留。
 # 直接内嵌 PNG（Windows Vista+ 支持 PNG 压缩的图标项），这样不必在这里手写
 # BITMAPINFOHEADER + AND 掩码。
 ico_tmp="$(mktemp -d)"

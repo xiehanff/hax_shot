@@ -35,6 +35,7 @@ final class CaptureOverlayWindow {
     window.standardWindowButton(.miniaturizeButton)?.isHidden = true
     window.standardWindowButton(.zoomButton)?.isHidden = true
     // 有原生圆角裁剪，圆角外侧不会露出窗口背景，这里只需要一个不透明的深色兜底。
+    // 底色等同 Dart 侧 `HaxAiColors.scaffoldBg`（lib/features/ai/views/widgets/ai_colors.dart，0xFF121318）。
     window.isOpaque = true
     window.backgroundColor = NSColor(
       srgbRed: 0x12 / 255, green: 0x13 / 255, blue: 0x18 / 255, alpha: 1)

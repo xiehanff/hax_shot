@@ -35,12 +35,17 @@ Future<void> main(List<String> args) async {
   final nativeCaptureOverlay = captureMode && Platform.isMacOS;
   final options = WindowOptions(
     title: 'Hax Shot',
-    backgroundColor: Colors.black,
+    // Win/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
+    // 只有底色透明，剪掉的四角才会露出桌面。macOS 不能一起改：titled 窗口由系统
+    // 自己裁圆角，透明底色会露出 NSWindow 底色/桌面，且本机浮层依赖不透明底色兜底。
+    // 全屏浮层不受影响：它自己画满冻结画面，不依赖窗口底色。
+    backgroundColor: Platform.isMacOS ? Colors.black : Colors.transparent,
     // The tray host only reveals the shortcut settings page on demand; keep
     // that temporary window compact instead of inheriting a full-screen size.
     // 捕获进程先只用一个小窗口：抓屏失败（没授权等）时用户看到的是引导，
     // 抓到画面之后才由 CaptureOverlayWindow / setFullScreen 升格成全屏浮层。
-    size: captureMode ? const Size(560, 400) : const Size(520, 400),
+    // 480 高是授权引导页一屏放得下的尺寸（引导内容 + 重置授权说明）。
+    size: captureMode ? const Size(560, 480) : const Size(520, 400),
     minimumSize: captureMode ? const Size(460, 320) : const Size(460, 320),
     center: true,
     // The product is tray-only; neither the hidden host nor the transient
@@ -66,7 +71,17 @@ Future<void> main(List<String> args) async {
   await windowManager.waitUntilReadyToShow(options);
   await windowManager.hide();
 
-  runApp(HaxShotApp(captureMode: captureMode, targetDisplay: targetDisplay));
+  // debug 构建里的 UI 调试入口（托盘菜单「调试：AI 对话窗口」）：带 `--capture`
+  // 但跳过抓屏，直接把窗口当成 AI 面板显示。
+  final debugAiPanel = captureMode && args.contains('--debug-ai');
+
+  runApp(
+    HaxShotApp(
+      captureMode: captureMode,
+      targetDisplay: targetDisplay,
+      debugAiPanel: debugAiPanel,
+    ),
+  );
 }
 
 /// 托盘宿主用 `--display <id>` 指定主浮层落在哪块显示器；授权后重启抓屏进程时

@@ -21,4 +21,6 @@ hax_shot 的项目级约定。和 `~/.pi/agent/AGENTS.md` 的通用约定冲突�
 - 技术细节、踩过的坑、为什么不能那么写，都记在 `docs/development-guide.md`，改代码时
   顺手同步它；
 - 构建产物：`build/macos/Build/Products/Release/hax_shot.app`，分发镜像
-  `build/macos/HaxShot-<版本>-arm64.dmg`。
+  `build/macos/HaxShot-<版本>-arm64.dmg`；debug 镜像
+  `build/macos/HaxShot-<版本>-arm64-debug.dmg`（`scripts/build_macos_dmg.sh --debug [--install]`，
+  本机联调用，ad-hoc 签名不公证）。

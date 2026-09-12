@@ -68,6 +68,19 @@ void main() {
     presenter.syncResponse(loading: false, errorMessage: 'network failed');
 
     expect(presenter.messages.last.text, '❌ network failed');
+    expect(presenter.messages.last.isError, isTrue);
     expect(presenter.messages.last.isLoading, isFalse);
+  });
+
+  test('error marker clears once a real result arrives', () {
+    final AiConversationPresenter presenter = AiConversationPresenter();
+    presenter.addUserMessage(text: 'hello');
+
+    presenter.syncResponse(loading: false, errorMessage: 'network failed');
+    expect(presenter.messages.last.isError, isTrue);
+
+    presenter.syncResponse(loading: false, result: 'answer');
+    expect(presenter.messages.last.text, 'answer');
+    expect(presenter.messages.last.isError, isFalse);
   });
 }

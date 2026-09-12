@@ -297,7 +297,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 只有按钮用图标同款的亮姜黄（见 lib/hax_colors.dart）：覆盖 colorScheme.primary
+    // 只有按钮用主题的灰蓝（见 lib/hax_colors.dart）：覆盖 colorScheme.primary
     // 就够了，其余文字/底色保持主题中性色。
     final accented = haxAccentTheme(Theme.of(context));
     return Theme(

@@ -21,12 +21,13 @@ scripts/generate_icons.sh
 | `linux/icons/hicolor/<size>/apps/com.github.xiehanff.hax_shot.png` | Linux 应用图标 = GNOME Dock / 应用列表（CMake 安装、RPM 打包都用它） |
 | `assets/generated_icons/linux/...` | 同一套图的副本；myblog 的项目卡片引用这个路径，所以两份必须保持一致 |
 | `macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_<size>.png` | macOS AppIcon（16–1024） |
-| `windows/runner/resources/app_icon.ico` | Windows 可执行文件/窗口图标 |
+| `windows/runner/resources/app_icon.ico` | Windows 可执行文件/窗口图标（Windows 平台未实现，仅为将来保留） |
 
 说明：
 
 - `.ico` 内嵌 PNG（Windows Vista+ 支持 PNG 压缩的图标项），所以脚本里不需要手写
-  BITMAPINFOHEADER + AND 掩码；
+  BITMAPINFOHEADER + AND 掩码；`assets/icons/hax_shot.ico` 与 `windows/` 下的 ICO 仍会照常
+  生成，但 **Windows 平台本身未实现**（见 [开发指南 §14](../docs/development-guide.md#14-已知限制和未完成项)），它们只是为将来保留；
 - `assets/icons/hax_shot.svg` 是**上一版**设计，保留作参考，不再作为生成源（脚本只读
   `hax_shot_source.png`，避免误用旧图标）；
 - macOS 图标里 1024 是从源图直接缩放的（源图 1254 足够清晰）。

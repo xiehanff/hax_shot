@@ -46,8 +46,11 @@ void main() {
 
     final box = tester.getRect(find.byType(CapturePermissionGuide));
     final title = tester.getRect(find.text('需要屏幕录制权限'));
-    // 标题贴着顶部（内容垂直居中时会落到窗口 1/3 高度处）。
+    // 标题贴着顶部（内容垂直居中时会落到窗口 1/3 高度处）……
     expect(title.top - box.top, lessThan(45));
+    // ……但也不能贴到窗口边上：标题栏内容必须真的垂直居中（曾经因为 Stack 非定位
+    // 子节点默认顶部对齐，标题和徽标顶到窗口第一行）。顶部条 68 高 → 标题行盒约 24。
+    expect(title.top - box.top, greaterThan(12));
 
     // 内容整体不超出窗口高度，窗口也不必再留一大截空白。
     final buttons = tester.getRect(find.text('打开系统设置'));
@@ -68,6 +71,7 @@ void main() {
   testWidgets('没有授权信息时显示引导文案', (tester) async {
     await pumpGuide(tester);
     expect(find.textContaining('屏幕录制'), findsWidgets);
-    expect(find.textContaining('1. 点下面'), findsOneWidget);
+    // 步骤改成了数字徐标 + 正文（不再把 “1. ” 写进正文），断言步骤文案本身。
+    expect(find.textContaining('点下面“打开系统设置”'), findsOneWidget);
   });
 }

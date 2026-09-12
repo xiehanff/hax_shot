@@ -5,7 +5,7 @@ Hax Shot 的原生层按平台拆成两个后端，对外只暴露一份 C ABI�
 ```text
 rust/src/lib.rs     C ABI、错误状态、临时文件路径
 rust/src/linux.rs   Mutter ScreenCast + GStreamer + wl-copy
-rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard + Carbon 全局快捷键
+rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard
 ```
 
 生成：
@@ -20,18 +20,18 @@ macOS: libhax_shot_native.dylib
 - 截图：抓取目标显示器一帧并写成临时 PNG；
 - 目标显示器：`--display <id>` 参数（托盘宿主在触发时写入）→ 光标所在显示器 → 主显示器；
 - 剪贴板：写入图片剪贴板（Linux `wl-copy --type image/png`，macOS `NSPasteboard`）；
-- 快捷键：macOS 注册全局热键并直接启动 `--capture` 子进程；
+- 快捷键：**不经过 Rust**。宿主进程的 Dart 侧 `hotkey_manager` 负责注册（macOS 底层是 Carbon `RegisterEventHotKey`），触发时再启动 `--capture` 子进程；
 - 通过 C ABI 暴露给 Dart FFI，并统一返回可读错误信息。
 
-平台实现提供同名函数：`capture_screen_impl` / `copy_png_impl` /
-`register_capture_hotkey_impl` / `cursor_display_impl`，`lib.rs` 负责分发和错误处理。
+平台实现提供同名函数：`capture_screen_impl` / `copy_png_impl` / `cursor_display_impl` /
+`screen_capture_authorized_impl` / `request_screen_capture_access_impl`，`lib.rs` 负责分发和错误处理。
 
 ## Linux 实现
 
 - 通过 Mutter `org.gnome.Mutter.ScreenCast` 创建主显示器 PipeWire 流；
 - 使用 GStreamer `pipewiresrc → videoconvert → pngenc` 获取无快门声单帧 PNG；
 - 使用 `wl-copy --type image/png` 写入 GNOME Wayland 图片剪贴板；
-- 快捷键交给 GNOME gsettings，`register_capture_hotkey_impl` 返回“不支持”错误；
+- 快捷键不经过原生层：GNOME 自己维护 gsettings 里的自定义快捷键（值为 `hax_shot --capture`）；
 - 采集超时、Mutter/GStreamer 不可用时返回错误，不回退到会播放快门声的 Screenshot Portal。
 
 ## macOS 实现
@@ -40,11 +40,13 @@ macOS: libhax_shot_native.dylib
 - 用 `CGGetDisplaysWithPoint` 找到光标所在显示器，供托盘宿主和 `target_display()` 决定抓哪块屏；
 - `CGDisplayCreateImage` 抓该显示器物理像素，ImageIO 直接编码 PNG；
 - `NSPasteboard` 写 `public.png`（必须在主线程调用）；
-- `global-hotkey`（Carbon `RegisterEventHotKey`）注册全局热键，触发时启动 `--capture` 子进程
-  并带上 `--display <光标所在显示器>`；
-- 绑定字符串与 Linux 共用 `<Super><Shift>z` 这种格式。
 
-显示器选择规则必须和 `macos/Runner/CaptureDisplay.swift` 一致，详见
+全局快捷键由宿主进程的 Dart 侧 `hotkey_manager` 注册（底层 Carbon `RegisterEventHotKey`），
+Rust 不参与；绑定字符串与 Linux 共用 `<Super><Shift>z` 这种格式。
+
+显示器选择规则只在 Rust 实现一次（`rust/src/macos.rs` 的 `resolve_target_display()`）：
+Swift 侧 `macos/Runner/CaptureDisplay.swift` 通过 `dlopen` 调 `hax_shot_target_display`
+拿同一块屏，不再重复实现规则。详见
 [开发指南 6.9](../docs/development-guide.md#69-多显示器)。
 
 ## 构建
@@ -65,12 +67,16 @@ Flutter 构建流程会自动调用 cargo：
 
 ## C ABI
 
+- `hax_shot_screen_capture_authorized`
+- `hax_shot_request_screen_capture_access`
+- `hax_shot_cursor_display`
 - `hax_shot_capture_screen`
 - `hax_shot_copy_png_to_clipboard`
-- `hax_shot_register_capture_hotkey`
-- `hax_shot_cursor_display`
+- `hax_shot_png_buffer_size`
+- `hax_shot_encode_png`
 - `hax_shot_last_error`
-- `hax_shot_native_version`
+- `hax_shot_target_display`（macOS only）：按抓屏用的同一份规则返回目标显示器的
+  `CGDirectDisplayID`，给 macOS Runner 的 Swift 把冻结画面浮层摆到同一块屏上。
 
 Dart 封装位于 `lib/native/native_bridge.dart`。
 

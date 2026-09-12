@@ -12,7 +12,16 @@
 #   scripts/build_macos_dmg.sh                    # 自动找 Developer ID；找不到就产出 ad-hoc DMG（仅内部测试）
 #   MACOS_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" scripts/build_macos_dmg.sh
 #   NOTARY_PROFILE=hax-shot scripts/build_macos_dmg.sh --notarize
+#   scripts/build_macos_dmg.sh --debug            # 打 debug 包（本机联调用，ad-hoc 签名、不公证）
+#   scripts/build_macos_dmg.sh --debug --install   # 再挂载 DMG 把 app 装进 /Applications
 #   scripts/build_macos_dmg.sh --verify-only      # 只对已有的 app/DMG 做验收检查
+#
+# --debug 与 --install 的说明：
+#   debug 包**故意不换 Developer ID、也不公证**：debug 需要 get-task-allow/JIT，
+#   hardened runtime 与公证对它没有意义，产物也只用于本机/内部联调（别人机器上会被
+#   Gatekeeper 拦，这是预期）。DMG 名字带 -debug 后缀，不和 release 分发镜像混淆。
+#   --install 会先退出正在运行的实例，再把 app 从 DMG 拷到 /Applications 并登记
+#   LaunchServices（托盘宿主是常驻进程，替换前必须退出）。
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,14 +31,28 @@ app_name="hax_shot"
 bundle_name="hax_shot.app"
 notarize=0
 verify_only=0
+build_mode="release"
+install_app=0
+install_dir="/Applications"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --notarize) notarize=1; shift ;;
     --verify-only) verify_only=1; shift ;;
+    --debug) build_mode="debug"; shift ;;
+    --install) install_app=1; shift ;;
+    --dir)
+      install_dir="${2:?--dir 需要参数}"
+      shift 2
+      ;;
     *) echo "error: 未知参数 $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ "$build_mode" == "debug" && $notarize -eq 1 ]]; then
+  echo "error: --debug 不能和 --notarize 一起用（debug 包不公证）" >&2
+  exit 1
+fi
 
 if command -v fvm >/dev/null 2>&1; then
   flutter_cmd=(fvm flutter)
@@ -39,14 +62,22 @@ fi
 
 version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1 | cut -d+ -f1)"
 arch="$(uname -m)"
-release_dir="$repo_root/build/macos/Build/Products/Release"
-app_path="$release_dir/$bundle_name"
-dmg_path="$repo_root/build/macos/HaxShot-${version}-${arch}.dmg"
-entitlements="$repo_root/macos/Runner/Release.entitlements"
+if [[ "$build_mode" == "debug" ]]; then
+  product_dir="Debug"
+  dmg_suffix="-debug"
+  entitlements="$repo_root/macos/Runner/DebugProfile.entitlements"
+else
+  product_dir="Release"
+  dmg_suffix=""
+  entitlements="$repo_root/macos/Runner/Release.entitlements"
+fi
+products_dir="$repo_root/build/macos/Build/Products/$product_dir"
+app_path="$products_dir/$bundle_name"
+dmg_path="$repo_root/build/macos/HaxShot-${version}-${arch}${dmg_suffix}.dmg"
 
 if [[ $verify_only -eq 0 ]]; then
-  echo "== 1/5 构建 release =="
-  "${flutter_cmd[@]}" build macos --release
+  echo "== 1/5 构建 ${build_mode} =="
+  "${flutter_cmd[@]}" build macos "--${build_mode}"
 fi
 
 if [[ ! -d "$app_path" ]]; then
@@ -55,17 +86,27 @@ if [[ ! -d "$app_path" ]]; then
 fi
 
 # ---------------------------------------------------------------- 签名身份
-sign_identity="${MACOS_SIGN_IDENTITY:-}"
-if [[ -z "$sign_identity" ]]; then
-  sign_identity="$(
-    security find-identity -v -p codesigning 2>/dev/null \
-      | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' \
-      | head -1
-  )"
+if [[ "$build_mode" == "debug" ]]; then
+  # debug 故意不换 Developer ID、不公证：需要 get-task-allow/JIT，只用于本机联调。
+  echo "== 2/5 保持 Xcode 的 ad-hoc 签名（debug 不换 Developer ID）=="
+  echo "   debug 构建需要 get-task-allow/JIT，hardened runtime 与公证对它没有意义；"
+  echo "   这份 DMG 只用于本机/内部联调，拿到别人机器上会被 Gatekeeper 拦（预期）。"
+  sign_identity=""
+else
+  sign_identity="${MACOS_SIGN_IDENTITY:-}"
+  if [[ -z "$sign_identity" ]]; then
+    sign_identity="$(
+      security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' \
+        | head -1
+    )"
+  fi
 fi
 
 signed_with_developer_id=0
-if [[ -n "$sign_identity" ]]; then
+if [[ "$build_mode" == "debug" ]]; then
+  : # 上面已经打过 debug 的说明，这里不再重复打印“跳过 Developer ID”
+elif [[ -n "$sign_identity" ]]; then
   signed_with_developer_id=1
   echo "== 2/5 用 Developer ID 重新签名 =="
   echo "   身份：$sign_identity"
@@ -161,13 +202,48 @@ echo "   签名身份：${authority:-<无>}"
 if [[ $signed_with_developer_id -eq 1 ]]; then
   check "Gatekeeper 接受 app（spctl）" spctl -a -vvv -t exec "$app_path"
   check "DMG 已公证并 stapled" xcrun stapler validate "$dmg_path"
+elif [[ "$build_mode" == "debug" ]]; then
+  echo "   ⚠️  debug 包是 ad-hoc 签名：spctl/公证不适用（预期）；这份镜像只用于本机联调"
 else
   echo "   ⚠️  ad-hoc 签名：spctl/公证 无法通过，这是预期结果（换别人机器需要 Developer ID）"
 fi
 
+if [[ $install_app -eq 1 ]]; then
+  echo "== 安装到 $install_dir =="
+  if [[ $status_ok -ne 0 ]]; then
+    echo "error: 验收没通过，先不安装" >&2
+    exit 1
+  fi
+  # 托盘宿主是常驻进程，会占住 bundle，替换前必须先退出。
+  if pgrep -x "$app_name" >/dev/null 2>&1; then
+    echo "   note: 退出正在运行的 $app_name"
+    pkill -x "$app_name" || true
+    sleep 1
+  fi
+  install_mount="$(mktemp -d)"
+  hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$install_mount" >/dev/null
+  mkdir -p "$install_dir"
+  rm -rf "${install_dir:?}/$bundle_name"
+  ditto "$install_mount/$bundle_name" "$install_dir/$bundle_name"
+  hdiutil detach "$install_mount" >/dev/null 2>&1 || true
+  rmdir "$install_mount" 2>/dev/null || true
+  touch "$install_dir/$bundle_name"
+  lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [[ -x "$lsregister" ]]; then
+    "$lsregister" -f "$install_dir/$bundle_name" >/dev/null 2>&1 || true
+  fi
+  echo "   已安装：$install_dir/$bundle_name"
+  echo "   运行：open -a $install_dir/$bundle_name"
+fi
+
 echo
 if [[ $status_ok -eq 0 ]]; then
-  echo "分发链路检查通过：$dmg_path"
+  if [[ "$build_mode" == "debug" ]]; then
+    echo "debug 镜像与安装检查通过：$dmg_path"
+    echo "（本机联调用；分发仍需 Developer ID 签名 + 公证，见 docs/macos-distribution.md）"
+  else
+    echo "分发链路检查通过：$dmg_path"
+  fi
 else
   echo "分发链路仍有问题，见上面的 ❌。"
   exit 1

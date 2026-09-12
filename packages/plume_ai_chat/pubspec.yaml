@@ -1,6 +1,6 @@
 name: plume_ai_chat
 description: Reusable Flutter AI chat runtime and UI foundation used by Plume apps.
-version: 0.1.0
+version: 0.2.0
 publish_to: 'none'
 
 environment:

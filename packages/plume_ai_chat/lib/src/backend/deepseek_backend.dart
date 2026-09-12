@@ -210,20 +210,6 @@ class DeepSeekBackendException implements Exception {
   final String message;
   final int? statusCode;
 
-  /// Only explicit 400/422 multimodal rejections are safe to retry as text.
-  /// Authentication, rate-limit and network failures must not trigger a second
-  /// request for the same user action.
-  bool get canFallbackToText {
-    if (statusCode != 400 && statusCode != 422) {
-      return false;
-    }
-    final String lowercased = message.toLowerCase();
-    return lowercased.contains('image') ||
-        lowercased.contains('vision') ||
-        lowercased.contains('media') ||
-        lowercased.contains('multimodal');
-  }
-
   @override
   String toString() => message;
 }

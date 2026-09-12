@@ -509,7 +509,7 @@ packages:
       path: "packages/plume_ai_chat"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.2.0"
   provider:
     dependency: transitive
     description:
@@ -694,10 +694,9 @@ packages:
   tray_manager:
     dependency: "direct main"
     description:
-      name: tray_manager
-      sha256: "1a659b08baa6e9b91ef8ce16eda37740de398be1c4cf322b8a1ddfef25c68c5a"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
+      path: "packages/tray_manager"
+      relative: true
+    source: path
     version: "0.5.3"
   tuple:
     dependency: transitive

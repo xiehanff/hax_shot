@@ -73,10 +73,11 @@ Alt+Z / 托盘“立即截屏”
 | `lib/main.dart` | 解析 `--capture`，配置窗口，非捕获分支取单实例锁 | `skipTaskbar` 必须保持为 `true`；捕获进程必须先隐藏、且不能调 `SingleInstanceGuard` |
 | `lib/app.dart` | tray-only 宿主、快捷键设置页、菜单、启动子进程 | 不要重新添加主应用窗口；设置页是按需显示的临时窗口；菜单截图通过 `Platform.resolvedExecutable --capture` 启动独立进程；`_quit()` 里要 `release()` 单实例锁 |
 | `lib/features/app/single_instance_guard.dart` | 托盘宿主单实例保护 | 只在宿主进程用；判定存活必须同时看 PID 和 command name（PID 会被复用）；拿不到锁文件时不能阻止启动 |
-| `lib/hax_colors.dart` | 品牌色 `#F8C800` 和 `haxAccentTheme()` | 只包在授权引导和设置页外层；改色值要同步这两处 `Theme(data: haxAccentTheme(...))` |
+| `lib/hax_colors.dart` | 主题色 `#8FAEC9`（灰蓝）和 `haxAccentTheme()` | 应用内不用姜黄；`haxAccentTheme()` 只包在设置页外层（欢迎页/授权引导改用 `panel_chrome.dart` 的按钮样式）；改色值要同步 `lib/app.dart` 的 `seedColor` |
+| `lib/features/window/panel_chrome.dart` | 欢迎页 / 授权引导共用的面板视觉（`PanelColors` / `PanelText` / `PanelButtons` / `PanelHeader` / `PanelCard` / `PanelNote`） | 新加这类“临时小窗口”直接用它，别在页面里另写一套字号和圆角；`PanelHeader` 整条可拖，标题必须套 `IgnorePointer` |
 | `lib/features/settings/shortcut_settings_page.dart` | 快捷键录制、开机自启动开关 | 快捷键通过 `gsettings` 写入，启动项通过 `AutostartService` 写入当前用户 XDG 配置 |
 | `lib/features/capture/capture_page.dart` | 冻结图加载、框选、保存、复制 | `_capture()` 完成前不要显示捕获窗口；保存/复制使用同一份裁剪逻辑 |
-| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
+| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；外圈 2px 玻璃边是灰蓝渐变 `haxAccent` → `haxAccentDeep`（原来是紫→靛，别改回去）；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
 | `lib/features/capture/screenshot_canvas.dart` | 图片适配、遮罩、选区和矩形/箭头/文字绘制、point→pixel 映射 | `ScreenshotLayout` 的坐标是 Flutter logical pixels，最终裁剪和标注导出是物理像素 |
 | `lib/native/native_bridge.dart` | Dart FFI 封装 | 不在这里执行 DBus 或 `wl-copy`，这些都属于 Rust 原生层 |
 | `rust/src/lib.rs` | Mutter ScreenCast、GStreamer、`wl-copy`、C ABI | 不要悄悄回退到 Screenshot Portal，否则会重新出现 GNOME 快门声 |
@@ -131,6 +132,27 @@ fvm flutter run -d linux -- --capture
 
 `linux/runner/my_application.cc` 中已经移除了旧的 `first-frame` 自动 `gtk_widget_show()`。这是故意的：如果 native first-frame 回调再次显示窗口，捕获时机就会被破坏。
 
+#### 失败态是两种，别混成一个开关
+
+`CapturePage` 只有两种「不抓屏」的界面，且**互斥**：写点只有 `_showGuide()` 与
+`_enterFailure()` 两处，改动这个状态机时不要把两者合回一个布尔。
+
+```text
+_needsPermission = true   权限缺失 → CapturePermissionGuide（macOS 语义：设置 URI、三步路径、重置授权记录）
+_failureMessage  != null  普通失败 → 平台无关的失败面板（截图失败 + 重试 / 关闭，Esc 可关）
+```
+
+- 判定权限**必须**用安全查询 `_screenCaptureAuthorizedSafe()`（返回 `bool?`）：`null` 表示
+  **查询本身失败**（dylib/符号问题），这时既不能当成“没授权”（Linux 会掉进 macOS 专属
+  引导页——`rust/src/linux.rs` 的授权函数恒返回 1，所以 Linux 任何失败都会走到那条分支），
+  也不能当成“已授权”（会直接去抓屏然后失败），只能进失败面板。
+- `_capture()` 的授权预检在 `try` 内；`_showGuide()` 自己不许抛异常（授权请求与窗口显隐
+  各自 try/catch），否则从 postFrameCallback / 轮询定时器里抛出去就是未捕获异步异常。
+- 授权请求失败时**留在引导页**（“当前进程没有授权”这个判断仍然成立，系统设置出口仍有用），
+  只有「授权查询失败」才切失败面板。
+- `CapturePage.onAiAction` 是 `required` 的（唯一生产调用点在 `lib/app.dart` 永远传值），
+  不要再改回可空 + 各处空判。
+
 ### 3.3 托盘宿主取单实例锁
 
 全局快捷键是**进程内**注册的（macOS 走 Carbon 的 `RegisterEventHotKey`），而系统只保证“同一个
@@ -150,8 +172,9 @@ SingleInstanceGuard.acquire()
   启动时的读-改-写竞态、PID 被复用后误杀别的进程（或误杀 `--capture` 进程）、以及旧宿主
   不退出时的“超时后照样接管”。文件锁由内核维护、进程一退出就释放，这些问题都不存在；
 - 锁文件路径按平台选（macOS `~/Library/Application Support/<bundle id>/hax_shot.lock`，
-  Linux 优先 `$XDG_RUNTIME_DIR`，Windows `%LOCALAPPDATA%`），实际路径无关紧要，只要
-  两份宿主看到同一个文件；
+  Linux 优先 `$XDG_RUNTIME_DIR`），实际路径无关紧要，只要两份宿主看到同一个文件；
+  `single_instance_guard.dart` 里还留了一条 Windows `%LOCALAPPDATA%` 分支，但 Windows
+  平台本身未实现（见 §14），那里是 Flutter 模板遗留、跑不到的死分支；
 - `--capture` 进程（`lib/main.dart` 的 `captureMode` 分支）**不参与**：它本来就该能同时开多个；
 - `lib/app.dart` 的 `_quit()` 在 `finally` 里调 `SingleInstanceGuard.release()`（关句柄 +
   删文件）。放在最后一步：放太早会让下一份实例在快捷键还没注销完的时候启动；
@@ -292,7 +315,7 @@ Flutter（Linux / macOS 共用）
         │ Dart FFI：hax_shot_capture_screen / hax_shot_encode_png / hax_shot_png_buffer_size
         │           hax_shot_copy_png_to_clipboard / hax_shot_last_error
         ├── rust/src/linux.rs   Mutter ScreenCast + GStreamer + wl-copy + GNOME gsettings
-        └── rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard + Carbon
+        └── rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard
 ```
 
 ### 6.1 构建
@@ -313,6 +336,20 @@ fvm flutter build macos --release
 只构建 **Apple Silicon（arm64）**：不做 universal、不 lipo。`AppInfo.xcconfig` 里
 `ARCHS = arm64`，脚本按 `$ARCHS` 的第一个架构构建对应 target，保证 dylib 和主程序同架构。
 要支持 Intel 时删掉 `ARCHS` 那一行，并把脚本改成按 `$ARCHS` 逐架构构建后 `lipo -create`。
+
+#### 本机安装 / 本机 DMG
+
+```bash
+scripts/install_macos_app.sh                   # 构建 release + 装到 /Applications
+scripts/install_macos_app.sh --dev-cert        # 用本地自签名证书签名（TCC 授权不再丢，见 6.2）
+scripts/build_macos_dmg.sh --debug --install    # 构建 debug + 打 DMG + 装到 /Applications
+```
+
+`scripts/build_macos_dmg.sh --debug` 走的是同一套打包与验收流程，但**故意不换
+Developer ID、不公证**：debug 需要 `get-task-allow`/JIT，hardened runtime 与公证对它没有
+意义；产物名字带 `-debug` 后缀（`build/macos/HaxShot-<版本>-arm64-debug.dmg`），只用于
+本机/内部联调，拿到别人机器上会被 Gatekeeper 拦。`--install` 会先退出正在运行的实例
+（托盘宿主是常驻进程），再把 app 从挂载的 DMG 拷进 `/Applications` 并登记 LaunchServices。
 
 #### 本机安装：`scripts/install_macos_app.sh`
 
@@ -339,8 +376,7 @@ scripts/install_macos_app.sh --zip out.zip   # 顺带打一个 zip
 
 macOS 把屏幕录制授权记在**责任进程**上。`flutter run` 启动的 app 是终端的子进程，
 责任进程是终端：系统弹窗写的是“终端想要录制屏幕”，授权也记在终端名下，
-**Hax Shot 自己不会出现在“屏幕录制”列表里**（macOS 15 的该面板还没有“+”可手动添加），
-于是怎么都授权不了。
+Hax Shot 自己不会出现在“屏幕录制”列表里，于是怎么都授权不了。
 
 要调试权限相关功能，用 `open` 启动构建产物，让 Hax Shot 成为责任进程：
 
@@ -392,6 +428,58 @@ Dart 先问 NativeBridge.screenCaptureAuthorized()（Rust: CGPreflightScreenCapt
 （引导窗口需要标题栏，浮层靠 Runner 自己切 borderless）。
 
 重新构建会让 ad-hoc 签名指纹变化，TCC 记录可能失效，需要重新授权。
+
+#### 授权为什么会“丢”，以及丢了怎么救
+
+本机（macOS 15.3.1）实测，TCC 给 ad-hoc 签名应用存下来的 requirement 是**裸 cdhash**：
+
+```bash
+# 看当前记录（需要终端有“完全磁盘访问权限”，否则读不了 TCC.db）
+sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+  "select client,auth_value,hex(csreq) from access where service='kTCCServiceScreenCapture';"
+# 我们的那条（去掉 8 字节头后）：version=1, op=cdhash(8), len=20, hash=2cc12dad…
+```
+
+只有 20 字节的二进制哈希、**不带 identifier 也不带证书**，所以：
+
+- 每次重新构建 cdhash 都变 → 旧记录对不上（tccd 日志：
+  `Failed to match existing code requirement for subject com.github.xiehanff.haxShot and
+  service kTCCServiceScreenCapture`）→ 开关看着是开的，进程还是没权限；
+- `tccutil reset ScreenCapture com.github.xiehanff.haxShot` 会把记录删掉。之后系统**不一定**
+  再弹授权框（同一个 app 的弹框有节流），而“录屏与系统录音”面板只列有记录的应用 →
+  列表里就彻底看不到 Hax Shot 了，用户没有任何入口去勾选。
+
+恢复办法（都不需要重启）：
+
+```text
+系统设置 → 隐私与安全性 → 录屏与系统录音 → 列表下方的 “+”
+    → 选 /Applications/hax_shot.app → 开关打开
+```
+
+`+` 是有的（15.3 实测，位于屏幕录制列表底部）；加完之后
+`SecurityPrivacyExtension` 会弹那个“「hax_shot.app」想要录制此电脑的屏幕和音频”的系统框，
+点“打开系统设置”就会把它登记进列表。引导页的步骤 2 和“重置授权记录”的提示里都写了这条。
+
+#### 想“构建多少次都不用重新授权”
+
+用固定证书签名（自签名即可，TCC 绑「bundle id + 证书」而不是 cdhash）：
+
+```bash
+scripts/macos_dev_cert.sh --trust      # 建证书 + 标成“信任用于代码签名”（弹一次系统授权）
+scripts/install_macos_app.sh --dev-cert
+```
+
+两个坑：
+
+- Homebrew 的 OpenSSL 3 导出的 PKCS#12 是 AES-256/SHA-256，`security import` 会报
+  “MAC verification failed during PKCS12 import”；脚本现在加了 `-legacy` 并在不支持时回退。
+- 自签名证书默认是 `CSSMERR_TP_NOT_TRUSTED`，`security find-identity -v` 里不算有效身份，
+  `codesign --sign "Hax Shot Dev"` 会报 “The specified item could not be found in the
+  keychain.” —— 必须先 `add-trusted-cert -r trustRoot -p codeSign`（就是上面的 `--trust`）。
+  这一步要弹系统授权，脚本不能替你点。
+
+安全提示：`--trust` 会往用户信任设置里加一条代码签名信任，而该私钥所在 keychain 的密码是固定的
+（`hax-shot-dev`）——只在本机开发用，不用了就 `scripts/macos_dev_cert.sh --delete` 并删掉信任项。
 
 ### 6.3 抓屏实现
 
@@ -452,8 +540,9 @@ onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标�
 <Alt>z            →  Linux Alt+Z
 ```
 
-`hax_shot_register_capture_hotkey` 必须从 Dart 主 isolate 调用，Carbon 事件处理器要装在
-主线程 RunLoop 上；`--capture` 进程不注册热键。
+热键**不走 FFI**：macOS 由**宿主进程**的 `hotkey_manager` 注册（底层 Carbon
+`RegisterEventHotKey`），Linux 不动、由 GNOME gsettings 直接启动 `hax_shot --capture`；
+Rust 原生层不参与热键注册，`--capture` 进程也不注册热键。
 
 ### 6.7 开机自启动
 
@@ -484,11 +573,11 @@ macOS 已支持多显示器：**截图目标和浮层始终是同一块显示器
 3. 主显示器          前两者都拿不到时的兜底
 ```
 
-这个顺序在两处各实现一次，必须保持一致：
+这个顺序只由 Rust 实现一次（`resolve_target_display`），Swift 不再自己算：
 
 ```text
-rust/src/macos.rs                  target_display()
-macos/Runner/CaptureDisplay.swift  CaptureDisplay.targetScreen()
+rust/src/macos.rs                  resolve_target_display() → C ABI hax_shot_target_display
+macos/Runner/CaptureDisplay.swift  dlopen 调用 hax_shot_target_display，只把 id 映射成 NSScreen
 ```
 
 为什么不让两边各自去查光标：`--capture` 子进程从启动到 Dart 真正开始抓屏有几百毫秒，
@@ -502,7 +591,7 @@ Linux：GNOME 自定义快捷键直接启动 hax_shot --capture，拿不到光�
     ↓ NativeBridge.cursorDisplay() → hax_shot_cursor_display()
     ↓ hax_shot --capture --display <id>
     ├── Rust：hax_shot_capture_screen 按 <id> 抓屏
-    └── Swift：CaptureDisplay.targetScreen() 把浮层铺到同一块屏
+    └── Swift：CaptureDisplay.targetScreen() 调 Rust 拿同一块屏，把浮层铺上去
 ```
 
 DPI：抓屏是物理像素，浮层是该显示器的逻辑尺寸，`ScreenshotLayout.fromViewport` 会自动
@@ -514,11 +603,22 @@ WindowServer 会把窗口限制在一块屏上，跨屏选区必须为每块屏�
 Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步；详见
 [`docs/reference-decisions.md`](./reference-decisions.md)。
 
-#### 调试授权引导的入口
+#### 调试 UI 入口
 
-托盘菜单在 debug 构建里多一项 **“权限引导（调试）”**（`lib/app.dart` 里用 `kDebugMode`
-控制）：点它会按 560×480 打开 `CapturePermissionGuide`，用于反复调这个页面的 UI，
-不影响真实权限状态。“我已授权，重新检查”在调试模式下只反馈当前真实授权状态。
+托盘菜单在 debug 构建里（`lib/app.dart` 里用 `kDebugMode` 控制）多出一组 **“调试：…”**
+入口，把每个界面单独列出来，不用真的截图 / 等授权就能直接打开：
+
+```text
+调试：欢迎页          FirstRunGuide（不写“已看过”标记，每次都能重看）
+调试：快捷键设置      ShortcutSettingsPage
+调试：权限引导        CapturePermissionGuide（不影响真实权限状态）
+调试：截图浮层        hax_shot --capture（和“立即截屏”同一条路径）
+调试：AI 对话窗口      hax_shot --capture --debug-ai
+```
+
+`--debug-ai` 只在 debug 构建的托盘菜单里用到：捕获进程启动后不抓屏，直接把窗口
+配成 AI 面板尺寸（456×680）显示出来，用于调 AI 面板的 UI。“我已授权，重新检查”
+在调试模式下只反馈当前真实授权状态。
 
 #### macOS 窗口交给 Flutter 自己管
 
@@ -543,8 +643,15 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
 抓屏成功后 `becomeOverlay()` 会把它切成 `[.borderless]`：全屏浮层必须铺满屏幕、盖住
 菜单栏和 Dock，不能有圆角。`exitOverlay()` 再切回面板外观。
 
-Windows/Linux 的窗口本身没有圆角，靠 `RoundedWindow`（`ClipRRect`，半径 12）裁一刀 +
-窗口背景透明做出圆角；这两个平台上它才生效（见 `rounded_window.dart`）。**截图浮层
+Linux 的窗口本身没有圆角，靠 `RoundedWindow`（`ClipRRect`，半径 12）裁一刀 +
+窗口背景透明做出圆角；这个平台上它才生效（见 `rounded_window.dart`）。
+
+前提是**窗口底色真的透明**：`lib/main.dart` 里是
+`backgroundColor: Platform.isMacOS ? Colors.black : Colors.transparent`。macOS 保持黑
+（系统已经裁了圆角，透明反而会露出 NSWindow 底色/桌面，浮层也依赖不透明底兜底），
+Windows/Linux 用透明，否则 `ClipRRect` 剪掉的四角露出的是一块黑角。全屏浮层不受影响
+（它自己画满冻结画面）。这条改动没有 Windows/Linux 实机验证过。Windows 平台未实现
+（见 §14），那里同样的分支只是 Flutter 模板遗留。**截图浮层
 （`CapturePage`）永远不要包 `RoundedWindow`**：那里必须直角铺满。
 
 #### 保存/复制：PNG 编码走 Rust，浮层先收起
@@ -810,20 +917,60 @@ lib/features/ai/
 
 AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口。标题栏支持拖动，右上角关闭按钮结束当前截图进程。API Key 保存到 `shared_preferences`，key 为 `hax_shot.deepseek_api_key`。
 
+### 欢迎页 / 授权引导的面板视觉
+
+`lib/features/window/panel_chrome.dart` 是这两个“临时小窗口”的共用视觉层（首次欢迎页
+`first_run_guide.dart`、授权引导 `capture_permission_guide.dart`）：
+
+```text
+窗口尺寸   欢迎页 560×460（居中开场版式刚好铺满）
+           授权引导 560×480（内容实测 474pt，400 高会把底部“重置授权记录”说明藏到滚动区外）
+           两个尺寸分别在 lib/app.dart 的 _showFirstRunGuide / _openPermissionGuide，
+           以及 lib/main.dart 的捕获模式 WindowOptions 里，改一处要同步另一处
+底色       PanelColors.bg = #101418       卡片 PanelColors.card = #171C22 + 1px 描边
+强调色     PanelColors.accent = haxAccent（灰蓝），实心主按钮 / 图标徽标 / 提示条
+顶部条     PanelHeader：整条 DragToMoveArea 可拖；传 icon/title 是“徽标 + 标题”头部，
+           不传就是只留拖拽区 + 关闭（欢迎页的居中开场就是这个）
+卡片       PanelCard（圆角 14 + 描边）/ PanelFactRow / PanelDivider
+提示条     PanelNote：muted（终端说明）/ accent（状态）/ danger（错误）
+开场版式   欢迎页：居中 56px 徽标 + 20px 标题 + 说明 + 卡片 + 居中按钮（填满 460）
+```
+
+三个约束别碰：
+
+- **`PanelHeader` 的内容行必须包在 `Positioned.fill` 里**。`Stack` 的非定位子节点是按
+  `alignment`（默认 top-start）**顶部对齐**的，直接把 `Row` 塞进 `Stack`，行只会占自身
+  高度（徽标/关闭按钮那么高）并贴在窗口第一行——标题字面离窗口顶只有 ~9pt，看着就是
+  “标题贴着窗口”。包成 `Positioned.fill` 后行拿到 header 的全高，再由 `Row` 自己的
+  `crossAxisAlignment.center` 垂直居中（68 高 → 徽标顶 17pt，标题行盒顶 24pt）。
+
+- 顶部条里标题那一行必须套 `IgnorePointer`，`Text` 会吃掉 hit test，不套就拖不动窗口；
+- 一个页面只能有一个 `Icons.close`（`test/capture_permission_guide_test.dart` 断言
+  `findsOneWidget`，退出只靠右上角 ✕，不要再加“退出”按钮）。
+
+授权引导的按钮从原来的“实心姜黄 + 描边 + 纯文字”改成灰蓝实心主操作 + 描边 +
+纯文字次操作，`_checking` / `_resetting` 的转圈逻辑不变；步骤列表改成数字徐标 +
+正文（正文里不再写 “1. ”），所以那个测试断言的是步骤文案本身。
+
 ### AI 面板顶部条
 
-`lib/features/ai/views/widgets/ai_sidebar.dart` 的 `_AiTitleBar` 只负责把顶部条和消息区
-区分开，**不放标题文字**（原来那个 “AI” 文本已经去掉）：
+`lib/features/ai/views/widgets/ai_sidebar.dart` 的 `_AiTitleBar` 中间放 `HaxShot` 字标，
+字体是 `assets/fonts/GBaiMarkerPen.ttf`（从 cliper 项目复制的马克笔手写体，pubspec 里
+声明为 `GBaiMarkerPen`；文件内部 family 名叫 “851 GBai Marker”，用别名即可。
+字体是**随仓库分发的第三方资产**（10.3 MiB，`assets/fonts/GBaiMarkerPen.ttf`），来源与
+许可状态记在 `THIRD_PARTY_NOTICES.md`；许可文本补齐前不要对外分发）：
 
 ```text
 高度       66 → 44
 底色       AppColors.titleBarBg = #0C0D11（比正文 scaffoldBg = #121318 更暗）
-关闭按钮   top: 10 / right: 16（原来是 top: 19 / right: 20）
+字标       HaxShot，GBaiMarkerPen 21px，颜色 AppColors.accentBright（灰蓝）
+关闭按钮   top: 10 / right: 16
 ```
 
-整条仍然是 `DragToMoveArea`（窗口没有原生标题栏）；macOS 的窗口圆角由系统的 titled 窗口
-画，顶部条铺满即可，见 [窗口圆角](#窗口圆角)。`test/ai_panel_chrome_test.dart` 守着顶部条
-存在、且 `titleBarBg` 与 `scaffoldBg` 不同。
+整条仍然是 `DragToMoveArea`（窗口没有原生标题栏），但字标要套 `IgnorePointer`：
+`Text` 自己会吃掉 hit test，不套的话按住标题那一段拖不动窗口。macOS 的窗口圆角由
+系统的 titled 窗口画，顶部条铺满即可，见 [窗口圆角](#窗口圆角)。
+`test/ai_panel_chrome_test.dart` 守着顶部条存在、且 `titleBarBg` 与 `scaffoldBg` 不同。
 
 ## 11. 图标更换流程
 
@@ -843,7 +990,7 @@ python3 /path/to/icns_handle.py generate source.icns \
 | `assets/icons/hax_shot.png` | Flutter `tray_manager` 和 Flutter 资源 |
 | `linux/icons/hicolor/*/apps/com.github.xiehanff.hax_shot.png` | GNOME desktop/icon theme |
 | `linux/icons/hicolor/256x256/apps/com.github.xiehanff.hax_shot.png` | GTK runner 的 `data/hax_shot_icon.png` 来源 |
-| `linux/icons/hax_shot.png` | 256px 兼容副本，不是 hicolor 主来源 |
+| `linux/icons/hax_shot.png`、`linux/icons/com.github.xiehanff.hax_shot.png` | 手工保留的 256px 兼容副本：`scripts/generate_icons.sh` 不生成它们，也没有任何构建引用 |
 
 更换图标后必须同时完成：
 
@@ -854,18 +1001,34 @@ fvm flutter build linux --release
 
 正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
 
-### 品牌色（`lib/hax_colors.dart`）
+### 主题色（`lib/hax_colors.dart`）
 
-`haxAccent = #F8C800` 取自图标主色（`assets/icons/hax_shot_source.png`），配一个压暗的
-`_onHaxAccent = #1F1800`：深色背景上用亮姜黄，按钮里的文字/图标必须压暗才看得清。
-`haxAccentTheme(base)` 只覆盖 `colorScheme` 的 `primary/onPrimary/secondary/onSecondary` ——
-`FilledButton` / `OutlinedButton` / `TextButton` 的前景和背景都取 `colorScheme.primary`，
-覆盖它就够了。
+`haxAccent = #8FAEC9`，灰蓝。图标（`assets/icons/hax_shot_source.png`，主色
+`#7387A6`）和 app 内主题现在都是灰蓝：以前取图标主色的亮姜黄 `#F8C800`，**app 内一律
+不再用姜黄**。`#8FAEC9` 比图标主色亮一档，深色底上做按钮底色对比度才够；配
+`_onHaxAccent = #101A24`：灰蓝底色上文字/图标要压暗才看得清。`haxAccentTheme(base)` 只覆盖
+`FilledButton` 的 backgroundColor / foregroundColor 和 `OutlinedButton`/`TextButton` 的
+前景色，不动 `colorScheme`。
 
-只用在这两个“要用户动手”的页面上，其余页面保持默认深色主题：
+`MaterialApp` 的 `ColorScheme.fromSeed` 也用 `haxAccent` 作种子（原来是 `Colors.lightBlue`）。
+欢迎页/授权引导不再走主题色，而是用 `panel_chrome.dart` 里显式的 `PanelButtons`
+（主按钮也是 `haxAccent`），所以种子色只影响还没改成面板样式的页面（设置页等）。
+AI 面板的 `lib/features/ai/views/widgets/ai_colors.dart` 同样把 accent 系列从偏紫的
+靛蓝换成了灰蓝。
+
+**同源的值只存一份**（`lib/hax_colors.dart` 是源头）：`haxTextPrimary(#F2F4F7)` 与
+`haxAccentBright(#9DBBD6)` 在 `PanelColors.title/accentText` 和 `HaxAiColors.textPrimary/
+accentBright` 里都是引用，不再各写一份 16 进制字面量；`PanelColors.accentSoft/accentBorder`
+由 `haxAccent.withValues(alpha: 0x1F/255 | 0x33/255)` 派生（与原字面量 `0x1F8FAEC9` /
+`0x338FAEC9` 精确等值）。反过来让 `panel_chrome.dart` 当源头不行：它 import 了
+`window_manager`，被 AI 面板引用会把窗口插件拖进那边的 import 图。改色时只改
+`hax_colors.dart`，改完检查这两处引用方；`chat_bubble.dart` 里已不再有 `#98B8FF` /
+`#343A46` / `#B8C0CC` 这类旧字面量。
+
+现在只剩设置页还在用 `haxAccentTheme`，欢迎页/授权引导已经改用 `panel_chrome.dart` 的
+`PanelButtons`，其余页面保持默认深色主题：
 
 ```text
-lib/features/capture/capture_permission_guide.dart   Theme(data: haxAccentTheme(theme))
 lib/features/settings/shortcut_settings_page.dart    Theme(data: haxAccentTheme(Theme.of(context)))
 ```
 
@@ -963,10 +1126,22 @@ macOS：
 
 - 首次截图必须在系统设置里授予“屏幕录制”权限；
 - bundle 目前是 ad-hoc 签名，重新构建后 TCC 授权可能失效，需要重新授权；
-- 菜单栏直接复用 Linux 的彩色图标（`assets/icons/hax_shot.png`，18pt）。深色菜单栏上对比度偏低，后续需要一张单色 template 图标；
+- 菜单栏直接用应用图标（`assets/icons/hax_shot.png`，18pt）。深色菜单栏上对比度偏低，但这是产品要求，
+  不要再改成单色 template；
 - 还没有 DMG 打包、公证（notarization）和 `AppIcon`（仍是 Flutter 默认图标）；
 - 还没有 macOS 的 CI 构建任务，本地验证使用 `fvm flutter build macos`；
 - 不支持跨显示器框选：一次截图只覆盖目标显示器，选区不能跨越两块屏。
+
+Windows（未实现）：
+
+仓库里只有 Flutter 的模板脚手架（`windows/`，含 `app_icon.ico`）、`assets/icons/hax_shot.ico`
+与 `pubspec.yaml` 的 `.ico` 资源声明，以及几处平台分支（`lib/app.dart` 的 trayIconAsset、
+`single_instance_guard.dart` 的 `%LOCALAPPDATA%`、`local_image_attachment_loader.dart` 的
+`toFilePath(windows:)`）；Rust 后端（`rust/src/lib.rs` 只编 linux/macos，`Cargo.toml` 只有这
+两个 target 的依赖）、Windows 构建规则、`NativeBridge` 的 `.dll` 查找都缺，
+`flutter build windows` 不可用。历史上 `c7a65ec` 的提交信息写过“新增 Windows 支持”，与
+实际不符，以本节为准；要真正支持需另立项目，先定抓屏 API（BitBlt/PrintWindow vs DXGI）
+与多显示器/窗口时序方案。
 
 两个平台共同：
 
@@ -984,18 +1159,45 @@ macOS：
 ## 15. 给后续 Agent 的最短交接信息
 
 如果任务是调整捕获 UI：只改 `lib/features/capture/`，保持 `_capture()` 完成后再 `windowManager.show()`。
+这一层已经按职责拆过（评审后落地）：`capture_permission_flow.dart`（`CapturePermissionFlow`，
+权限/失败状态机与轮询，`ChangeNotifier`）、`capture_process_lifecycle.dart`（抓屏进程启动/退出/重启
+与窗口生命周期）、`text_annotation_state.dart`（文字标注编辑状态）、`text_annotation_style.dart`
+（字号/高度/测量规格，`capture_page.dart`、`screenshot_canvas.dart`、`text_annotation_editor.dart`
+都用它，不要再各写一份）；`capture_page.dart` 只留编排与 UI（约 545 行），不要再往里塞窗口、
+进程或轮询职责。
 
 如果任务是调整托盘：只改 `TrayHostPage`，不要添加主应用窗口；截图必须通过 `--capture` 子进程启动。
 
 如果任务是调整截图后端：先阅读 `docs/snapclip-source-review.md`，保持 Mutter ScreenCast 的调用顺序，不要替换为 Screenshot Portal。
 
-如果任务是多显示器：先读 [6.9 多显示器](#69-多显示器)。macOS 改动 `rust/src/macos.rs` 的
-`target_display()` 时必须同步改 `macos/Runner/CaptureDisplay.swift`；两边一旦不一致就会出现
-浮层和画面不在同一块屏的 bug。Linux 需要多窗口架构，不能只改抓屏。
+如果任务是多显示器：先读 [6.9 多显示器](#69-多显示器)。macOS 的选屏规则（`--display` →
+光标 → 主屏）只在 `rust/src/macos.rs` 的 `resolve_target_display()` 里实现一遍，Swift 通过
+`dlopen` 调 `hax_shot_target_display` 取 `CGDirectDisplayID`；改规则只改 Rust，不要在
+`macos/Runner/CaptureDisplay.swift` 里重抄一遍候选顺序。Linux 需要多窗口架构，不能只改抓屏。
 要支持跨屏框选，必须改成“每块屏一个浮层窗口 + 跨窗口选区同步”，不要试图用一个窗口去跨屏。
+
+如果任务涉及托盘/菜单栏图标：macOS 菜单栏用**应用图标本身**（`assets/icons/hax_shot.png`，
+`setIcon` 不传 `isTemplate`），Linux 同一张 PNG，Windows 用 `hax_shot.ico`。有人试过改成单色
+template 方案（`isTemplate: true` + 单色遮罩图），被要求改回：菜单栏图标必须和应用图标一致，
+不要以“深色菜单栏看不清”为理由再引入第二张图标。详见 [`docs/icon-and-tray.md`](./icon-and-tray.md)。
 
 如果任务是调整图标/Dock 匹配：先检查 application ID、desktop 文件名、`Icon` 名称和 `StartupWMClass`，再用 `icns-handle` 生成图标、运行安装脚本并重启旧进程；Wayland 下 GNOME Dock 仍使用旧缓存时需要注销并重新登录。
 
-如果任务是增加跨平台支持：先明确不能把当前 Mutter/GStreamer 路径抽象成所有 Linux 桌面的通用方案；应新增后端并保留 GNOME backend，参考 `rust/src/macos.rs` 的做法：平台实现只暴露 `capture_screen_impl` / `copy_png_impl` / `register_capture_hotkey_impl` 三个函数。
+如果任务是增加跨平台支持：先明确不能把当前 Mutter/GStreamer 路径抽象成所有 Linux 桌面的通用方案；应新增后端并保留 GNOME backend，参考 `rust/src/macos.rs` 的做法：平台实现只暴露 `capture_screen_impl` / `copy_png_impl` / `cursor_display_impl` 等函数（热键不在其中，见 §6.6）。
+
+如果任务是调整 AI 面板/侧栏：`HaxAiController` **由宿主显式持有**（`lib/app.dart` 里
+new 出来、`dispose()` 里 `_aiController?.dispose()`），**不走 GetX registry**——不要加回
+`Get.put`/`Get.find`/`Get.delete`。控制器构造函数里自己做了
+`$configureLifeCycle() + onStart()`（GetX 的生命周期原本只在 `Get.put` 路径里启动，少了
+这步 `onInit()` 不会跑）；`dispose()` 走 `onDelete()`（它才置 `_isClosed`，`onClose()` 是
+空实现），`isClosed` 还被 `_disposed` 护了一层。侧栏用 `ListenableBuilder` 订阅
+`update()` 的通知（`GetxController.addListener` 注册的就是 `update()` 通知的那份列表）。
+交互契约 `HaxAiAction` 在 `lib/models/hax_ai_action.dart`（不在 `features/ai/` 下，capture
+不再反向依赖 ai 模型）。错误占位消息用 `ChatMessage.isError` 判断，**不要解析 `❌` 文案前缀**。
+
+如果任务是改 `packages/plume_ai_chat`：它是**公开 API**（0.2.0 起删掉了
+`prepareSubmission` / `fallbackBuilder` / `presentLocalError` / `canFallbackToText` 与
+`AiChatUpdateId.settings`，见包内 CHANGELOG）。`stopPrevious` / `deferHistoryCommit` 是宿主
+在用的参数、`send()` 自己会填 `displayText/displayImageBytes`，不要顺手删。
 
 一句话记忆：**先确定这是 tray 宿主还是 `--capture` 窗口，再修改对应层；不要让隐藏时序、desktop ID 或 ScreenCast 顺序被无意破坏。**

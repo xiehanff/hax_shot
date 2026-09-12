@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import 'annotation.dart';
+import 'text_annotation_style.dart';
 
 /// Interactive editing surface for the text annotation currently being typed.
 ///
@@ -75,10 +76,9 @@ final class TextAnnotationEditor extends StatelessWidget {
               keyboardType: TextInputType.multiline,
               textInputAction: TextInputAction.newline,
               textAlignVertical: TextAlignVertical.top,
-              style: TextStyle(
+              style: textAnnotationStyle(
+                annotation.fontSize,
                 color: annotation.color,
-                fontSize: annotation.fontSize,
-                height: 1,
               ),
               cursorColor: annotation.color,
               decoration: const InputDecoration(
