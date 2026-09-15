@@ -72,6 +72,10 @@ sudo apt install ./build/linux/x64/release/hax-shot_*_amd64.deb
 ```
 
 这会把 `Alt+Shift+Z` 写入当前用户的 GNOME GSettings，并指向 `/usr/bin/hax_shot --capture`。
+脚本**不要 sudo**：它写的是当前用户的 gsettings 和 `~/.local/share`，sudo 会装到 root 名下。
+
+旧版本装的是 `Alt+Z`；GNOME 不会替用户迁移已有的 gsettings，从旧版本升级上来要重跑一次这个
+脚本（macOS 侧相反，宿主启动时会自动迁移历史默认值）。
 
 卸载：
 
