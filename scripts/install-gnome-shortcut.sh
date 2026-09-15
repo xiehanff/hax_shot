@@ -19,7 +19,7 @@ LEGACY_SCHEMA="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$L
 MEDIA_KEYS="org.gnome.settings-daemon.plugins.media-keys"
 
 if [[ -z "$BINARY" || ! -x "$BINARY" ]]; then
-  echo "找不到 Hax Shot 可执行文件。" >&2
+  echo "找不到 HaxShot 可执行文件。" >&2
   echo "源码项目请先运行：fvm flutter build linux --release" >&2
   echo "RPM 安装后请确认 /usr/bin/hax_shot 已存在。" >&2
   exit 1
@@ -48,9 +48,9 @@ PY
 
 gsettings set "$MEDIA_KEYS" custom-keybindings "$keybindings"
 gsettings reset-recursively "$LEGACY_SCHEMA" >/dev/null 2>&1 || true
-gsettings set "$SCHEMA" name 'Hax Shot Capture'
+gsettings set "$SCHEMA" name 'HaxShot Capture'
 gsettings set "$SCHEMA" command "$BINARY --capture"
-gsettings set "$SCHEMA" binding '<Alt>z'
+gsettings set "$SCHEMA" binding '<Alt><Shift>z'
 
 applications_dir="$HOME/.local/share/applications"
 icons_root="$HOME/.local/share/icons/hicolor"
@@ -71,7 +71,7 @@ fi
 desktop_file="$applications_dir/com.github.xiehanff.hax_shot.desktop"
 cat > "$desktop_file" <<EOF
 [Desktop Entry]
-Name=Hax Shot
+Name=HaxShot
 Comment=Minimal Linux screenshot tool
 Exec=$BINARY
 Icon=com.github.xiehanff.hax_shot
@@ -97,5 +97,5 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f -t "$icons_root" >/dev/null 2>&1 || true
 fi
 
-echo 'Hax Shot GNOME 快捷键已安装：Alt+Z'
+echo 'HaxShot GNOME 快捷键已安装：Alt+Shift+Z'
 echo "命令：$BINARY --capture"

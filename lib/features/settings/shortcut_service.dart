@@ -69,7 +69,7 @@ ShortcutService get shortcutService => Platform.isMacOS
     ? MacosShortcutService.instance
     : GnomeShortcutService.instance;
 
-/// 把绑定字符串（`<Alt>z`）转成给人看的文案，例如 macOS 上显示 `⌥+Z`。
+/// 把绑定字符串（`<Alt><Shift>z`）转成给人看的文案，例如 macOS 上显示 `⌥+Z`。
 ///
 /// 设置页和首次启动欢迎页共用，避免两处各写一套导致显示不一致。
 String bindingDisplayLabel(String binding) {

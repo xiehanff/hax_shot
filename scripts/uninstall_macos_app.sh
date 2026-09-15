@@ -1,8 +1,8 @@
 #!/bin/bash
-# 彻底卸载 Hax Shot（macOS）。
+# 彻底卸载 HaxShot（macOS）。
 #
 # 覆盖的内容：
-#   1. 运行中的 Hax Shot 进程
+#   1. 运行中的 HaxShot 进程
 #   2. 应用本体（默认 /Applications/HaxShot.app）
 #   3. 开机自启动项 ~/Library/LaunchAgents/com.github.xiehanff.haxShot.plist（并 bootout）
 #   4. 屏幕录制授权记录（tccutil reset ScreenCapture），否则系统设置里会留着一条空记录

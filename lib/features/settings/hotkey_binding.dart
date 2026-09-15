@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 
-/// 把设置页产出的跨平台绑定字符串（例如 `<Alt>z`）转成 `hotkey_manager` 的 `HotKey`。
+/// 把设置页产出的跨平台绑定字符串（例如 `<Alt><Shift>z`）转成 `hotkey_manager` 的 `HotKey`。
 ///
 /// 绑定字符串在 Linux(gsettings) 和 macOS 之间共用，因此这里支持的是两边都能
 /// 表达的一套 token；不支持时返回 null，由调用方给出可读的提示。

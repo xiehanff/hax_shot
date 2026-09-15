@@ -128,7 +128,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
   String get _autostartSubtitle =>
       Platform.isMacOS ? '登录后自动显示菜单栏图标' : '登录 GNOME 后自动显示托盘图标';
 
-  String get _exampleShortcut => Platform.isMacOS ? '⌘+⇧+Z' : 'Alt+Z';
+  String get _exampleShortcut => Platform.isMacOS ? '⌘+⇧+Z' : 'Alt+Shift+Z';
 
   void _startRecording() {
     setState(() {

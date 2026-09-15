@@ -71,7 +71,7 @@ sudo apt install ./build/linux/x64/release/hax-shot_*_amd64.deb
 /usr/share/hax-shot/install-gnome-shortcut.sh
 ```
 
-这会把 `Alt+Z` 写入当前用户的 GNOME GSettings，并指向 `/usr/bin/hax_shot --capture`。
+这会把 `Alt+Shift+Z` 写入当前用户的 GNOME GSettings，并指向 `/usr/bin/hax_shot --capture`。
 
 卸载：
 
@@ -164,7 +164,7 @@ command -v wl-copy
 然后重新登录或等待 GNOME Shell 刷新托盘，测试：
 
 1. 托盘图标和菜单；
-2. `Alt+Z`；
+2. `Alt+Shift+Z`；
 3. 选区保存；
 4. PNG 图片剪贴板；
 5. 设置页统一配置快捷键和登录自启动。

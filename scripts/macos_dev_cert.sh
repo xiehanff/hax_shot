@@ -1,5 +1,5 @@
 #!/bin/bash
-# 创建（或复用）一个本地自签名代码签名证书，用于 Hax Shot 的 macOS 本地构建。
+# 创建（或复用）一个本地自签名代码签名证书，用于 HaxShot 的 macOS 本地构建。
 #
 # 为什么需要它：
 #   macOS 的“屏幕录制”授权绑在代码签名上。ad-hoc 签名没有证书，绑定的是构建产物
@@ -76,7 +76,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
   -keyout "$tmp_dir/key.pem" -out "$tmp_dir/cert.pem" \
-  -subj "/CN=$identity_name/O=Hax Shot/C=CN" \
+  -subj "/CN=$identity_name/O=HaxShot/C=CN" \
   -addext "basicConstraints=critical,CA:false" \
   -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning" >/dev/null 2>&1

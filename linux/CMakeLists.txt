@@ -77,7 +77,7 @@ add_custom_command(
   COMMAND "${CARGO_EXECUTABLE}" build --manifest-path "${RUST_DIR}/Cargo.toml" --release
   WORKING_DIRECTORY "${RUST_DIR}"
   DEPENDS ${RUST_SOURCES}
-  COMMENT "Building Hax Shot Rust native library"
+  COMMENT "Building HaxShot Rust native library"
   VERBATIM
 )
 add_custom_target(hax_shot_native ALL DEPENDS "${RUST_LIBRARY}")
@@ -125,7 +125,7 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 set(INSTALL_BUNDLE_ICON_DIR "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor")
 set(INSTALL_BUNDLE_APPLICATION_DIR "${CMAKE_INSTALL_PREFIX}/share/applications")
 
-# Install the complete hicolor group generated from the Hax Shot SVG icon so
+# Install the complete hicolor group generated from the HaxShot SVG icon so
 # GNOME can choose an appropriate size instead of scaling one 256px bitmap.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/icons/hicolor/"
   DESTINATION "${INSTALL_BUNDLE_ICON_DIR}"

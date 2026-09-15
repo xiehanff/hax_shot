@@ -4,7 +4,7 @@
 # 为什么必须装到 /Applications 而不是每次从 build/ 里跑：
 #   macOS 的“屏幕录制”授权（TCC）是按 app 的路径 + 代码签名记的。从 build/ 目录
 #   直接跑，权限会落到启动它的终端进程上；装到 /Applications 后双击启动，弹窗
-#   上显示的才是 “Hax Shot”，授权也记在它自己身上。
+#   上显示的才是 “HaxShot”，授权也记在它自己身上。
 #
 # 用法：
 #   scripts/install_macos_app.sh                # 构建 + 安装到 /Applications
@@ -127,7 +127,7 @@ cat <<'TIP'
   1. 打开 /Applications/HaxShot.app（Finder 双击，或 open -a HaxShot）
      —— 它是菜单栏应用：没有 Dock 图标，只在菜单栏右侧出现一个小图标
   2. 点菜单栏图标 → “立即截屏”
-  3. 第一次系统会弹“HaxShot 想要录制此电脑的屏幕” → 打开系统设置并勾选 Hax Shot，
+  3. 第一次系统会弹“HaxShot 想要录制此电脑的屏幕” → 打开系统设置并勾选 HaxShot，
      然后回到菜单栏再点一次“立即截屏”
   4. 光标在哪块屏，冻结画面和框选浮层就出现在哪块屏；框选后可以：
      复制 / 保存 / 让 AI 翻译、解释、深入理解
@@ -140,7 +140,7 @@ if [[ "$dev_cert" != true ]]; then
 注意：本次没有用固定证书（--dev-cert），是 ad-hoc 签名。ad-hoc 签名每次重新构建
 都会换一个签名指纹，macOS 会认为这是“新的 app”，屏幕录制授权会失效、而且不一定
 再弹窗。遇到“截图失败：未授予屏幕录制权限”时，去“系统设置 → 隐私与安全性 →
-屏幕录制”把 Hax Shot 删掉再重新加一次即可。想要以后重构建不用重新授权：
+屏幕录制”把 HaxShot 删掉再重新加一次即可。想要以后重构建不用重新授权：
 
   scripts/macos_dev_cert.sh --trust     # 一次：建证书并信任（会弹系统授权）
   scripts/install_macos_app.sh --dev-cert

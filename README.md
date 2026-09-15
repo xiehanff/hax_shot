@@ -25,8 +25,15 @@
    再点一次“立即截屏”。**没授权之前不会铺满全屏**，只会弹一个说明用的小窗口，随时可以关掉；
 4. 画面冻住后拖拽框选，选完可以标注、复制、保存或交给 AI；`Esc` 取消。
 
-macOS 默认快捷键是 **⌥⇧Z**。菜单栏图标可能被 Bartender 这类工具收进隐藏区，所以默认就留了
-一个不依赖图标的入口；可以在 **设置** 里改，也可以关掉/打开开机自启动。
+默认快捷键：
+
+- **macOS**：**⇧⌥Z**，启动后自动注册；
+- **Linux**：**Alt+Shift+Z**（macOS 的 ⌥ 在 Linux 上就是 Alt），需要执行一次
+  `/usr/share/hax-shot/install-gnome-shortcut.sh` 装进 GNOME 自定义快捷键——
+  从旧版本升级上来的话重跑一次，把旧的 Alt+Z 换成新默认值。
+
+菜单栏 / 托盘图标可能被 Bartender 这类工具收进隐藏区，所以默认就留了一个不依赖图标的入口；
+可以在 **设置** 里改快捷键，也可以开关开机自启动。
 
 ## 怎么用
 
@@ -86,13 +93,3 @@ Carbon 的热键不跨进程独占，别的软件占了同一个组合时可能�
 
 HaxShot 源代码采用 [MIT License](./LICENSE)。第三方依赖、图标与字体资产、GNOME/GStreamer/
 PipeWire 组件的许可与来源见 [第三方声明](./THIRD_PARTY_NOTICES.md)。
-
-## 给开发/维护者
-
-改代码、打包发版、排查 macOS 权限与快捷键问题，看这两份（README 只讲怎么用）：
-
-- [`docs/development-guide.md`](./docs/development-guide.md)：代码入口、两个进程模型、macOS 适配、
-  快捷键状态机、诊断日志、坑与“为什么不能那么写”、手动验证清单；
-- [`docs/packaging.md`](./docs/packaging.md)：Linux DEB/RPM、macOS DMG 与签名/公证、CI 发布流程。
-
-Rust 原生层见 [`rust/README.md`](./rust/README.md)。

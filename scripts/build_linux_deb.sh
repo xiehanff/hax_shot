@@ -115,7 +115,7 @@ Depends: libc6, libgtk-3-0 | libgtk-3-0t64, libglib2.0-0 | libglib2.0-0t64, libs
  libpipewire-0.3-0, wl-clipboard, libayatana-appindicator3-1
 Recommends: gnome-shell-extension-appindicator
 Description: Tray-only screenshot tool for GNOME Wayland
- Hax Shot captures a silent frozen frame through Mutter ScreenCast and PipeWire,
+ HaxShot captures a silent frozen frame through Mutter ScreenCast and PipeWire,
  then provides rectangle selection, PNG saving, and image clipboard support.
 EOF
 

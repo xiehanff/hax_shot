@@ -48,7 +48,7 @@ HaxShot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只
 截图流程是：
 
 ```text
-Alt+Z / 托盘“立即截屏”
+Alt+Shift+Z / 托盘“立即截屏”
     ↓
 启动一个新的 HaxShot --capture 进程
     ↓
@@ -87,7 +87,7 @@ Alt+Z / 托盘“立即截屏”
 | `rust/src/lib.rs` | Mutter ScreenCast、GStreamer、`wl-copy`、C ABI | 不要悄悄回退到 Screenshot Portal，否则会重新出现 GNOME 快门声 |
 | `linux/runner/my_application.cc` | GTK 窗口、应用 ID、开发桌面项 | Dart 负责显示/隐藏；不要恢复旧的 first-frame 自动显示逻辑 |
 | `linux/CMakeLists.txt` | Flutter bundle、Rust 库、desktop 文件和 hicolor 图标安装 | Rust 动态库和系统 GStreamer 插件是两套不同依赖 |
-| `scripts/install-gnome-shortcut.sh` | 安装 `Alt+Z` 和用户 desktop/icon | 改快捷键或图标后要重新运行此脚本 |
+| `scripts/install-gnome-shortcut.sh` | 安装 `Alt+Shift+Z` 和用户 desktop/icon | 改快捷键或图标后要重新运行此脚本 |
 
 ## 3. 两个进程模型
 
@@ -117,7 +117,7 @@ build/linux/x64/release/bundle/hax_shot
 - 托盘菜单“退出”会先取消窗口拦截、销毁托盘，再强制结束 Dart/GTK 进程；仅调用 `windowManager.close()` 不足以结束隐藏的 GtkApplication 事件循环。
 - 普通进程退出时才销毁托盘图标。
 
-因此调 UI 时如果只运行普通命令，看不到窗口是正常的。要看框选 UI，可以按 `Alt+Z`，或运行：
+因此调 UI 时如果只运行普通命令，看不到窗口是正常的。要看框选 UI，可以按 `Alt+Shift+Z`，或运行：
 
 ```bash
 fvm flutter run -d linux -- --capture
@@ -729,8 +729,8 @@ onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标�
 绑定字符串与 Linux 共用同一种格式，由 `lib/features/settings/hotkey_binding.dart` 解析：
 
 ```text
-<Alt><Shift>z     →  macOS ⌥⇧Z
-<Alt>z            →  Linux Alt+Z
+<Alt><Shift>z     →  macOS ⇧⌥Z（默认快捷键）
+                  →  Linux Alt+Shift+Z（同一个绑定串：macOS 的 ⌥ 就是 Linux 的 Alt）
 ```
 
 热键**不走 FFI**：macOS 由**宿主进程**的 `ShortcutBridge`（Carbon `RegisterEventHotKey`）
@@ -1186,11 +1186,15 @@ PNG 使用：
 
 ### 默认快捷键
 
-安装脚本设置：
+`scripts/install-gnome-shortcut.sh` 写入 GNOME 的绑定（和 macOS 默认的 ⌥⇧Z 对齐）：
 
 ```text
-gsettings binding = <Alt>z
+gsettings binding = <Alt><Shift>z
 ```
+
+旧版本装的是 `<Alt>z`。GNOME 不会替用户迁移已有的 gsettings，**升级后要重跑一次
+`scripts/install-gnome-shortcut.sh`（或 `/usr/share/hax-shot/install-gnome-shortcut.sh`）**，
+否则机器上还是旧的 Alt+Z；macOS 侧相反，宿主启动时会自动把历史默认值迁移掉。
 
 快捷键不是 Flutter 内部注册的。Wayland 下普通应用不能可靠地伪造任意全局热键，所以由 GNOME 自定义快捷键执行：
 
@@ -1248,12 +1252,12 @@ macOS 实现在 `macos_shortcut_service.dart`（shared_preferences + 原生全�
 - 单独按下 Ctrl/Alt/Shift/Super 不提交；
 - 必须包含至少一个修饰键和一个主体按键；
 - `Esc` 取消录制；
-- 组合键转成 GNOME 格式，例如 `Alt+Z` → `<Alt>z`、`Ctrl+Shift+4` → `<Control><Shift>4`；
+- 组合键转成 GNOME 格式，例如 `Alt+Shift+Z` → `<Alt><Shift>z`、`Ctrl+Shift+4` → `<Control><Shift>4`；
 - 新快捷键保存到固定 schema，并确保 `custom-keybindings` 数组包含 `hax-shot` 路径；
 - 删除只清空 `binding`，保留 relocatable schema，方便下一次录制直接恢复；
 - 设置页关闭/隐藏后不销毁托盘宿主。
 
-这里有一个容易踩的坑：`gsettings get` 返回的是带引号的 GVariant 文本，例如 `'<Alt>z'`，不能直接把整行当作显示文本；代码需要先去除 GVariant 引号，再转换为 `Alt+Z`。
+这里有一个容易踩的坑：`gsettings get` 返回的是带引号的 GVariant 文本，例如 `'<Alt><Shift>z'`，不能直接把整行当作显示文本；代码需要先去除 GVariant 引号，再转换为 `Alt+Shift+Z`。
 
 ### 开发模式的额外行为
 

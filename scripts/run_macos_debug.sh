@@ -4,9 +4,9 @@
 # 为什么不直接 flutter run：
 #   macOS 的屏幕录制授权记在**责任进程**上。`flutter run` 启动的 app 是终端的子
 #   进程，责任进程是终端 —— 系统弹窗会写“终端想要录制屏幕”，授权也记在终端名下，
-#   Hax Shot 自己不会出现在“系统设置 → 隐私与安全性 → 屏幕录制”列表里（macOS 15
+#   HaxShot 自己不会出现在“系统设置 → 隐私与安全性 → 屏幕录制”列表里（macOS 15
 #   的该面板也没有“+”可以手动添加），于是怎么都授权不了。
-#   用 Finder / `open` 启动时，责任进程才是 Hax Shot 自己，弹窗和列表里都是它。
+#   用 Finder / `open` 启动时，责任进程才是 HaxShot 自己，弹窗和列表里都是它。
 #
 # 为什么构建完还要用本地证书重签：
 #   Xcode 默认给 Debug 配置用的是 ad-hoc 签名（CODE_SIGN_IDENTITY = "-"）。ad-hoc 的
@@ -87,7 +87,7 @@ if pgrep -x HaxShot >/dev/null 2>&1; then
   sleep 1
 fi
 
-echo "note: 用 open 启动（让 Hax Shot 成为责任进程，权限才记在它身上）"
+echo "note: 用 open 启动（让 HaxShot 成为责任进程，权限才记在它身上）"
 open "$app_path"
 
 cat <<'TIP'

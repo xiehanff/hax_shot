@@ -77,7 +77,7 @@ void main() {
     addTearDown(() => home.delete(recursive: true));
     final service = MacosAutostartService(
       homeDirectory: home.path,
-      executablePath: '/Applications/Hax Shot.app/Contents/MacOS/hax_shot',
+      executablePath: '/Applications/HaxShot.app/Contents/MacOS/HaxShot',
     );
 
     expect(await service.isEnabled(), isFalse);
@@ -98,7 +98,7 @@ void main() {
     expect(
       contents,
       contains(
-        '<string>/Applications/Hax Shot.app/Contents/MacOS/hax_shot</string>',
+        '<string>/Applications/HaxShot.app/Contents/MacOS/HaxShot</string>',
       ),
     );
 

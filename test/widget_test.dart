@@ -6,6 +6,6 @@ void main() {
     await tester.pumpWidget(const HaxShotApp(captureMode: false));
 
     expect(find.byType(TrayHostPage), findsOneWidget);
-    expect(find.text('Hax Shot'), findsNothing);
+    expect(find.text('HaxShot'), findsNothing);
   });
 }
