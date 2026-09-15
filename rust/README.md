@@ -20,7 +20,7 @@ macOS: libhax_shot_native.dylib
 - 截图：抓取目标显示器一帧并写成临时 PNG；
 - 目标显示器：`--display <id>` 参数（托盘宿主在触发时写入）→ 光标所在显示器 → 主显示器；
 - 剪贴板：写入图片剪贴板（Linux `wl-copy --type image/png`，macOS `NSPasteboard`）；
-- 快捷键：**不经过 Rust**。宿主进程的 Dart 侧 `hotkey_manager` 负责注册（macOS 底层是 Carbon `RegisterEventHotKey`），触发时再启动 `--capture` 子进程；
+- 快捷键：**不经过 Rust**。macOS 由宿主进程原生侧的 `ShortcutBridge`（Carbon `RegisterEventHotKey`）注册、Dart 侧 `MacosShortcutService` 管状态，触发时再启动 `--capture` 子进程；
 - 通过 C ABI 暴露给 Dart FFI，并统一返回可读错误信息。
 
 平台实现提供同名函数：`capture_screen_impl` / `copy_png_impl` / `cursor_display_impl` /
@@ -41,8 +41,9 @@ macOS: libhax_shot_native.dylib
 - `CGDisplayCreateImage` 抓该显示器物理像素，ImageIO 直接编码 PNG；
 - `NSPasteboard` 写 `public.png`（必须在主线程调用）；
 
-全局快捷键由宿主进程的 Dart 侧 `hotkey_manager` 注册（底层 Carbon `RegisterEventHotKey`），
-Rust 不参与；绑定字符串与 Linux 共用 `<Super><Shift>z` 这种格式。
+全局快捷键由宿主进程注册（macOS：`macos/Runner/ShortcutBridge.swift` 直接调 Carbon
+`RegisterEventHotKey`；Linux：GNOME gsettings），Rust 不参与；绑定字符串与 Linux 共用
+`<Super><Shift>z` 这种格式。
 
 显示器选择规则只在 Rust 实现一次（`rust/src/macos.rs` 的 `resolve_target_display()`）：
 Swift 侧 `macos/Runner/CaptureDisplay.swift` 通过 `dlopen` 调 `hax_shot_target_display`

@@ -681,7 +681,7 @@ macOS 没有 gsettings。全局热键**直接调 Carbon**，实现在
 ```text
 托盘宿主启动
     ↓ shortcutService.activate(onTriggered: _startCapture)
-macOS: hotkey_manager 注册（见 lib/features/settings/macos_shortcut_service.dart）
+macOS: Carbon 原生桥注册（macos/Runner/ShortcutBridge.swift，Dart 侧 MacosShortcutService）
 Linux: 不动，GNOME gsettings 自己启动 `hax_shot --capture`
     ↓ 热键按下
 onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标所在屏 → 起 --capture 子进程）
@@ -694,9 +694,9 @@ onTriggered → 和点托盘菜单“立即截屏”同一条路径（读光标�
 <Alt>z            →  Linux Alt+Z
 ```
 
-热键**不走 FFI**：macOS 由**宿主进程**的 `hotkey_manager` 注册（底层 Carbon
-`RegisterEventHotKey`），Linux 不动、由 GNOME gsettings 直接启动 `hax_shot --capture`；
-Rust 原生层不参与热键注册，`--capture` 进程也不注册热键。
+热键**不走 FFI**：macOS 由**宿主进程**的 `ShortcutBridge`（Carbon `RegisterEventHotKey`）
+注册，Linux 不动、由 GNOME gsettings 直接启动 `hax_shot --capture`；Rust 原生层不参与
+热键注册，`--capture` 进程也不注册热键。
 
 #### 排查“快捷键没反应”先分叉，别直接查热键
 
@@ -863,7 +863,7 @@ B 屏”。所以托盘宿主只在**触发的那一瞬间**读一次光标，�
 固定下来：
 
 ```text
-macOS：按快捷键（hotkey_manager 回调）／点托盘菜单 —— 都在宿主进程里读
+macOS：按快捷键（Carbon 热键回调）／点托盘菜单 —— 都在宿主进程里读
 Linux：GNOME 自定义快捷键直接启动 hax_shot --capture，拿不到光标屏（见上面的硬约束）
     ↓ NativeBridge.cursorDisplay() → hax_shot_cursor_display()
     ↓ hax_shot --capture --display <id>
