@@ -194,19 +194,74 @@ SingleInstanceGuard.acquire()
 
 ```text
 lib/app.dart _initializeDesktopIntegration()
-windowManager.setPreventClose(true)
-    → windowManager.hide()
-    → trayManager.setIcon(trayIconAsset)      ← 用户看到的第一样东西
-    → trayManager.setContextMenu(...)
-    → shortcutService.activate(onTriggered: _startCapture)
-    → _presentFirstRunGuideIfNeeded()        ← 欢迎页
+_initializeWindowSafely()      ← setPreventClose / hide / endOfFrame
+    → _initializeTraySafely()      ← 用户看到的第一样东西（图标 + 菜单）
+    → _initializeShortcutSafely()  ← 全局快捷键（macOS 走一次 Carbon）
+    → _initializeWelcomeSafely()   ← 欢迎页
 ```
 
 图标和菜单是用户唯一能操作托盘的入口，放最前面：`shortcutService.activate()` 要读
 `SharedPreferences` 并走一次 Carbon `RegisterEventHotKey`，欢迎页要读磁盘
 （`hax_shot.onboarding_seen`），这两步都会拖慢“菜单栏图标出现”。欢迎页放最后：它失败
-也只影响自己，图标和菜单已经建好了。这里整体包在 `try/catch` 里，缺 AppIndicator 扩展
-也不能阻断截图。
+也只影响自己，图标和菜单已经建好了。
+
+**每个步骤都有自己的 `try/catch`（`_initializeXxxSafely`），互不阻断**。以前四步共用
+一个大 `try/catch`，托盘图标建不出来（缺 AppIndicator、status item 拿到临时 frame……）
+会让后面的快捷键注册**根本不执行**，而 `catch` 里只有一行 `debugPrint`——Release 用户
+看到的就是“快捷键没反应”。现在这四步各自失败只记自己的 `*_init_failed` 事件。
+
+### 3.5 截图触发链诊断日志
+
+“按了快捷键什么都没发生”必须能从用户机器上一份日志里定位到**停在哪一层**。所有低频
+关键事件走 `lib/features/diagnostics/diagnostic_log.dart`，JSON Lines 追加写入：
+
+```text
+macOS  ~/Library/Application Support/com.github.xiehanff.haxShot/logs/hax_shot.log
+Linux  $XDG_STATE_HOME/hax_shot/logs/hax_shot.log（退回 ~/.local/state/...）
+```
+
+单文件 2 MB、最多保留 4 个（`hax_shot.log.1` …）。只记生命周期/状态/错误，**不记**截图
+内容、OCR 文本、AI 对话、屏幕文本、API Key。`--capture` 子进程在 `exitProcessNow()`
+（SIGKILL）前的那几条必须用 `logSync`，异步写会丢。事件名与错误码是稳定契约，都在
+`lib/features/diagnostics/diagnostic_events.dart`，改名等于把历史日志废掉。
+
+一次正常截图（宿主 + 子进程共用同一个 `request_id`）：
+
+```text
+shortcut_trigger            ← 快捷键真的触发了；没有这一条就是 Carbon/注册/生命周期
+capture_request_created     ← 宿主建了请求文件
+capture_process_spawn_success
+capture_child_started       ← 子进程 main() 跑到了；宿主靠它区分“没起来”
+capture_lock_acquired
+capture_ready               ← 抓屏成功，浮层已铺满屏幕
+```
+
+排查分叉（等价于 6.6 的菜单/快捷键对照表，但不用人肉复现）：
+
+| 日志停在哪 | 故障层 |
+| --- | --- |
+| 只有 `shortcut_register_success`，没有 `shortcut_trigger` | Carbon 注册 / 生命周期 |
+| 有 `shortcut_trigger`，没有 `capture_process_spawn_success` | 起子进程 |
+| 有 `capture_process_spawn_success`，没有 `capture_child_started` | 子进程启动（参数 / runtime / bundle path / crash） |
+| 有 `capture_child_started`，然后是 `capture_lock_busy` | 截图并发 / 捕获锁（正常业务状态） |
+| 什么都没有 | 宿主根本没在跑（看进程 + 菜单栏图标） |
+
+ACK 走 requestId 对应的小 JSON 文件（`capture_requests/<id>.json`），不引入 socket/IPC：
+
+```text
+宿主写 created（必须同步写，异步写会把子进程的 child_started 覆盖回 created）
+子进程 main() 写 child_started → 拿锁写 lock_acquired / 失败写 lock_busy
+抓屏成功写 capture_ready；抓屏失败写 startup_failed
+```
+
+宿主只等到 `lock_acquired`（默认 1.5s）就返回，**不等用户画完选框**；超时只记
+`capture_launch_timeout`，不 kill 子进程（可能只是慢）。上一次运行留下的请求文件在下次
+启动时清掉（超过 24 小时）。
+
+宿主侧的职责收敛在 `lib/features/capture/capture_launcher.dart`（requestId / 参数 /
+`Process.start` / ACK / 结果）：菜单和全局快捷键都调它，只有 `CaptureTriggerSource`
+不同。快速连按时它自己 single-flight，第二次直接按 `lockBusy` 拒绝——**不**排队重试，
+否则会变成进程风暴。
 
 ## 4. 无快门声截图管线
 
@@ -639,6 +694,66 @@ Rust 原生层不参与热键注册，`--capture` 进程也不注册热键。
 临时加文件日志。从 Finder 启动的 Release 版 `stdout` 落到 launchd，`debugPrint` 看不到，
 所以这类环境差异只能写文件。
 
+#### 注册状态、改绑事务与唤醒恢复
+
+「配置里存着 ⌥⇧Z」和「系统当前真的注册了 ⌥⇧Z」是两件事，必须拆开：
+
+```dart
+enum ShortcutRegistrationStatus { inactive, registering, active, failed }
+```
+
+`ShortcutService` 现在对外暴露 `status / activeBinding / lastError / lastRegisteredAt /
+registrationStatus(Listenable)`，`activate()` / `reactivate()` / `saveBinding()` 都返回
+`ShortcutActivationResult`（sealed：Success / Failure）。**调用者必须检查返回值**：
+
+- 托盘菜单多了一行只读项 `快捷键：⌥⇧Z（已启用 / 注册失败 / 未启用）`；
+- 设置页把「当前快捷键（配置）」和「当前注册状态」分成两块显示；
+- 只有拿到 `ShortcutActivationSuccess` 才算“已启用”，**写偏好设置成功不等于注册成功**。
+
+改绑是事务（`saveBinding`）：注销旧 → 注册新 → 成功才写偏好；新绑定失败则把旧绑定注册
+回去（`restoredBinding` 非空）；旧绑定也注册不上时 `status = failed`、`activeBinding = null`，
+UI 必须显示“全局快捷键当前不可用”。因此 `_activeBinding` 在尝试改绑前就会清空——它表示
+“当前真的注册了什么”，不是“配置里写了什么”。
+
+`hotkey_manager_macos 0.2.0` 的 Swift `register()` **无条件 `result(true)`**，Dart 侧
+分辨不出 Carbon 是否真的记住了组合。所以这里只能保证“注册调用没有抛异常”；启动注册失败
+会**有限重试一次**（`retryDelay`），不做无限重试。设置页在 macOS 上把「当前注册状态」
+单独成一张卡片显示，它只反映注册调用是否成功，回答不了「系统是否真的记住了这个组合」。
+
+macOS 睡眠/唤醒、锁屏/解锁后 Carbon 热键可能失效。托盘宿主是 `LSUIElement` 隐藏窗口
+应用，`AppLifecycleState.resumed` 覆盖不到这些事件，因此在 Runner 里加了一个极小的原生桥
+`SystemLifecycleBridge`（在 `macos/Runner/MainFlutterWindow.swift` 里，和 `MainFlutterWindow`
+同一个文件，避免改 Xcode 工程）：
+
+```text
+NSWorkspace.didWakeNotification / screensDidWakeNotification  → macos_wake
+NSWorkspace.sessionDidBecomeActiveNotification                → macos_session_active
+DistributedNotificationCenter com.apple.screenIsUnlocked      → macos_unlock
+    ↓ MethodChannel "hax_shot/lifecycle"
+lib/features/diagnostics/app_lifecycle_bridge.dart
+    ↓
+lib/app.dart _recoverShortcut() → shortcutService.reactivate()
+```
+
+原生层**只发事件**，不碰快捷键注册。`reactivate()` 内部必须幂等 + single-flight：唤醒那
+一刻常连着收到 wake / resume / unlock 好几个事件，直接重复 `register` 会叠出重复 handler
+和泄漏的 Carbon token。默认还有一个 1s 合并窗口（`reactivateMergeWindow`），窗口内的
+重复调用直接复用上次结果。
+
+注销失败（`errorCode = SHORTCUT_UNREGISTER_FAILED`）时**必须中止本次改绑/重注册**，
+不能接着注册新热键：`_unregisterInternal` 把失败原因返回给调用方，`_tryRegister` /
+`reactivate()` 就此收场，`clearBinding()` 也不删偏好设置。否则旧 Carbon handler 还活着、
+新绑定又注册成功，两个 handler 会一起触发截图。只有注销成功才清掉 `_registered`；失败时
+保留它，下一次重试还能再注销一次。
+
+注册成功但偏好写失败时返回 `ShortcutActivationSuccess(persisted: false)`，设置页显示「本次
+已生效，但没能保存，重启后会恢复原快捷键」。**注册成功 ≠ 配置已保存**：本次可用和下次启动
+可用是两件事，不能因为写偏好失败就回滚（新绑定本次确实生效了）。
+
+`activate()` / `reactivate()` / `saveBinding()` / `clearBinding()` 共用一条串行队列
+（`_serialized`），所有会改变注册状态的操作排队执行。唤醒事件撞上启动注册时不会出现
+「两条路径同时注销/注册」：single-flight 只合并重复的唤醒，跨操作的互斥靠这条队列。
+
 ### 6.7 开机自启动
 
 `MacosAutostartService` 写入 `~/Library/LaunchAgents/com.github.xiehanff.haxShot.plist`
@@ -649,14 +764,16 @@ launchd 自动加载，而立即 bootstrap 会在用户已经运行托盘宿主�
 
 | 文件 | 职责 |
 |---|---|
-| `macos/Runner/MainFlutterWindow.swift` | `--capture` 浮层的窗口层级和 frame |
+| `macos/Runner/MainFlutterWindow.swift` | `--capture` 浮层的窗口层级和 frame；`SystemLifecycleBridge`（唤醒/解锁 → Dart） |
 | `macos/Runner/CaptureDisplay.swift` | 目标显示器选择，规则必须和 Rust 保持一致 |
 | `macos/Runner/AppDelegate.swift` | 关闭设置窗口不结束进程 |
 | `macos/Runner/Info.plist` | `LSUIElement`（菜单栏应用，无 Dock 图标）、显示名 |
 | `macos/Runner/*.entitlements` | 关闭 App Sandbox，允许加载 cargo 产出的动态库 |
 | `macos/Runner/Configs/Warnings.xcconfig` | `ENABLE_USER_SCRIPT_SANDBOXING = NO` |
 | `scripts/build_macos_rust.sh` | cargo 构建并复制 dylib 到 bundle |
-| `lib/features/settings/macos_shortcut_service.dart` | 快捷键持久化和原生注册 |
+| `lib/features/settings/macos_shortcut_service.dart` | 快捷键持久化、注册状态机、改绑事务与回滚 |
+| `lib/features/diagnostics/diagnostic_log.dart` | 低频关键事件的持久化 JSON Lines 日志（轮转） |
+| `lib/features/capture/capture_launcher.dart` | requestId / 起 `--capture` / ACK / 启动结果 |
 
 ### 6.9 多显示器
 

@@ -14,12 +14,18 @@ import 'features/ai/services/hax_ai_settings_store.dart';
 import 'features/ai/views/ai_page.dart';
 import 'features/app/hard_exit.dart';
 import 'features/app/single_instance_guard.dart';
+import 'features/capture/capture_launcher.dart';
 import 'features/capture/capture_overlay_window.dart';
 import 'features/capture/capture_page.dart';
 import 'features/capture/capture_permission_guide.dart';
+import 'features/capture/capture_request_channel.dart';
+import 'features/diagnostics/app_lifecycle_bridge.dart';
+import 'features/diagnostics/diagnostic_events.dart';
+import 'features/diagnostics/diagnostic_log.dart';
 import 'features/onboarding/first_run_guide.dart';
 import 'features/onboarding/first_run_onboarding.dart';
 import 'features/settings/screen_capture_permission.dart';
+import 'features/settings/shortcut_registration.dart';
 import 'features/settings/shortcut_service.dart';
 import 'features/settings/shortcut_settings_page.dart';
 import 'features/window/window_visibility.dart';
@@ -32,6 +38,7 @@ class HaxShotApp extends StatefulWidget {
     required this.captureMode,
     this.targetDisplay,
     this.debugAiPanel = false,
+    this.requestId,
     super.key,
   });
 
@@ -39,6 +46,9 @@ class HaxShotApp extends StatefulWidget {
 
   /// `--display <id>`：主浮层要落在哪块显示器（重启抓屏进程时原样带上）。
   final int? targetDisplay;
+
+  /// `--request-id`：本次截图请求 id，用于把宿主 / 子进程的诊断日志串起来。
+  final String? requestId;
 
   /// debug 构建的 `--capture --debug-ai`：不抓屏，直接把窗口显示成 AI 面板。
   final bool debugAiPanel;
@@ -206,6 +216,7 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
     return CapturePage(
       onAiAction: _handleAiAction,
       targetDisplay: widget.targetDisplay,
+      requestId: widget.requestId,
     );
   }
 }
@@ -224,7 +235,7 @@ String get trayIconAsset => Platform.isWindows
     : 'assets/icons/hax_shot.png';
 
 class _TrayHostPageState extends State<TrayHostPage>
-    with TrayListener, WindowListener {
+    with TrayListener, WindowListener, WidgetsBindingObserver {
   bool _allowClose = false;
   bool _showShortcutSettings = false;
   bool _showPermissionGuide = false;
@@ -235,15 +246,40 @@ class _TrayHostPageState extends State<TrayHostPage>
   bool _showFirstRunGuide = false;
   String _firstRunShortcutLabel = '';
 
-  /// 同一轮原生菜单/热键事件可能连续回调；Process.start 完成前先挡住 Dart 重入。
-  /// 跨进程的最终兜底在 SingleInstanceGuard.acquireCapture()。
-  bool _startingCapture = false;
+  final DiagnosticLogService _diag = DiagnosticLogService.instance;
+
+  /// 截图触发链的唯一入口（快捷键和托盘菜单共用）。
+  final CaptureLauncher _captureLauncher = CaptureLauncher();
+
+  /// 托盘菜单是否已经建好；建好之前快捷键状态变化不需要刷新菜单。
+  bool _trayReady = false;
+
+  /// 「配置了哪个组合」，只用于托盘菜单显示，避免每次刷新都读一次偏好设置。
+  String? _shortcutBinding;
+
+  StreamSubscription<String>? _lifecycleEvents;
 
   @override
   void initState() {
     super.initState();
     trayManager.addListener(this);
     windowManager.addListener(this);
+    WidgetsBinding.instance.addObserver(this);
+    // 托盘宿主是常驻进程：全局快捷键在睡眠/唤醒、锁屏/解锁后可能失效，
+    // 需要原生生命周期事件把它重新注册回来（见 app_lifecycle_bridge.dart）。
+    AppLifecycleBridge.instance.attach();
+    _lifecycleEvents = AppLifecycleBridge.instance.events.listen(
+      (event) => unawaited(_recoverShortcut(event)),
+    );
+    shortcutService.registrationStatus.addListener(
+      _handleShortcutStatusChanged,
+    );
+    // 清掉上一次运行留下的请求文件（正在执行的请求刚写过，不会被删）。
+    try {
+      CaptureRequestChannel.instance.cleanupExpired();
+    } on Object catch (error) {
+      debugPrint('清理截图请求文件失败：$error');
+    }
     unawaited(_initializeDesktopIntegration());
   }
 
@@ -251,11 +287,29 @@ class _TrayHostPageState extends State<TrayHostPage>
   void dispose() {
     trayManager.removeListener(this);
     windowManager.removeListener(this);
+    WidgetsBinding.instance.removeObserver(this);
+    shortcutService.registrationStatus.removeListener(
+      _handleShortcutStatusChanged,
+    );
+    unawaited(_lifecycleEvents?.cancel());
     unawaited(trayManager.destroy());
     super.dispose();
   }
 
+  /// Desktop Host 的每一步都有自己的错误边界：托盘、快捷键、窗口、欢迎页互不阻断。
+  ///
+  /// `--capture` 进程（调试时用）也会走到这里，但它的窗口在 main() 里已经配好，
+  /// 这里的 window 步骤是幂等的。
   Future<void> _initializeDesktopIntegration() async {
+    _diag.log(DiagnosticEvent.desktopInitStart);
+    await _initializeWindowSafely();
+    await _initializeTraySafely();
+    await _initializeShortcutSafely();
+    await _initializeWelcomeSafely();
+    _diag.log(DiagnosticEvent.desktopInitComplete);
+  }
+
+  Future<void> _initializeWindowSafely() async {
     try {
       await windowManager.setPreventClose(true);
       await windowManager.hide();
@@ -263,72 +317,188 @@ class _TrayHostPageState extends State<TrayHostPage>
       // AppKit 的菜单栏布局还没稳定。此时创建 status item 偶尔会先拿到临时 frame，
       // 图标要等下一次窗口活动（例如快捷键截图）才出现；等首帧后再创建可避免这个竞态。
       await WidgetsBinding.instance.endOfFrame;
-      // 图标和菜单是用户看到的第一样东西，先建好再做别的：注册快捷键要读
-      // SharedPreferences、走一次 Carbon，欢迎页还要读磁盘，都会拖慢“图标出现”。
+    } on Object catch (error) {
+      _diag.log(
+        DiagnosticEvent.windowInitFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.windowInitFailed,
+        message: '$error',
+      );
+    }
+  }
+
+  Future<void> _initializeTraySafely() async {
+    _diag.log(DiagnosticEvent.trayInitStart);
+    try {
+      // 图标和菜单是用户看到的第一样东西：注册快捷键要读 SharedPreferences、
+      // 走一次 Carbon，欢迎页还要读磁盘，都会拖慢“图标出现”。
       // 不要传 isTemplate: true：那是单色遮罩模式，会把应用图标渲染成纯色剪影。
       await trayManager.setIcon(trayIconAsset);
-      await trayManager.setContextMenu(
-        Menu(
-          items: [
-            MenuItem(
-              key: 'capture',
-              label: '立即截屏',
-              onClick: (_) => unawaited(_startCapture()),
-            ),
-            MenuItem(
-              key: 'change_shortcut',
-              label: '设置',
-              onClick: (_) => unawaited(_openShortcutSettings()),
-            ),
-            // UI 调试入口：debug 构建里把每个界面都单独列出来，不用真的截图/
-            // 等授权就能直接打开。发布版不出现。
-            if (kDebugMode) ...[
-              MenuItem.separator(),
-              MenuItem(
-                key: 'debug_welcome',
-                label: '调试：欢迎页',
-                onClick: (_) => unawaited(_presentFirstRunGuide()),
-              ),
-              MenuItem(
-                key: 'debug_shortcut_settings',
-                label: '调试：快捷键设置',
-                onClick: (_) => unawaited(_openShortcutSettings()),
-              ),
-              MenuItem(
-                key: 'debug_permission_guide',
-                label: '调试：权限引导',
-                onClick: (_) => unawaited(_openPermissionGuide()),
-              ),
-              MenuItem(
-                key: 'debug_capture_overlay',
-                label: '调试：截图浮层',
-                onClick: (_) => unawaited(_startCapture()),
-              ),
-              MenuItem(
-                key: 'debug_ai_panel',
-                label: '调试：AI 对话窗口',
-                onClick: (_) => unawaited(_openAiPanel()),
-              ),
-            ],
-            MenuItem.separator(),
-            MenuItem(
-              key: 'exit_app',
-              label: '退出',
-              onClick: (_) => unawaited(_quit()),
-            ),
-          ],
-        ),
+      await _loadShortcutBinding();
+      await trayManager.setContextMenu(_buildTrayMenu());
+      _trayReady = true;
+      _diag.log(DiagnosticEvent.trayInitSuccess);
+    } on Object catch (error) {
+      // 缺 AppIndicator 扩展、status item 建不出来都不影响截图：
+      // 快捷键注册在 _initializeShortcutSafely() 里独立进行。
+      _diag.log(
+        DiagnosticEvent.trayInitFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.trayInitFailed,
+        message: '$error',
       );
-      // macOS 由这个常驻进程注册全局快捷键，按下时走和托盘菜单一样的启动流程；
-      // GNOME 侧快捷键由 gsettings 直接启动子进程，这个回调不会被用到。
+    }
+  }
+
+  Future<void> _initializeShortcutSafely() async {
+    try {
       await shortcutService.activate(
-        onTriggered: () => unawaited(_startCapture()),
+        onTriggered: () =>
+            unawaited(_startCapture(source: CaptureTriggerSource.shortcut)),
       );
-      // 欢迎页最后：即使它失败，图标和菜单也已经在上面建好了。
+    } on Object catch (error) {
+      // activate() 设计上不抛异常；真抛了也只是一个模块失败，不能阻断欢迎页。
+      _diag.log(
+        DiagnosticEvent.shortcutRegisterFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.shortcutRegisterFailed,
+        message: '$error',
+      );
+    }
+    await _refreshTrayMenu();
+  }
+
+  Future<void> _initializeWelcomeSafely() async {
+    try {
+      // 欢迎页最后：即使它失败，图标、菜单和快捷键也已经在上面就绪。
       await _presentFirstRunGuideIfNeeded();
     } on Object catch (error) {
-      // A missing AppIndicator extension should not prevent screenshots.
-      debugPrint('Hax Shot tray initialization failed: $error');
+      _diag.log(
+        DiagnosticEvent.welcomeInitFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.welcomeInitFailed,
+        message: '$error',
+      );
+    }
+  }
+
+  void _handleShortcutStatusChanged() {
+    unawaited(_refreshTrayMenu());
+  }
+
+  Future<void> _loadShortcutBinding() async {
+    try {
+      _shortcutBinding = await shortcutService.readBinding();
+    } on Object catch (error) {
+      debugPrint('读取快捷键配置失败：$error');
+    }
+  }
+
+  Future<void> _refreshTrayMenu() async {
+    if (!_trayReady) return;
+    try {
+      await _loadShortcutBinding();
+      await trayManager.setContextMenu(_buildTrayMenu());
+    } on Object catch (error) {
+      debugPrint('刷新托盘菜单失败：$error');
+    }
+  }
+
+  /// 托盘菜单里那行只读的快捷键状态：把「配置」和「是否真的注册上」分开显示。
+  String get _shortcutMenuLabel {
+    final status = shortcutService.registrationStatus.value;
+    final binding = _shortcutBinding;
+    if (binding == null || binding.isEmpty) {
+      return '快捷键：未设置';
+    }
+    return '快捷键：${bindingDisplayLabel(binding)}'
+        '（${shortcutStatusLabel(status)}）';
+  }
+
+  Menu _buildTrayMenu() {
+    return Menu(
+      items: [
+        MenuItem(
+          key: 'capture',
+          label: '立即截屏',
+          onClick: (_) =>
+              unawaited(_startCapture(source: CaptureTriggerSource.trayMenu)),
+        ),
+        MenuItem(
+          key: 'shortcut_status',
+          label: _shortcutMenuLabel,
+          disabled: true,
+        ),
+        MenuItem(
+          key: 'change_shortcut',
+          label: '设置',
+          onClick: (_) => unawaited(_openShortcutSettings()),
+        ),
+        // UI 调试入口：debug 构建里把每个界面都单独列出来，不用真的截图/
+        // 等授权就能直接打开。发布版不出现。
+        if (kDebugMode) ...[
+          MenuItem.separator(),
+          MenuItem(
+            key: 'debug_welcome',
+            label: '调试：欢迎页',
+            onClick: (_) => unawaited(_presentFirstRunGuide()),
+          ),
+          MenuItem(
+            key: 'debug_shortcut_settings',
+            label: '调试：快捷键设置',
+            onClick: (_) => unawaited(_openShortcutSettings()),
+          ),
+          MenuItem(
+            key: 'debug_permission_guide',
+            label: '调试：权限引导',
+            onClick: (_) => unawaited(_openPermissionGuide()),
+          ),
+          MenuItem(
+            key: 'debug_capture_overlay',
+            label: '调试：截图浮层',
+            onClick: (_) =>
+                unawaited(_startCapture(source: CaptureTriggerSource.trayMenu)),
+          ),
+          MenuItem(
+            key: 'debug_ai_panel',
+            label: '调试：AI 对话窗口',
+            onClick: (_) => unawaited(_openAiPanel()),
+          ),
+        ],
+        MenuItem.separator(),
+        MenuItem(
+          key: 'exit_app',
+          label: '退出',
+          onClick: (_) => unawaited(_quit()),
+        ),
+      ],
+    );
+  }
+
+  /// 系统恢复（前台 / 唤醒 / 解锁）后把全局快捷键重新注册回来。
+  ///
+  /// 统一走 [ShortcutService.reactivate]，它是幂等的并且自己 single-flight：
+  /// 唤醒那一刻常常连着收到 wake / resume / unlock 好几个事件，直接重复 register
+  /// 会叠出重复 handler 和泄漏的 Carbon token。
+  Future<void> _recoverShortcut(String event) async {
+    if (!Platform.isMacOS) return;
+    _diag.log(event);
+    try {
+      await shortcutService.reactivate();
+    } on Object catch (error) {
+      _diag.log(
+        DiagnosticEvent.shortcutReactivateFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.shortcutReactivateFailed,
+        message: '$error',
+      );
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_recoverShortcut(DiagnosticEvent.appResumed));
     }
   }
 
@@ -368,18 +538,22 @@ class _TrayHostPageState extends State<TrayHostPage>
     await _openShortcutSettings();
   }
 
-  Future<void> _startCapture() async {
-    if (_startingCapture) return;
-    _startingCapture = true;
-    try {
-      await Process.start(Platform.resolvedExecutable, [
-        '--capture',
-        ..._displayArguments(),
-      ], mode: ProcessStartMode.detached);
-    } on Object catch (error) {
-      debugPrint('启动截图失败：$error');
-    } finally {
-      _startingCapture = false;
+  Future<void> _startCapture({
+    CaptureTriggerSource source = CaptureTriggerSource.trayMenu,
+  }) async {
+    // 菜单和全局快捷键共用这一条链路：requestId → 起子进程 → 等 ACK → 记日志。
+    final result = await _captureLauncher.launch(
+      source: source,
+      displayArguments: _displayArguments(),
+    );
+    switch (result) {
+      case CaptureLaunchStarted():
+        break;
+      case CaptureLaunchRejected(:final reason):
+        // lockBusy 是正常业务状态（已经有一层浮层在等着），不打扰用户。
+        debugPrint('本次截图请求未启动：$reason');
+      case CaptureLaunchFailed(:final error):
+        debugPrint('启动截图失败：$error');
     }
   }
 
