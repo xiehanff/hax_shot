@@ -6,10 +6,10 @@
 产物命名（三平台一起看，tag 必须和 `pubspec.yaml` 对得上）：
 
 ```text
-pubspec 1.4.8+1  →  tag v1.4.8
-  macOS  HaxShot-1.4.8-arm64.dmg（没签名/公证时必须叫 HaxShot-1.4.8-arm64-unsigned.dmg）
-  DEB    hax-shot_1.4.8+1_amd64.deb
-  RPM    hax-shot-1.4.8-1.x86_64.rpm
+pubspec 1.4.9+1  →  tag v1.4.9
+  macOS  HaxShot-1.4.9-arm64.dmg（没签名/公证时必须叫 HaxShot-1.4.9-arm64-unsigned.dmg）
+  DEB    hax-shot_1.4.9+1_amd64.deb
+  RPM    hax-shot-1.4.9-1.x86_64.rpm
 ```
 
 Linux 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
@@ -380,7 +380,7 @@ Release 跑一遍就够，否则两个 workflow 会把它各构建一次。带�
 以下操作会触发打包：
 
 ```bash
-git push origin v1.4.8
+git push origin v1.4.9
 ```
 
 ### 干跑（不发布）
@@ -397,14 +397,14 @@ tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号。工
 
 | `pubspec.yaml` | Git tag | Release Assets |
 |---|---|---|
-| `1.4.8+1` | `v1.4.8` | `HaxShot-1.4.8-arm64.dmg`、`hax-shot_1.4.8+1_amd64.deb`、`hax-shot-1.4.8-1.x86_64.rpm` |
+| `1.4.9+1` | `v1.4.9` | `HaxShot-1.4.9-arm64.dmg`、`hax-shot_1.4.9+1_amd64.deb`、`hax-shot-1.4.9-1.x86_64.rpm` |
 
 其中：
 
 - `1.4.8` 是应用版本，也是 DMG 名字和 RPM 的 Version；
-- `+1` 是 DEB 的完整版本（`1.4.8+1`）和 Fedora RPM 的 Release；
+- `+1` 是 DEB 的完整版本（`1.4.9+1`）和 Fedora RPM 的 Release；
 - RPM 在 Fedora 本机构建时会带 `.fc44`，在 CI（Ubuntu 的 rpmbuild）里没有这个发行版后缀；
-- `v1.4.8` 是 GitHub Release 的 tag 和页面名称。
+- `v1.4.9` 是 GitHub Release 的 tag 和页面名称。
 
 ### 3. 发布流程
 
@@ -424,7 +424,7 @@ cargo test --manifest-path rust/Cargo.toml
 
 ```bash
 git add .
-git commit -m "release: v1.4.8"
+git commit -m "release: v1.4.9"
 git push origin main
 ```
 
@@ -434,8 +434,8 @@ commit 马上就会被 tag 的 Release workflow 完整构建一遍，没必要�
 需要发布时，在**已经推送的**那个 commit 上创建带注释的 tag：
 
 ```bash
-git tag -a v1.4.8 -m "Release v1.4.8"
-git push origin v1.4.8
+git tag -a v1.4.9 -m "Release v1.4.9"
+git push origin v1.4.9
 ```
 
 ### 4. GitHub Actions 做什么
@@ -497,7 +497,7 @@ Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上�
 验证 macOS 产物：
 
 ```bash
-hdiutil attach HaxShot-1.4.8-arm64.dmg          # 能挂载且内含 HaxShot.app
+hdiutil attach HaxShot-1.4.9-arm64.dmg          # 能挂载且内含 HaxShot.app
 lipo -archs /Volumes/HaxShot/HaxShot.app/Contents/MacOS/HaxShot   # arm64
 spctl -a -vvv -t exec /Volumes/HaxShot/HaxShot.app                 # 有签名+公证时 should be accepted
 ```
@@ -505,7 +505,7 @@ spctl -a -vvv -t exec /Volumes/HaxShot/HaxShot.app                 # 有签名+�
 验证 Linux 产物（Fedora GNOME Wayland / Ubuntu GNOME Wayland）：
 
 ```bash
-sudo dnf install ./hax-shot-1.4.8-1.x86_64.rpm        # 或 sudo apt install ./hax-shot_1.4.8+1_amd64.deb
+sudo dnf install ./hax-shot-1.4.9-1.x86_64.rpm        # 或 sudo apt install ./hax-shot_1.4.9+1_amd64.deb
 /usr/share/hax-shot/install-gnome-shortcut.sh
 ```
 
