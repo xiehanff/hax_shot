@@ -8,12 +8,15 @@ import 'package:flutter/services.dart';
 
 import '../../models/hax_ai_action.dart';
 import '../../native/native_bridge.dart';
+import '../diagnostics/diagnostic_events.dart';
+import '../diagnostics/diagnostic_log.dart';
 import '../window/panel_chrome.dart';
 import '../window/rounded_window.dart';
 import 'annotation.dart';
 import 'capture_permission_flow.dart';
 import 'capture_permission_guide.dart';
 import 'capture_process_lifecycle.dart';
+import 'capture_request_channel.dart';
 import 'capture_session.dart';
 import 'capture_toolbar.dart';
 import 'screenshot_canvas.dart';
@@ -26,12 +29,20 @@ typedef CaptureAiActionCallback =
     Future<void> Function(HaxAiAction action, Uint8List pngBytes);
 
 class CapturePage extends StatefulWidget {
-  const CapturePage({required this.onAiAction, this.targetDisplay, super.key});
+  const CapturePage({
+    required this.onAiAction,
+    this.targetDisplay,
+    this.requestId,
+    super.key,
+  });
 
   final CaptureAiActionCallback onAiAction;
 
   /// 当前进程是从哪块显示器启动的，重启抓屏进程时原样带上。
   final int? targetDisplay;
+
+  /// 本次截图请求 id；抓屏成功/失败时写回 ACK 文件并记日志。
+  final String? requestId;
 
   @override
   State<CapturePage> createState() => _CapturePageState();
@@ -135,22 +146,68 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       }
       setState(() => _image = frame.image);
       _flow.markCaptureSucceeded();
+      // 抓到画面：宿主靠这条 ACK 区分「子进程起来了但抓屏失败」和「真的可以选了」。
+      _ackRequest(
+        CaptureRequestChannel.stateCaptureReady,
+        DiagnosticEvent.captureReady,
+      );
       // 抓到画面之后才把窗口升格成铺满屏幕的浮层。
       await _process.showCaptureOverlay();
     } on TimeoutException catch (error) {
       // Future.timeout 不能可靠取消正在执行 FFI 的 worker isolate。直接硬退出整个
       // 短生命周期捕获进程，才能保证原生调用、临时文件和捕获锁都不会继续残留。
       debugPrint('截图超时，结束捕获进程：$error');
+      _ackRequest(
+        CaptureRequestChannel.stateStartupFailed,
+        DiagnosticEvent.captureStartupFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.captureStartupFailed,
+        message: '抓屏超时：$error',
+      );
       await _process.exitProcess();
     } on ScreenCapturePermissionException catch (error) {
       if (!mounted) return;
+      _ackRequest(
+        CaptureRequestChannel.stateStartupFailed,
+        DiagnosticEvent.captureStartupFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.capturePermissionDenied,
+        message: error.message,
+      );
       await _flow.showGuide(message: error.message);
     } on Object catch (error) {
       if (!mounted) return;
       // 其它失败也留在小窗口里说明情况，别让用户卡在全屏黑屏上。
+      _ackRequest(
+        CaptureRequestChannel.stateStartupFailed,
+        DiagnosticEvent.captureStartupFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.captureStartupFailed,
+        message: '$error',
+      );
       _flow.enterFailure(error);
       await _flow.revealWindow();
     }
+  }
+
+  /// 把当前阶段写回请求文件（宿主在等）并记一条日志。
+  void _ackRequest(
+    String state,
+    String event, {
+    String level = LogLevel.info,
+    String? errorCode,
+    String? message,
+  }) {
+    final requestId = widget.requestId;
+    if (requestId == null) return;
+    CaptureRequestChannel.instance.writeStateSync(requestId, state);
+    DiagnosticLogService.instance.logSync(
+      event,
+      level: level,
+      requestId: requestId,
+      errorCode: errorCode,
+      message: message,
+    );
   }
 
   void _selectTool(CaptureTool tool) {

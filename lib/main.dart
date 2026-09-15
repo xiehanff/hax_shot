@@ -7,31 +7,96 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'features/app/hard_exit.dart';
 import 'features/app/single_instance_guard.dart';
+import 'features/capture/capture_request_channel.dart';
+import 'features/diagnostics/diagnostic_events.dart';
+import 'features/diagnostics/diagnostic_log.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  final log = DiagnosticLogService.instance;
+  final requestId = _argumentValue(args, '--request-id');
+  final triggerSource = _argumentValue(args, '--trigger-source');
+  final captureMode = args.contains('--capture');
+
+  // Release 版从 Finder / LaunchAgent 启动时 stdout 落到 launchd，debugPrint 谁都
+  // 看不到，所以异常同时进持久化日志（见 features/diagnostics/diagnostic_log.dart）。
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
+    log.log(
+      'flutter_error',
+      level: LogLevel.error,
+      requestId: requestId,
+      message: '${details.exception}',
+      extra: <String, Object?>{'stack': '${details.stack ?? ''}'},
+    );
     unawaited(_writeErrorLog(details.exception, details.stack));
   };
   ErrorWidget.builder = (FlutterErrorDetails details) {
     unawaited(_writeErrorLog(details.exception, details.stack));
     return _ErrorDetailsView(details: details);
   };
-  final captureMode = args.contains('--capture');
+
+  log.log(
+    DiagnosticEvent.appStart,
+    requestId: requestId,
+    source: triggerSource,
+    extra: <String, Object?>{'mode': captureMode ? 'capture' : 'host'},
+  );
+
   if (captureMode) {
     // 同一轮菜单/热键事件可能重复启动多个进程。必须在窗口插件初始化前抢锁，
     // 失败者直接退出，绝不能让多个 `.screenSaver` 浮层叠在桌面上。
+    // 子进程一进来就先 ACK：宿主靠这个区分「Process 没启动」和「子进程没启动」。
     final handoff = args.contains(SingleInstanceGuard.captureHandoffArgument);
     final handoffToken = _captureHandoffToken(args);
-    final acquired = handoff
-        ? handoffToken != null &&
-              await SingleInstanceGuard.acquireCaptureAfterHandoff(handoffToken)
-        : SingleInstanceGuard.acquireCapture();
+    _ack(
+      requestId: requestId,
+      source: triggerSource,
+      state: CaptureRequestChannel.stateChildStarted,
+      event: DiagnosticEvent.captureChildStarted,
+    );
+    bool acquired;
+    try {
+      acquired = handoff
+          ? handoffToken != null &&
+                await SingleInstanceGuard.acquireCaptureAfterHandoff(
+                  handoffToken,
+                )
+          : SingleInstanceGuard.acquireCapture();
+    } on Object catch (error) {
+      _ack(
+        requestId: requestId,
+        source: triggerSource,
+        state: CaptureRequestChannel.stateStartupFailed,
+        event: DiagnosticEvent.captureStartupFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.captureStartupFailed,
+        message: '$error',
+        extra: <String, Object?>{'error': '$error'},
+      );
+      exitProcessNow();
+      return;
+    }
     if (!acquired) {
       stderr.writeln('已有 Hax Shot 截图流程在运行，本次启动退出');
+      _ack(
+        requestId: requestId,
+        source: triggerSource,
+        state: CaptureRequestChannel.stateLockBusy,
+        event: DiagnosticEvent.captureLockBusy,
+        level: LogLevel.warning,
+        errorCode: DiagnosticErrorCode.captureLockBusy,
+        message: '已有截图流程持有捕获锁',
+      );
       exitProcessNow();
+      return;
     }
+    _ack(
+      requestId: requestId,
+      source: triggerSource,
+      state: CaptureRequestChannel.stateLockAcquired,
+      event: DiagnosticEvent.captureLockAcquired,
+    );
   } else if (!SingleInstanceGuard.acquire()) {
     // 托盘宿主必须唯一：否则会出现“退出了一份，另一份还握着全局快捷键”。
     // 放这里（而不是 runApp 之后）：拿不到锁就直接退出，用户看不到任何窗口。
@@ -39,52 +104,66 @@ Future<void> main(List<String> args) async {
     exitProcessNow();
   }
 
-  await windowManager.ensureInitialized();
+  // `_targetDisplay` 和窗口调用无关，先算好：runApp 需要它，窗口初始化失败不能把它一起带走。
   final targetDisplay = _targetDisplay(args);
-  // macOS 的浮层由 Runner 的 CaptureOverlayWindow 直接改窗口（borderless +
-  // .screenSaver + 铺满目标显示器），不走 window_manager：setAlwaysOnTop 会把
-  // 层级改回 .normal/.floating，setTitleBarStyle 又会在 borderless 窗口上强解包
-  // nil 崩溃。所以 macOS 捕获模式不传这三个选项。详见 docs/development-guide.md 6.9。
-  final nativeCaptureOverlay = captureMode && Platform.isMacOS;
-  final options = WindowOptions(
-    title: 'Hax Shot',
-    // Windows/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
-    // 只有底色透明，剪掉的四角才会露出桌面，而不是 window_manager 写进 GTK CSS 的
-    // 那层背景色（看起来就是“有圆角但角外是方块”）。macOS 不能一起改：titled 窗口
-    // 由系统自己裁圆角，透明底色会露出 NSWindow 底色/桌面，且本机浮层依赖不透明底色
-    // 兜底。全屏浮层不受影响：它自己画满冻结画面，不依赖窗口底色。
-    // 详见 docs/development-guide.md 的“窗口圆角”。
-    backgroundColor: Platform.isMacOS ? Colors.black : Colors.transparent,
-    // The tray host only reveals the shortcut settings page on demand; keep
-    // that temporary window compact instead of inheriting a full-screen size.
-    // 捕获进程先只用一个小窗口：抓屏失败（没授权等）时用户看到的是引导，
-    // 抓到画面之后才由 CaptureOverlayWindow / setFullScreen 升格成全屏浮层。
-    // 480 高是授权引导页一屏放得下的尺寸（引导内容 + 重置授权说明）。
-    size: captureMode ? const Size(560, 480) : const Size(520, 400),
-    minimumSize: captureMode ? const Size(460, 320) : const Size(460, 320),
-    center: true,
-    // The product is tray-only; neither the hidden host nor the transient
-    // selection overlay belongs in the Dock/taskbar.
-    skipTaskbar: true,
-    // 抓屏成功前不要全屏：失败时要留一个能正常关闭的小窗口。
-    alwaysOnTop: nativeCaptureOverlay ? null : false,
-    fullScreen: null,
-    // The settings view supplies its own Flutter AppBar; the tray host should
-    // not expose a second native title bar, and the macOS traffic lights would
-    // sit on top of our close button.
-    titleBarStyle: nativeCaptureOverlay ? null : TitleBarStyle.hidden,
-    windowButtonVisibility: false,
-  );
 
-  // The regular process is tray-only. A capture process stays hidden until
-  // the native ScreenCast frame has been prepared, so the overlay never gets
-  // captured into its own background.
-  // Configure the native window first, then hide it synchronously. Passing an
-  // async callback to waitUntilReadyToShow is unsafe because window_manager
-  // invokes VoidCallback without awaiting it; the later capture show() could
-  // otherwise race with this initial hide().
-  await windowManager.waitUntilReadyToShow(options);
-  await windowManager.hide();
+  // 托盘图标和全局快捷键是这个产品唯一的入口。窗口初始化（WindowOptions /
+  // waitUntilReadyToShow / hide）任何一步抛异常都不能让整个宿主起不来，所以这里
+  // 兜住：只记一条诊断，然后照常往下走到 runApp。
+  try {
+    await windowManager.ensureInitialized();
+    // macOS 的浮层由 Runner 的 CaptureOverlayWindow 直接改窗口（borderless +
+    // .screenSaver + 铺满目标显示器），不走 window_manager：setAlwaysOnTop 会把
+    // 层级改回 .normal/.floating，setTitleBarStyle 又会在 borderless 窗口上强解包
+    // nil 崩溃。所以 macOS 捕获模式不传这三个选项。详见 docs/development-guide.md 6.9。
+    final nativeCaptureOverlay = captureMode && Platform.isMacOS;
+    final options = WindowOptions(
+      title: 'Hax Shot',
+      // Windows/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
+      // 只有底色透明，剪掉的四角才会露出桌面，而不是 window_manager 写进 GTK CSS 的
+      // 那层背景色（看起来就是“有圆角但角外是方块”）。macOS 不能一起改：titled 窗口
+      // 由系统自己裁圆角，透明底色会露出 NSWindow 底色/桌面，且本机浮层依赖不透明底色
+      // 兜底。全屏浮层不受影响：它自己画满冻结画面，不依赖窗口底色。
+      // 详见 docs/development-guide.md 的“窗口圆角”。
+      backgroundColor: Platform.isMacOS ? Colors.black : Colors.transparent,
+      // The tray host only reveals the shortcut settings page on demand; keep
+      // that temporary window compact instead of inheriting a full-screen size.
+      // 捕获进程先只用一个小窗口：抓屏失败（没授权等）时用户看到的是引导，
+      // 抓到画面之后才由 CaptureOverlayWindow / setFullScreen 升格成全屏浮层。
+      // 480 高是授权引导页一屏放得下的尺寸（引导内容 + 重置授权说明）。
+      size: captureMode ? const Size(560, 480) : const Size(520, 400),
+      minimumSize: captureMode ? const Size(460, 320) : const Size(460, 320),
+      center: true,
+      // The product is tray-only; neither the hidden host nor the transient
+      // selection overlay belongs in the Dock/taskbar.
+      skipTaskbar: true,
+      // 抓屏成功前不要全屏：失败时要留一个能正常关闭的小窗口。
+      alwaysOnTop: nativeCaptureOverlay ? null : false,
+      fullScreen: null,
+      // The settings view supplies its own Flutter AppBar; the tray host should
+      // not expose a second native title bar, and the macOS traffic lights would
+      // sit on top of our close button.
+      titleBarStyle: nativeCaptureOverlay ? null : TitleBarStyle.hidden,
+      windowButtonVisibility: false,
+    );
+
+    // The regular process is tray-only. A capture process stays hidden until
+    // the native ScreenCast frame has been prepared, so the overlay never gets
+    // captured into its own background.
+    // Configure the native window first, then hide it synchronously. Passing an
+    // async callback to waitUntilReadyToShow is unsafe because window_manager
+    // invokes VoidCallback without awaiting it; the later capture show() could
+    // otherwise race with this initial hide().
+    await windowManager.waitUntilReadyToShow(options);
+    await windowManager.hide();
+  } on Object catch (error) {
+    log.log(
+      DiagnosticEvent.windowReadyFailed,
+      level: LogLevel.error,
+      errorCode: DiagnosticErrorCode.windowInitFailed,
+      message: '$error',
+    );
+  }
 
   // debug 构建里的 UI 调试入口（托盘菜单「调试：AI 对话窗口」）：带 `--capture`
   // 但跳过抓屏，直接把窗口当成 AI 面板显示。
@@ -95,24 +174,57 @@ Future<void> main(List<String> args) async {
       captureMode: captureMode,
       targetDisplay: targetDisplay,
       debugAiPanel: debugAiPanel,
+      requestId: requestId,
     ),
   );
 }
 
-String? _captureHandoffToken(List<String> args) {
-  final index = args.indexOf(SingleInstanceGuard.captureHandoffArgument);
+/// 同步写请求状态 + 同步写日志：后面紧跟的多半是 `exitProcessNow()`（SIGKILL），
+/// 异步写会丢。
+void _ack({
+  required String? requestId,
+  required String? source,
+  required String state,
+  required String event,
+  String level = LogLevel.info,
+  String? errorCode,
+  String? message,
+  Map<String, Object?> extra = const <String, Object?>{},
+}) {
+  if (requestId == null) return;
+  CaptureRequestChannel.instance.writeStateSync(requestId, state, extra: extra);
+  DiagnosticLogService.instance.logSync(
+    event,
+    level: level,
+    requestId: requestId,
+    source: source,
+    errorCode: errorCode,
+    message: message,
+    extra: extra,
+  );
+}
+
+String? _argumentValue(List<String> args, String name) {
+  final index = args.indexOf(name);
   if (index < 0 || index + 1 >= args.length) return null;
-  final token = args[index + 1];
-  return int.tryParse(token) == null ? null : token;
+  final value = args[index + 1];
+  return value.isEmpty || value.startsWith('--') ? null : value;
+}
+
+String? _captureHandoffToken(List<String> args) {
+  final token = _argumentValue(
+    args,
+    SingleInstanceGuard.captureHandoffArgument,
+  );
+  return (token == null || int.tryParse(token) == null) ? null : token;
 }
 
 /// 托盘宿主用 `--display <id>` 指定主浮层落在哪块显示器；授权后重启抓屏进程时
 /// 需要原样带上。id 是平台自己的显示器标识，Flutter 只负责转交。
 int? _targetDisplay(List<String> args) {
-  final index = args.indexOf('--display');
-  if (index < 0 || index + 1 >= args.length) return null;
-  final value = int.tryParse(args[index + 1]);
-  return (value == null || value == 0) ? null : value;
+  final value = _argumentValue(args, '--display');
+  final display = value == null ? null : int.tryParse(value);
+  return (display == null || display == 0) ? null : display;
 }
 
 class _ErrorDetailsView extends StatelessWidget {
