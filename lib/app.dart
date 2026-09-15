@@ -221,7 +221,7 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Hax Shot',
+      title: 'HaxShot',
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(
@@ -324,7 +324,7 @@ class _TrayHostPageState extends State<TrayHostPage>
   ///
   /// **快捷键排在托盘前面**：错误隔离不等于卡死隔离。托盘步骤要摸 AppKit 的 status
   /// item，一旦它挂住（拿不到临时 frame、AppIndicator 缺失、Plugin 卡在原生调用里），
-  /// 排在后面的快捷键注册就根本不会执行——那正是「按了没反应」的成因之一。Hax Shot
+  /// 排在后面的快捷键注册就根本不会执行——那正是「按了没反应」的成因之一。HaxShot
   /// 是截图工具：**快捷键可用 > 菜单栏显示快捷键文字**，托盘菜单可以晚一拍显示状态。
   ///
   /// `--capture` 进程（调试时用）也会走到这里，但它的窗口在 main() 里已经配好，
@@ -513,14 +513,48 @@ class _TrayHostPageState extends State<TrayHostPage>
     );
   }
 
+  /// 唤醒类事件发生后补做重注册的延迟梯度（详见 [_recoverShortcut]）。
+  static const _wakeReactivateRetryDelays = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 6),
+  ];
+
   /// 系统恢复（前台 / 唤醒 / 解锁）后把全局快捷键重新注册回来。
   ///
-  /// 统一走 [ShortcutService.reactivate]，它是幂等的并且自己 single-flight：
-  /// 唤醒那一刻常常连着收到 wake / resume / unlock 好几个事件，直接重复 register
-  /// 会叠出重复 handler 和泄漏的 Carbon token。
+  /// 统一走 [ShortcutService.reactivate]：它幂等、自己 single-flight，还有 1s 合并
+  /// 窗口——唤醒那一刻常常连着收到 wake / resume / unlock 好几个事件，直接重复
+  /// register 会叠出重复 handler 和泄漏的 Carbon token。
+  ///
+  /// 唤醒/解锁还要**多试几次**。实测（显示器睡眠 + 唤醒）：
+  /// - 热键会停止投递，但 Carbon 仍认为它注册着（重复注册返回 eventHotKeyExistsErr），
+  ///   我们的 handler 引用也还活着；
+  /// - 只重装 handler 完全没用，唯一的办法是真正注销 + 重新注册（重新把热键绑到当前的
+  ///   事件投递目标上）；
+  /// - 而这一次重注册什么时候能生效取决于系统侧何时恢复：实测唤醒后 3s 那次没救回来，
+  ///   稍后再做一次就好了。
+  ///
+  /// 所以这里不是“试一次就放弃”，而是排一个梯度补做。重启进程当然也能恢复（新进程一定
+  /// 正常），但为了一个偶发失效去杀掉用户的托盘宿主太重，梯度重注册的成本可以忽略。
   Future<void> _recoverShortcut(String event) async {
     if (!Platform.isMacOS) return;
     _diag.log(event);
+    await _reactivateShortcut();
+
+    if (!_isWakeLikeEvent(event)) return;
+    for (final Duration delay in _wakeReactivateRetryDelays) {
+      await Future<void>.delayed(delay);
+      if (!mounted) return;
+      await _reactivateShortcut();
+    }
+  }
+
+  /// 需要补重试的事件：睡眠唤醒 / 解锁 / 会话切换。`app_resumed` 太频繁，不排梯度。
+  bool _isWakeLikeEvent(String event) =>
+      event == DiagnosticEvent.macosWake ||
+      event == DiagnosticEvent.macosUnlock ||
+      event == DiagnosticEvent.macosSessionActive;
+
+  Future<void> _reactivateShortcut() async {
     try {
       await shortcutService.reactivate();
     } on Object catch (error) {
@@ -728,7 +762,7 @@ class _TrayHostPageState extends State<TrayHostPage>
 
   @override
   Widget build(BuildContext context) {
-    // Hax Shot is tray-only. The short-lived --capture process owns the
+    // HaxShot is tray-only. The short-lived --capture process owns the
     // full-screen selection UI; this host only reveals shortcut settings on
     // demand.
     if (_showPermissionGuide) {

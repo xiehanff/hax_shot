@@ -728,6 +728,33 @@ Flutter 用的是标准 `NSApplication` 事件循环。soffes/HotKey 用的就�
 > 顺带一条：`shortcut_register_success` **只表示 Carbon 接受了这个组合**（`noErr`）。
 > 想验证“按下去真的会响”，看 `shortcut_trigger`。
 
+#### 睡眠/唤醒后热键会“注册着但不投递”
+
+实测（`pmset displaysleepnow` 复现，稳定命中）：显示器睡眠再唤醒后，⌥⇧Z 完全没反应。
+但此时：
+
+- `probe`（同进程重复注册同一组合）返回 `eventHotKeyExistsErr(-9878)` → **系统仍然认为
+  这个热键注册在我们进程上**；
+- 我们持有的 `EventHotKeyRef` / `EventHandlerRef` 都还在；
+- 手动 `InstallEventHandler` 重装一遍 handler **没有任何用**；
+- 只有真正 `UnregisterEventHotKey` + `RegisterEventHotKey` 才能恢复投递；
+- **重启进程一定能恢复**（新进程的注册一定是好的）。
+
+结论：睡眠会作废热键绑定的那个**事件投递目标**，注册表里那条记录还在、事件却被丢掉；
+重装 handler 救不了（handler 装在新的目标上，事件还发给旧目标），必须重新注册才能把热键
+绑到当前目标上。
+
+所以 `lib/app.dart` 的 `_recoverShortcut()` 对唤醒类事件（wake / unlock / session-active）
+排了一个**重注册梯度**（+2s、+6s 各补一次），而不是只试一次：实测唤醒后 +3s 那次没救回来，
+稍后再做一次就好了。`app_resumed` 太频繁，不排梯度。
+
+配套的两条约束别改回去：
+
+- 必须用 `GetEventDispatcherTarget()`（见上一节），`GetApplicationEventTarget()` 在这个
+  应用里注册返回 noErr 但永远收不到事件；
+- 唤醒类事件后的重注册要一直保持是**真正的注销 + 注册**，不要为了“省事”改成只重装
+  handler —— 那只会在日志里显示成功，实际热键依然是死的。
+
 #### 怎么在没有真键盘的情况下验证全局热键
 
 合成按键是可以触发全局热键的，用 `CGEvent.post(tap: .cghidEventTap)` 即可，但**必须**：
