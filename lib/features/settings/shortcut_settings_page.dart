@@ -104,6 +104,24 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     }
   }
 
+  /// 状态卡的说明文案。
+  ///
+  /// 「配置里存着什么」和「系统现在响应什么」可能不是同一个组合（例如注册成功但
+  /// 偏好没写成功），这时必须把真正生效的那个组合写出来，不能只显示配置值。
+  String _statusSubtitle() {
+    final active = shortcutService.activeBinding;
+    final configured = shortcutService.configuredBinding;
+    if (active != null && configured != null && active != configured) {
+      return '系统当前响应 ${bindingDisplayLabel(active)}，'
+          '配置里存的是 ${bindingDisplayLabel(configured)}';
+    }
+    if (Platform.isMacOS) {
+      return '当前注册状态（Carbon 是否接受了这个组合；'
+          '失败时会带 OSStatus 记进诊断日志）';
+    }
+    return '当前注册状态';
+  }
+
   String get _modifierHint =>
       Platform.isMacOS ? '⌘、⌥、⌃ 或 ⇧' : 'Alt、Ctrl 或 Super';
 
@@ -212,21 +230,21 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       _message = '正在删除快捷键…';
     });
 
-    try {
-      await shortcutService.clearBinding();
-      if (!mounted) return;
-      setState(() {
+    // clearBinding 返回 false 表示“没删掉”（注销失败或配置没写成功），
+    // 这时不能显示“已删除”——系统里可能还留着这个组合。
+    final cleared = await shortcutService.clearBinding();
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (cleared) {
         _binding = null;
-        _saving = false;
         _message = '快捷键已删除';
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _message = '删除快捷键失败：$error';
-      });
-    }
+      } else {
+        _message =
+            '删除快捷键失败：'
+            '${shortcutService.lastError ?? '系统没有释放这个组合'}';
+      }
+    });
   }
 
   List<_ShortcutModifier> _pressedModifiers() {
@@ -396,12 +414,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                                   : Icons.error_outline,
                             ),
                             title: Text(shortcutStatusLabel(status)),
-                            subtitle: Text(
-                              Platform.isMacOS
-                                  ? '当前注册状态（只反映注册调用是否成功；'
-                                        'macOS 底层库不回读 Carbon 结果）'
-                                  : '当前注册状态',
-                            ),
+                            subtitle: Text(_statusSubtitle()),
                           ),
                         );
                       },

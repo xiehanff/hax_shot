@@ -7,13 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../diagnostics/diagnostic_events.dart';
 import '../diagnostics/diagnostic_log.dart';
 import 'hotkey_binding.dart';
+import 'macos_shortcut_bridge.dart';
 import 'shortcut_registration.dart';
 import 'shortcut_service.dart';
 
-/// macOS 的全局快捷键用 [hotkeyManager]（底层是 soffes/HotKey 的 Carbon 实现）。
+/// macOS 全局快捷键：注册状态机 + 真实 Carbon 注册结果。
 ///
-/// 选择成熟的第三方包而不是自己调 Carbon `RegisterEventHotKey`：托盘宿主是长驻
-/// 进程，注册和注销都要处理生命周期，这件事没必要自己写。
+/// 原生层是 `macos/Runner/ShortcutBridge.swift`（直接调 Carbon），**不是**
+/// `hotkey_manager_macos`：那个插件的 Swift 端在 `register()` 里无条件 `result(true)`，
+/// 而 soffes/HotKey 内部的 `RegisterEventHotKey` 失败时静默 `return`。用它的话，
+/// 「Carbon 没注册上」和「注册成功」在 Dart 侧完全一样，正是要消灭的那种故障。
 ///
 /// 这个类只负责**注册状态机**：注册 / 注销 / 幂等重注册 / 改绑事务与回滚 / 状态上报。
 /// 它不关心快捷键按下之后干什么（那是 `onTriggered` 回调的事）。
@@ -96,16 +99,35 @@ final class MacosShortcutService implements ShortcutService {
   @override
   ValueListenable<ShortcutRegistrationStatus> get registrationStatus => _status;
 
-  /// 最近一次从偏好设置（或默认值迁移）读到的绑定，用于展示“配置了什么”。
+  /// 最近一次从偏好设置读到的绑定（= 持久化配置），和 [activeBinding] 分开看。
+  @override
   String? get configuredBinding => _configuredBinding;
 
+  /// 走自建原生桥：Carbon 的 OSStatus 会真的传回来，失败就抛。
   static Future<void> _defaultRegister(
     HotKey hotKey,
     void Function() onTriggered,
-  ) => hotKeyManager.register(hotKey, keyDownHandler: (_) => onTriggered());
+  ) async {
+    final keyCode = carbonKeyCodeFromHotKey(hotKey);
+    if (keyCode == null) {
+      throw FormatException('macOS 上没有这个按键的 Carbon 键码：${hotKey.debugName}');
+    }
+    final result = await MacosShortcutBridge.instance.register(
+      keyCode: keyCode,
+      modifiers: modifierNamesFromHotKey(hotKey),
+      onTriggered: onTriggered,
+    );
+    if (!result.ok) {
+      throw ShortcutNativeException('注册', result);
+    }
+  }
 
-  static Future<void> _defaultUnregister(HotKey hotKey) =>
-      hotKeyManager.unregister(hotKey);
+  static Future<void> _defaultUnregister(HotKey hotKey) async {
+    final result = await MacosShortcutBridge.instance.unregister();
+    if (!result.ok) {
+      throw ShortcutNativeException('注销', result);
+    }
+  }
 
   /// 把会改变注册状态的操作用一条队列串起来，同一时刻只有一个在跑。
   ///
@@ -310,38 +332,59 @@ final class MacosShortcutService implements ShortcutService {
     });
   }
 
+  /// 返回 false 表示**没有清掉**（注销失败或偏好没删成），UI 不能报“已删除”。
   @override
-  Future<void> clearBinding() {
+  Future<bool> clearBinding() {
     return _serialized(() async {
       final error = await _unregisterInternal();
       if (error != null) {
         // 注销失败还留着旧注册，这时删偏好设置会变成「配置里没有、系统里还活着」。
         _lastError = error;
         _setStatus(ShortcutRegistrationStatus.failed);
-        return;
+        _log.log(
+          DiagnosticEvent.shortcutUnregister,
+          level: LogLevel.error,
+          errorCode: DiagnosticErrorCode.shortcutUnregisterFailed,
+          message: '注销失败，快捷键没有被清除：$error',
+        );
+        return false;
       }
       _activeBinding = null;
-      _configuredBinding = null;
       _setStatus(ShortcutRegistrationStatus.inactive);
       try {
-        final preferences = await SharedPreferences.getInstance();
+        final preferences = await _preferences();
         await preferences.remove(bindingKey);
       } on Object catch (error) {
+        // 注册已经撤掉，只是配置没删；下次启动会把它再注册回来。
+        _lastError = error;
         _log.log(
           DiagnosticEvent.shortcutPreferenceWriteFailed,
-          level: LogLevel.warning,
+          level: LogLevel.error,
           errorCode: DiagnosticErrorCode.shortcutPreferenceFailed,
-          message: '$error',
+          message: '删除快捷键配置失败：$error',
         );
+        return false;
       }
+      _configuredBinding = null;
+      return true;
     });
   }
 
+  /// 读偏好设置也必须有上限。
+  ///
+  /// `SharedPreferences` 底层是 `NSUserDefaults`，坏掉的 domain（plist 被 `rm` 删掉）
+  /// 会让它**永远不返回**。启动链上任何一次无上限的读取都可能把后面的步骤（尤其是
+  /// 快捷键注册）永久挡住，所以所有读写统一走 [_preferences]。
+  Future<SharedPreferences> _preferences() =>
+      SharedPreferences.getInstance().timeout(preferenceTimeout);
+
   @override
   Future<String?> readBinding() async {
-    final preferences = await SharedPreferences.getInstance();
+    final preferences = await _preferences();
     final binding = preferences.getString(bindingKey);
-    return (binding == null || binding.isEmpty) ? null : binding;
+    final value = (binding == null || binding.isEmpty) ? null : binding;
+    _configuredBinding = value;
+    return value;
   }
 
   /// 注册失败时最多再试一次：有限重试能吃掉偶发的瞬时故障，无限重试会掩盖真正的 bug。
@@ -438,7 +481,11 @@ final class MacosShortcutService implements ShortcutService {
         level: LogLevel.error,
         errorCode: errorCode,
         message: '$error',
-        extra: <String, Object?>{'binding': binding},
+        extra: <String, Object?>{
+          'binding': binding,
+          // Carbon 的真实返回值：查“注册了却没反应”时按它过滤最直接。
+          if (error is ShortcutNativeException) 'os_status': error.osStatus,
+        },
       );
     }
     return ShortcutActivationFailure(
@@ -463,6 +510,9 @@ final class MacosShortcutService implements ShortcutService {
         level: LogLevel.warning,
         errorCode: DiagnosticErrorCode.shortcutUnregisterFailed,
         message: '注销全局快捷键失败：$error',
+        extra: <String, Object?>{
+          if (error is ShortcutNativeException) 'os_status': error.osStatus,
+        },
       );
       return error;
     }
@@ -514,7 +564,7 @@ final class MacosShortcutService implements ShortcutService {
   }
 
   Future<void> _writeBinding(String binding) async {
-    final preferences = await SharedPreferences.getInstance();
+    final preferences = await _preferences();
     await preferences.setString(bindingKey, binding);
   }
 

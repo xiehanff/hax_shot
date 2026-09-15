@@ -37,13 +37,23 @@ abstract interface class ShortcutService {
 
   Future<String?> readBinding();
 
-  Future<void> clearBinding();
+  /// 清除快捷键。返回 false 表示**没有清掉**（注销失败或配置没删成），
+  /// UI 不能报“已删除”。
+  Future<bool> clearBinding();
 
   /// 当前注册状态（托盘菜单 / 设置页据此显示是否真的可用）。
   ShortcutRegistrationStatus get status;
 
-  /// 当前**确实注册成功**的绑定；没有就是 null。
+  /// 当前**确实注册成功**的绑定（= 系统现在会响应的那个组合）；没有就是 null。
+  ///
+  /// 与 [configuredBinding] 必须分开看：
+  /// - `activeBinding` 是「现在真的注册了什么」；
+  /// - `configuredBinding` 是「偏好设置里存了什么」。
+  /// 写偏好失败时两者会不一致，UI 必须分别显示，不能拿配置当“当前快捷键”。
   String? get activeBinding;
+
+  /// 偏好设置里保存的绑定（可能还没生效，或和当前注册的不一致）。
+  String? get configuredBinding;
 
   /// 最近一次注册/改绑失败的原因。
   Object? get lastError;

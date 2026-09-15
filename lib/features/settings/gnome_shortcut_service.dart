@@ -51,6 +51,10 @@ final class GnomeShortcutService implements ShortcutService {
   @override
   String? get activeBinding => _activeBinding;
 
+  /// GNOME 没有独立的“已注册”层：gsettings 里的值就是系统实际执行的值。
+  @override
+  String? get configuredBinding => _activeBinding;
+
   @override
   Object? get lastError => _lastError;
 
@@ -132,11 +136,19 @@ final class GnomeShortcutService implements ShortcutService {
     return ShortcutActivationSuccess(binding: binding);
   }
 
+  /// 返回 false 表示 gsettings 没写成功，快捷键可能还在生效。
   @override
-  Future<void> clearBinding() async {
-    await _setGsettings(bindingSchema, 'binding', '');
+  Future<bool> clearBinding() async {
+    try {
+      await _setGsettings(bindingSchema, 'binding', '');
+    } on Object catch (error) {
+      _lastError = error;
+      _setStatus(ShortcutRegistrationStatus.failed);
+      return false;
+    }
     _activeBinding = null;
     _setStatus(ShortcutRegistrationStatus.inactive);
+    return true;
   }
 
   void _setStatus(ShortcutRegistrationStatus value) {

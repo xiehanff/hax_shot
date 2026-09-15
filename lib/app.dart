@@ -177,6 +177,19 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   Future<void> _closeCaptureProcess() async {
     if (_allowClose) return;
     _allowClose = true;
+    // 给请求文件写一个终态，这样 capture_requests/ 里不会只留下“开始过”的记录，
+    // 后面查“这次截图最后怎么了”不用猜。
+    final requestId = widget.requestId;
+    if (requestId != null) {
+      CaptureRequestChannel.instance.writeStateSync(
+        requestId,
+        CaptureRequestChannel.stateFinished,
+      );
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.captureFinished,
+        requestId: requestId,
+      );
+    }
     try {
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
@@ -254,9 +267,6 @@ class _TrayHostPageState extends State<TrayHostPage>
   /// 托盘菜单是否已经建好；建好之前快捷键状态变化不需要刷新菜单。
   bool _trayReady = false;
 
-  /// 「配置了哪个组合」，只用于托盘菜单显示，避免每次刷新都读一次偏好设置。
-  String? _shortcutBinding;
-
   StreamSubscription<String>? _lifecycleEvents;
 
   @override
@@ -296,15 +306,20 @@ class _TrayHostPageState extends State<TrayHostPage>
     super.dispose();
   }
 
-  /// Desktop Host 的每一步都有自己的错误边界：托盘、快捷键、窗口、欢迎页互不阻断。
+  /// Desktop Host 的每一步都有自己的错误边界：窗口、快捷键、托盘、欢迎页互不阻断。
+  ///
+  /// **快捷键排在托盘前面**：错误隔离不等于卡死隔离。托盘步骤要摸 AppKit 的 status
+  /// item，一旦它挂住（拿不到临时 frame、AppIndicator 缺失、Plugin 卡在原生调用里），
+  /// 排在后面的快捷键注册就根本不会执行——那正是「按了没反应」的成因之一。Hax Shot
+  /// 是截图工具：**快捷键可用 > 菜单栏显示快捷键文字**，托盘菜单可以晚一拍显示状态。
   ///
   /// `--capture` 进程（调试时用）也会走到这里，但它的窗口在 main() 里已经配好，
   /// 这里的 window 步骤是幂等的。
   Future<void> _initializeDesktopIntegration() async {
     _diag.log(DiagnosticEvent.desktopInitStart);
     await _initializeWindowSafely();
-    await _initializeTraySafely();
     await _initializeShortcutSafely();
+    await _initializeTraySafely();
     await _initializeWelcomeSafely();
     _diag.log(DiagnosticEvent.desktopInitComplete);
   }
@@ -330,11 +345,11 @@ class _TrayHostPageState extends State<TrayHostPage>
   Future<void> _initializeTraySafely() async {
     _diag.log(DiagnosticEvent.trayInitStart);
     try {
-      // 图标和菜单是用户看到的第一样东西：注册快捷键要读 SharedPreferences、
-      // 走一次 Carbon，欢迎页还要读磁盘，都会拖慢“图标出现”。
       // 不要传 isTemplate: true：那是单色遮罩模式，会把应用图标渲染成纯色剪影。
+      // 菜单标签只用内存里的注册状态（activeBinding / configuredBinding），
+      // 这里**不读** SharedPreferences：启动关键路径上任何一次无上限的原生读写都可能
+      // 把后面的步骤永久挡住（见 MacosShortcutService._preferences 的注释）。
       await trayManager.setIcon(trayIconAsset);
-      await _loadShortcutBinding();
       await trayManager.setContextMenu(_buildTrayMenu());
       _trayReady = true;
       _diag.log(DiagnosticEvent.trayInitSuccess);
@@ -357,7 +372,7 @@ class _TrayHostPageState extends State<TrayHostPage>
             unawaited(_startCapture(source: CaptureTriggerSource.shortcut)),
       );
     } on Object catch (error) {
-      // activate() 设计上不抛异常；真抛了也只是一个模块失败，不能阻断欢迎页。
+      // activate() 设计上不抛异常；真抛了也只是一个模块失败，不能阻断托盘/欢迎页。
       _diag.log(
         DiagnosticEvent.shortcutRegisterFailed,
         level: LogLevel.error,
@@ -365,7 +380,8 @@ class _TrayHostPageState extends State<TrayHostPage>
         message: '$error',
       );
     }
-    await _refreshTrayMenu();
+    // 托盘菜单在这之后才建（见 _initializeDesktopIntegration 的顺序），
+    // 所以这里不需要刷新；之后的状态变化由 registrationStatus 的 listener 负责。
   }
 
   Future<void> _initializeWelcomeSafely() async {
@@ -386,33 +402,41 @@ class _TrayHostPageState extends State<TrayHostPage>
     unawaited(_refreshTrayMenu());
   }
 
-  Future<void> _loadShortcutBinding() async {
-    try {
-      _shortcutBinding = await shortcutService.readBinding();
-    } on Object catch (error) {
-      debugPrint('读取快捷键配置失败：$error');
-    }
-  }
-
   Future<void> _refreshTrayMenu() async {
     if (!_trayReady) return;
     try {
-      await _loadShortcutBinding();
       await trayManager.setContextMenu(_buildTrayMenu());
     } on Object catch (error) {
       debugPrint('刷新托盘菜单失败：$error');
     }
   }
 
-  /// 托盘菜单里那行只读的快捷键状态：把「配置」和「是否真的注册上」分开显示。
+  /// 托盘菜单里那行只读的快捷键状态。
+  ///
+  /// 显示的是 [ShortcutService.activeBinding]（**系统现在真的会响应哪个组合**），
+  /// 而不是偏好设置里的值：写偏好失败时两者会不一致，拿配置当“当前快捷键”会误导人。
   String get _shortcutMenuLabel {
     final status = shortcutService.registrationStatus.value;
-    final binding = _shortcutBinding;
-    if (binding == null || binding.isEmpty) {
-      return '快捷键：未设置';
+    final active = shortcutService.activeBinding;
+    final configured = shortcutService.configuredBinding;
+
+    if (active == null) {
+      if (configured == null) {
+        return status == ShortcutRegistrationStatus.failed
+            ? '快捷键：注册失败'
+            : '快捷键：未设置';
+      }
+      return '快捷键：${bindingDisplayLabel(configured)}'
+          '（${shortcutStatusLabel(status)}）';
     }
-    return '快捷键：${bindingDisplayLabel(binding)}'
-        '（${shortcutStatusLabel(status)}）';
+
+    final label =
+        '快捷键：${bindingDisplayLabel(active)}（${shortcutStatusLabel(status)}）';
+    if (configured != null && configured != active) {
+      // 注册成功但没写进偏好：本次可用，重启会变回配置里的那个。
+      return '$label 配置为 ${bindingDisplayLabel(configured)}';
+    }
+    return label;
   }
 
   Menu _buildTrayMenu() {

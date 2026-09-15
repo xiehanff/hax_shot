@@ -5,6 +5,9 @@ class MainFlutterWindow: NSWindow {
   /// 系统生命周期事件 → Dart 的桥。窗口对象自己持有，nib 生命周期结束才释放。
   private var lifecycleBridge: SystemLifecycleBridge?
 
+  /// 全局快捷键桥（Carbon）。只有托盘宿主需要它。
+  private var shortcutBridge: ShortcutBridge?
+
   /// borderless 窗口默认 `canBecomeKey == false`，那就完全收不到键盘事件：
   /// 浮层里的文字标注打不了字，AI 面板里的 API Key 也粘贴不了（⌘V 没反应）。
   override var canBecomeKey: Bool { true }
@@ -17,7 +20,9 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
-    if ProcessInfo.processInfo.arguments.contains("--capture") {
+    let isCaptureProcess = ProcessInfo.processInfo.arguments.contains("--capture")
+
+    if isCaptureProcess {
       // 捕获进程启动时是一个小的无边框窗口：抓屏失败（没授权、ScreenCast 出错……）
       // 时 Flutter 在这个小窗口里显示引导和错误，用户不会被全屏浮层困住；只有
       // 抓屏成功后 Flutter 才会调用 CaptureOverlayWindow.becomeOverlay() 把它铺满
@@ -46,9 +51,17 @@ class MainFlutterWindow: NSWindow {
     // applicationDidBecomeActive，Flutter 的 AppLifecycleState 覆盖不到这些事件。
     // 这里把原生事件转给 Dart（lib/features/diagnostics/app_lifecycle_bridge.dart），
     // 由 Dart 的 ShortcutService 决定怎么重新注册全局快捷键——快捷键逻辑不搬到 Swift。
-    lifecycleBridge = SystemLifecycleBridge(
-      messenger: flutterViewController.engine.binaryMessenger
-    )
+    //
+    // 两个桥都只给托盘宿主用：`--capture` 进程是短命的，既不注册全局快捷键、
+    // 也没有需要恢复的生命周期状态。
+    if !isCaptureProcess {
+      lifecycleBridge = SystemLifecycleBridge(
+        messenger: flutterViewController.engine.binaryMessenger
+      )
+      shortcutBridge = ShortcutBridge(
+        messenger: flutterViewController.engine.binaryMessenger
+      )
+    }
 
     // nib 加载后 AppKit 会把窗口排到最前，而这时 Flutter 还没画出第一帧，
     // 用户会看到一个小黑窗口闪一下（托盘宿主和捕获进程都这样）。把它设成全透明，

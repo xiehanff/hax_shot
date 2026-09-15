@@ -47,6 +47,52 @@ HotKey? hotKeyFromBinding(
   );
 }
 
+/// 绑定字符串 → macOS Carbon 虚拟键码（`kVK_*`）。
+///
+/// 为什么要单独算：`macos/Runner/ShortcutBridge.swift` 直接调
+/// `RegisterEventHotKey`，它要的是 Carbon 虚拟键码，**不是** USB HID usage。
+/// 以前 `hotkey_manager` 也是把 Carbon 键码发过去的（它内部用 Flutter 公开的
+/// `kMacOsToPhysicalKey` 把 Carbon 键码映射成 `PhysicalKeyboardKey`），所以这里
+/// 反过来用同一张表：先从绑定拿到 `PhysicalKeyboardKey`，再按 usbHidUsage 找回
+/// Carbon 键码。
+///
+/// 返回 null 表示这个按键在 macOS 上没有对应的 Carbon 键码（Flutter 有、macOS 没定义，
+/// 例如 F21+）：调用方必须把它当“注册失败”，不能静默跳过。
+int? macosCarbonKeyCode(String binding) {
+  final hotKey = hotKeyFromBinding(binding);
+  return hotKey == null ? null : carbonKeyCodeFromHotKey(hotKey);
+}
+
+/// 同上，但直接吃一个已经解析好的 [HotKey]（注册路径用的是这个）。
+int? carbonKeyCodeFromHotKey(HotKey hotKey) {
+  final PhysicalKeyboardKey physical;
+  try {
+    physical = hotKey.physicalKey;
+  } on Object {
+    // hotkey_manager 的 physicalKey 是强解包，没有物理键映射时会抛。
+    return null;
+  }
+  for (final MapEntry<int, PhysicalKeyboardKey> entry
+      in kMacOsToPhysicalKey.entries) {
+    if (entry.value.usbHidUsage == physical.usbHidUsage) return entry.key;
+  }
+  return null;
+}
+
+/// [HotKey] 的修饰键 → 原生桥认识的字符串（`alt` / `control` / `shift` / `meta`）。
+List<String> modifierNamesFromHotKey(HotKey hotKey) => <String>[
+  for (final HotKeyModifier modifier
+      in hotKey.modifiers ?? const <HotKeyModifier>[])
+    switch (modifier) {
+      HotKeyModifier.alt => 'alt',
+      HotKeyModifier.control => 'control',
+      HotKeyModifier.shift => 'shift',
+      HotKeyModifier.meta => 'meta',
+      HotKeyModifier.capsLock => 'capsLock',
+      HotKeyModifier.fn => 'fn',
+    },
+];
+
 /// 绑定字符串里的按键 token → `LogicalKeyboardKey`。
 LogicalKeyboardKey? logicalKeyFromBindingToken(String token) {
   final lower = token.toLowerCase();
