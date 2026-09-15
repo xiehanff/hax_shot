@@ -2,7 +2,7 @@ import Cocoa
 import FlutterMacOS
 import XCTest
 
-@testable import hax_shot
+@testable import HaxShot
 
 class RunnerTests: XCTestCase {
 

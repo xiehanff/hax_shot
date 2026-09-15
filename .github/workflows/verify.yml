@@ -129,8 +129,13 @@ jobs:
       #      （`flutter pub get` 不够）。用 `--config-only`：只生成这些配置 + 跑 pod install，
       #      不编译 app —— Debug app 由下面的 xcodebuild test 自己编，不要在这里先整包
       #      构建一遍，否则白花约两分钟；
-      #   2. 测试必须用 Debug 配置：RunnerTests 是 `@testable import hax_shot`，
-      #      Release 关掉了 testability，会报 “Module 'hax_shot' was not compiled for testing”。
+      #   3. 跑之前不能有正在运行的 Hax Shot：RunnerTests 的宿主就是 HaxShot.app，
+      #      它的 main() 会抢单实例锁，抢不到直接 SIGKILL，报 “Test crashed with signal
+      #      kill before starting test execution / Early unexpected exit”。本地手动复现
+      #      这一步时先 pkill -x HaxShot。
+      #   2. 测试必须用 Debug 配置：RunnerTests 是 `@testable import HaxShot`（模块名跟
+      #      PRODUCT_NAME 走），Release 关掉了 testability，会报 “Module 'HaxShot' was not
+      #      compiled for testing”。
       # CODE_SIGNING_ALLOWED=NO：CI 没有证书，测试也不需要签名。
       - name: Generate macOS Xcode config
         run: flutter build macos --config-only --debug
