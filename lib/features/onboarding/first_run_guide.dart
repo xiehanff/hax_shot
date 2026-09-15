@@ -56,7 +56,7 @@ class FirstRunGuide extends StatelessWidget {
                     ),
                     const SizedBox(height: 18),
                     const Text(
-                      'Hax Shot 已在后台运行',
+                      'HaxShot 已在后台运行',
                       textAlign: TextAlign.center,
                       style: PanelText.heroTitle,
                     ),

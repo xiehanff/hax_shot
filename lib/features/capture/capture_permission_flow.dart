@@ -181,7 +181,7 @@ class CapturePermissionFlow extends ChangeNotifier {
   Future<void> showGuide({String? message}) async {
     var guideMessage = message;
     try {
-      // 触发一次系统授权请求：这样 Hax Shot 才会出现在“屏幕录制”列表里，
+      // 触发一次系统授权请求：这样 HaxShot 才会出现在“屏幕录制”列表里，
       // 用户点“打开系统设置”才能找到它。用户确认前返回值是 false。
       NativeBridge.instance.requestScreenCaptureAccess();
     } on Object catch (error) {

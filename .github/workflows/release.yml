@@ -245,8 +245,8 @@ jobs:
           set -euo pipefail
           dmg=(build/macos/HaxShot-*.dmg)
           test -f "${dmg[0]}"
-          app="build/macos/Build/Products/Release/hax_shot.app"
-          test "$(lipo -archs "$app/Contents/MacOS/hax_shot")" = "arm64"
+          app="build/macos/Build/Products/Release/HaxShot.app"
+          test "$(lipo -archs "$app/Contents/MacOS/HaxShot")" = "arm64"
           test "$(lipo -archs "$app/Contents/Frameworks/libhax_shot_native.dylib")" = "arm64"
           # 没公证的包必须带 -unsigned 后缀，否则就是命名漏了标记。
           if [[ "${{ steps.signing.outputs.notarize }}" != "true" ]]; then

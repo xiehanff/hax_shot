@@ -7,7 +7,7 @@ import '../diagnostics/diagnostic_log.dart';
 import 'shortcut_registration.dart';
 import 'shortcut_service.dart';
 
-/// GNOME custom shortcut location used by Hax Shot.
+/// GNOME custom shortcut location used by HaxShot.
 ///
 /// 快捷键由 GNOME 自己持有（gsettings 里保存的是 `hax_shot --capture`），宿主
 /// 不需要向系统注册任何东西，所以这里没有 macOS 那样的注册/回滚事务：
@@ -30,7 +30,7 @@ final class GnomeShortcutService implements ShortcutService {
       '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/hax-shot/';
   static const bindingSchema =
       'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$keyPath';
-  static const name = 'Hax Shot Capture';
+  static const name = 'HaxShot Capture';
 
   final String _executablePath;
   final Future<ProcessResult> Function(String, List<String>) _processRunner;

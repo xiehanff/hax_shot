@@ -12,8 +12,8 @@
 #   scripts/install_macos_app.sh --dir ~/Apps   # 装到别的目录
 set -euo pipefail
 
-app_name="hax_shot"
-bundle="hax_shot.app"
+app_name="HaxShot"
+bundle="HaxShot.app"
 install_dir="/Applications"
 zip_path=""
 dev_cert=false
@@ -124,10 +124,10 @@ echo "签名  : $(codesign -dvv "$install_dir/$bundle" 2>&1 | grep -m1 'Authorit
 echo
 cat <<'TIP'
 测试步骤：
-  1. 打开 /Applications/hax_shot.app（Finder 双击，或 open -a hax_shot）
+  1. 打开 /Applications/HaxShot.app（Finder 双击，或 open -a HaxShot）
      —— 它是菜单栏应用：没有 Dock 图标，只在菜单栏右侧出现一个小图标
   2. 点菜单栏图标 → “立即截屏”
-  3. 第一次系统会弹“hax_shot 想要录制此电脑的屏幕” → 打开系统设置并勾选 Hax Shot，
+  3. 第一次系统会弹“HaxShot 想要录制此电脑的屏幕” → 打开系统设置并勾选 Hax Shot，
      然后回到菜单栏再点一次“立即截屏”
   4. 光标在哪块屏，冻结画面和框选浮层就出现在哪块屏；框选后可以：
      复制 / 保存 / 让 AI 翻译、解释、深入理解

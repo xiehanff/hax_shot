@@ -19,7 +19,7 @@ BuildArch:      x86_64
 BuildRequires:  patchelf
 
 # Flutter ships its own application libraries in the bundle. These are the
-# system services and plugins that Hax Shot intentionally does not vendor.
+# system services and plugins that HaxShot intentionally does not vendor.
 Requires:       gtk3
 Requires:       glib2
 Requires:       libstdc++
@@ -34,7 +34,7 @@ Requires:       libayatana-appindicator-gtk3
 Recommends:     gnome-shell-extension-appindicator
 
 %description
-Hax Shot is a tray-only screenshot tool for Fedora GNOME on Wayland. It uses
+HaxShot is a tray-only screenshot tool for Fedora GNOME on Wayland. It uses
 Mutter ScreenCast and PipeWire to capture a silent frozen frame, then provides
 rectangle selection, PNG saving, and image clipboard support.
 

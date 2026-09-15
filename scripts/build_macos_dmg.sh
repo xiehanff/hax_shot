@@ -27,8 +27,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-app_name="hax_shot"
-bundle_name="hax_shot.app"
+app_name="HaxShot"
+bundle_name="HaxShot.app"
 notarize=0
 verify_only=0
 build_mode="release"
@@ -134,7 +134,7 @@ trap 'rm -rf "$staging"' EXIT
 cp -R "$app_path" "$staging/"
 ln -s /Applications "$staging/Applications"
 rm -f "$dmg_path"
-hdiutil create -volname "Hax Shot" -srcfolder "$staging" \
+hdiutil create -volname "HaxShot" -srcfolder "$staging" \
   -ov -format UDZO "$dmg_path" >/dev/null
 echo "   $dmg_path"
 

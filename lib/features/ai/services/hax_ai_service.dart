@@ -3,7 +3,7 @@ import 'package:plume_ai_chat/plume_ai_chat.dart';
 import '../models/hax_ai_state.dart';
 import 'hax_ai_settings_store.dart';
 
-/// Hax Shot 对共享 AI 对话运行时的宿主适配。
+/// HaxShot 对共享 AI 对话运行时的宿主适配。
 ///
 /// 对话历史、流式状态和请求取消均由 [plume_ai_chat] 持有；本服务只负责
 /// DeepSeek 凭据和宿主侧初始化状态。

@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 首次启动引导是否已经展示过。
 ///
-/// Hax Shot 是托盘/菜单栏应用：第一次双击打开时屏幕上什么都不出现，新用户很容易
+/// HaxShot 是托盘/菜单栏应用：第一次双击打开时屏幕上什么都不出现，新用户很容易
 /// 以为没启动。所以首次运行弹一次欢迎窗口，说明图标在哪、快捷键是什么。
 ///
 /// 这里的偏好读写和 `MacosShortcutService` 一样必须有上限：`SharedPreferences`

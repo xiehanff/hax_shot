@@ -3,7 +3,7 @@
 #
 # 覆盖的内容：
 #   1. 运行中的 Hax Shot 进程
-#   2. 应用本体（默认 /Applications/hax_shot.app）
+#   2. 应用本体（默认 /Applications/HaxShot.app）
 #   3. 开机自启动项 ~/Library/LaunchAgents/com.github.xiehanff.haxShot.plist（并 bootout）
 #   4. 屏幕录制授权记录（tccutil reset ScreenCapture），否则系统设置里会留着一条空记录
 #   5. 偏好设置（快捷键等）与系统生成的缓存/状态目录
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 bundle_id="com.github.xiehanff.haxShot"
-app_name="hax_shot.app"
+app_name="HaxShot.app"
 install_dir="/Applications"
 keep_prefs=0
 dry_run=0
@@ -59,11 +59,11 @@ remove_path() {
 }
 
 echo "== 1/5 结束运行中的进程 =="
-if pgrep -x hax_shot >/dev/null 2>&1; then
-  run pkill -x hax_shot || true
+if pgrep -x HaxShot >/dev/null 2>&1; then
+  run pkill -x HaxShot || true
   sleep 1
-  if pgrep -x hax_shot >/dev/null 2>&1; then
-    run pkill -9 -x hax_shot || true
+  if pgrep -x HaxShot >/dev/null 2>&1; then
+    run pkill -9 -x HaxShot || true
   fi
   echo "   已结束"
 else

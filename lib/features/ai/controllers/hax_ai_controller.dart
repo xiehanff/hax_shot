@@ -17,10 +17,10 @@ enum HaxAiSidebarMode { conversation, settings }
 
 enum _ScrollFollowState { followingTail, userControlled }
 
-/// Hax Shot 的 AI 侧栏宿主控制器。
+/// HaxShot 的 AI 侧栏宿主控制器。
 ///
 /// 对话状态和流式请求交给 [AiChatController]，这里只保留窗口、输入框、
-/// API Key 和滚动跟随等 Hax Shot 相关状态。
+/// API Key 和滚动跟随等 HaxShot 相关状态。
 class HaxAiController extends GetxController {
   HaxAiController({required HaxAiService service})
     : _service = service,

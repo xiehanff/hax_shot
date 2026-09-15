@@ -369,7 +369,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '按下快捷键后，Hax Shot 会启动全屏框选。',
+                      '按下快捷键后，HaxShot 会启动全屏框选。',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 24),

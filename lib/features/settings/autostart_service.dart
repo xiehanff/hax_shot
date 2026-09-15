@@ -65,8 +65,8 @@ final class XdgAutostartService implements AutostartService {
     final command = executable.contains(RegExp(r'\s')) ? '"$escaped"' : escaped;
     return '''[Desktop Entry]
 Type=Application
-Name=Hax Shot
-Comment=Hax Shot tray host
+Name=HaxShot
+Comment=HaxShot tray host
 Exec=$command
 Icon=com.github.xiehanff.hax_shot
 Terminal=false

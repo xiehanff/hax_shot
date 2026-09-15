@@ -10,7 +10,7 @@ import 'ai_sidebar_settings.dart';
 import 'chat_bubble.dart';
 import 'chat_input_bar.dart';
 
-/// Hax Shot 的 AI 对话侧栏。
+/// HaxShot 的 AI 对话侧栏。
 class AiSidebar extends StatelessWidget {
   const AiSidebar({required this.controller, required this.onClose, super.key});
 

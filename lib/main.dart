@@ -78,7 +78,7 @@ Future<void> main(List<String> args) async {
       return;
     }
     if (!acquired) {
-      stderr.writeln('已有 Hax Shot 截图流程在运行，本次启动退出');
+      stderr.writeln('已有 HaxShot 截图流程在运行，本次启动退出');
       _ack(
         requestId: requestId,
         source: triggerSource,
@@ -100,7 +100,7 @@ Future<void> main(List<String> args) async {
   } else if (!SingleInstanceGuard.acquire()) {
     // 托盘宿主必须唯一：否则会出现“退出了一份，另一份还握着全局快捷键”。
     // 放这里（而不是 runApp 之后）：拿不到锁就直接退出，用户看不到任何窗口。
-    stderr.writeln('已有 Hax Shot 在运行，本次启动退出');
+    stderr.writeln('已有 HaxShot 在运行，本次启动退出');
     exitProcessNow();
   }
 
@@ -118,7 +118,7 @@ Future<void> main(List<String> args) async {
     // nil 崩溃。所以 macOS 捕获模式不传这三个选项。详见 docs/development-guide.md 6.9。
     final nativeCaptureOverlay = captureMode && Platform.isMacOS;
     final options = WindowOptions(
-      title: 'Hax Shot',
+      title: 'HaxShot',
       // Windows/Linux 的窗口本身没有圆角，靠 RoundedWindow 的 ClipRRect 剪出来；
       // 只有底色透明，剪掉的四角才会露出桌面，而不是 window_manager 写进 GTK CSS 的
       // 那层背景色（看起来就是“有圆角但角外是方块”）。macOS 不能一起改：titled 窗口

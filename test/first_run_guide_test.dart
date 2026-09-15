@@ -25,7 +25,7 @@ void main() {
   testWidgets('欢迎页说明图标位置、快捷键和首次授权', (tester) async {
     await pumpGuide(tester);
 
-    expect(find.text('Hax Shot 已在后台运行'), findsOneWidget);
+    expect(find.text('HaxShot 已在后台运行'), findsOneWidget);
     expect(find.textContaining('截图快捷键：⌥+Z'), findsOneWidget);
     expect(find.textContaining('首次截图时系统会要求授予屏幕录制权限'), findsOneWidget);
     expect(find.text('打开设置'), findsOneWidget);

@@ -55,7 +55,7 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
     try {
       await launchUrl(CapturePermissionGuide.screenRecordingSettings);
       if (!mounted) return;
-      setState(() => _hint = '已打开系统设置，勾选 Hax Shot 后回来点下面的按钮。');
+      setState(() => _hint = '已打开系统设置，勾选 HaxShot 后回来点下面的按钮。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _hint = '打不开系统设置：$error\n请手动打开“系统设置 → 隐私与安全性 → 屏幕录制”。');
@@ -84,7 +84,7 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
       if (!mounted) return;
       setState(
         () => _hint =
-            '已清掉旧的授权记录。列表里如果看不到 Hax Shot，点列表下方的 + 手动添加 /Applications/hax_shot.app。',
+            '已清掉旧的授权记录。列表里如果看不到 HaxShot，点列表下方的 + 手动添加 /Applications/HaxShot.app。',
       );
     } on Object catch (error) {
       if (!mounted) return;
@@ -129,7 +129,7 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       Text(
-                        'Hax Shot 只在你按下快捷键（或点“立即截屏”）时抓一次屏，不会录屏，'
+                        'HaxShot 只在你按下快捷键（或点“立即截屏”）时抓一次屏，不会录屏，'
                         '也不会把画面传到别处。macOS 要求在“系统设置”里手动授权。',
                         style: PanelText.body,
                       ),
@@ -146,8 +146,8 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
                             _Step(
                               index: 2,
                               // 本地 ad-hoc 签名下，重置授权 / 重新构建后旧记录会对不上，
-                              // 列表里可能根本没有 Hax Shot，这时只能靠列表下方的 + 手动添加。
-                              text: '在“隐私与安全性 → 屏幕录制”里勾选 Hax Shot（没有就点 + 添加）',
+                              // 列表里可能根本没有 HaxShot，这时只能靠列表下方的 + 手动添加。
+                              text: '在“隐私与安全性 → 屏幕录制”里勾选 HaxShot（没有就点 + 添加）',
                             ),
                             const SizedBox(height: 10),
                             _Step(
@@ -160,7 +160,7 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
                         ),
                       ),
                       // 开发期的坑：从终端 / `flutter run` 启动时，屏幕录制授权会记在终端
-                      // 身上，Hax Shot 不会出现在系统设置列表里（macOS 15 的该面板也不能
+                      // 身上，HaxShot 不会出现在系统设置列表里（macOS 15 的该面板也不能
                       // 手动“+”添加），于是用户怎么都授权不了。
                       if (Platform.isMacOS) ...<Widget>[
                         const SizedBox(height: 14),
@@ -168,7 +168,7 @@ class _CapturePermissionGuideState extends State<CapturePermissionGuide> {
                           icon: Icons.terminal_outlined,
                           text:
                               '如果你是从终端或 flutter run 启动的：授权会记在终端上，'
-                              'Hax Shot 不会出现在列表里。请改用 Finder 双击（或 open）'
+                              'HaxShot 不会出现在列表里。请改用 Finder 双击（或 open）'
                               'build 目录里的 .app，再从它里面点“打开系统设置”。',
                         ),
                       ],
