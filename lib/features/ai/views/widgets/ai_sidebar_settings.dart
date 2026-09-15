@@ -87,7 +87,7 @@ class _ModelInfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const String modelId = DeepSeekBackend.defaultModel;
-    const String label = 'DeepSeek Vision';
+    const String label = 'DeepSeek Flash';
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
       padding: const EdgeInsets.all(14),

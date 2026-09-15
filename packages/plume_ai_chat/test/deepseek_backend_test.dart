@@ -34,7 +34,7 @@ void main() {
         )
         .toList();
 
-    expect(requestBody['model'], 'deepseek-v4-flash-vision-exp');
+    expect(requestBody['model'], 'deepseek-flash');
     expect((requestBody['messages'] as List).length, 2);
     expect(events.single.text, 'a');
     expect(events.single.reasoning, 'r');

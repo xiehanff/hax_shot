@@ -23,7 +23,7 @@ class DeepSeekBackend implements AiBackend {
   }) : _apiKeyProvider = apiKeyProvider,
        _httpClient = httpClient;
 
-  static const String defaultModel = 'deepseek-v4-flash-vision-exp';
+  static const String defaultModel = 'deepseek-flash';
 
   final FutureOr<String> Function() _apiKeyProvider;
   final http.Client? _httpClient;
