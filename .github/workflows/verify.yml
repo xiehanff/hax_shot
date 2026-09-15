@@ -9,7 +9,13 @@ on:
     # （paths-ignore 只在本次 push 的全部改动都命中时才跳过，带代码的提交仍会跑）。
     paths-ignore:
       - 'pubspec.yaml'
+      # 纯文档改动不可能让编译/测试挂掉，不值得占一次 macOS runner。
+      # 注意 paths-ignore 只在本次 push/PR 的**全部**改动都命中时才跳过：
+      # 同时改了代码和文档仍然会跑（这是期望行为）。
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - '**.md'
 
 permissions:
   contents: read
