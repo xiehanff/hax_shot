@@ -5,8 +5,6 @@ import 'package:hugeicons/hugeicons.dart';
 
 import 'annotation.dart';
 
-import '../../hax_colors.dart';
-
 class CaptureToolbar extends StatelessWidget {
   const CaptureToolbar({
     required this.busy,
@@ -37,114 +35,109 @@ class CaptureToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 结构：最外层 Container 只负责画阴影（它上面没有 ClipRRect，阴影不会被裁掉），
+    // 里面才是裁圆的毛玻璃本体。
+    //
+    // 阴影用两层：一层贴身的小阴影接住边缘，一层大范围向下的大阴影把工具条从桌面上
+    // “浮”起来——这就是悬浮感的主要来源，不再靠外圈渐变边。
     return Material(
       color: Colors.transparent,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(
-            sigmaX: 24,
-            sigmaY: 24,
-            tileMode: TileMode.clamp,
-          ),
-          child: Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              // 外圈 2px 玻璃边：灰蓝渐变（亮 → 暗），和 app 主题同一份色源；
-              // 原来是紫 #71488B → 靛 #5F3AA8，和改后的灰蓝主题不搭。
-              gradient: const LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [haxAccent, haxAccentDeep],
-              ),
-              borderRadius: BorderRadius.circular(999),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x55000000),
-                  blurRadius: 24,
-                  offset: Offset(0, 8),
-                ),
-              ],
+      child: Container(
+        decoration: const BoxDecoration(
+          borderRadius: BorderRadius.all(Radius.circular(999)),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0x40000000),
+              blurRadius: 28,
+              offset: Offset(0, 14),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(997),
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xF20D0D10), Color(0xFF000000)],
-                    stops: [0, 0.55],
-                  ),
-                  borderRadius: BorderRadius.all(Radius.circular(997)),
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 8,
+              offset: Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(
+              sigmaX: 24,
+              sigmaY: 24,
+              tileMode: TileMode.clamp,
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xF20D0D10), Color(0xFF000000)],
+                  stops: [0, 0.55],
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedCancel01,
-                        tooltip: '取消 (Esc)',
-                        onPressed: busy ? null : onCancel,
-                      ),
-                      const _ToolbarDivider(),
-                      _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedCursorRectangleSelection01,
-                        tooltip: '框选截图区域',
-                        selected: activeTool == CaptureTool.selection,
-                        onPressed: () => onToolSelected(CaptureTool.selection),
-                      ),
-                      _ToolbarIconButton(
-                        // 用 rectangular-stroke-rounded 那个扁平矩形，和“框选”
-                        // （cursor-rectangle-selection）在形状上区分得开。
-                        icon: HugeIcons.strokeRoundedRectangular,
-                        tooltip: '标注矩形',
-                        selected: activeTool == CaptureTool.rectangle,
-                        onPressed: () => onToolSelected(CaptureTool.rectangle),
-                      ),
-                      _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedArrowDownLeft01,
-                        tooltip: '标注箭头',
-                        selected: activeTool == CaptureTool.arrow,
-                        onPressed: () => onToolSelected(CaptureTool.arrow),
-                      ),
-                      _ToolbarIconButton(
-                        icon: HugeIcons.strokeRoundedText,
-                        tooltip: '标注文字',
-                        selected: activeTool == CaptureTool.text,
-                        onPressed: () => onToolSelected(CaptureTool.text),
-                      ),
-                      const _ToolbarDivider(),
-                      _ToolbarColorPalette(
-                        selectedColor: selectedColor,
-                        onSelected: onColorSelected,
-                      ),
-                      const _ToolbarDivider(),
-                      _AiActionGroup(
-                        busy: busy,
-                        onTranslate: onTranslate,
-                        onExplain: onExplain,
-                        onDeepUnderstand: onDeepUnderstand,
-                      ),
-                      const _ToolbarDivider(),
-                      _ToolbarTextButton(
-                        icon: HugeIcons.strokeRoundedSave,
-                        tooltip: '保存 PNG',
-                        onPressed: busy ? null : onSave,
-                      ),
-                      const SizedBox(width: 4),
-                      _ToolbarTextButton(
-                        icon: HugeIcons.strokeRoundedCopy01,
-                        tooltip: '复制到剪贴板',
-                        busy: busy,
-                        onPressed: busy ? null : onCopy,
-                      ),
-                    ],
-                  ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ToolbarIconButton(
+                      icon: HugeIcons.strokeRoundedCancel01,
+                      tooltip: '取消 (Esc)',
+                      onPressed: busy ? null : onCancel,
+                    ),
+                    const _ToolbarDivider(),
+                    _ToolbarIconButton(
+                      icon: HugeIcons.strokeRoundedCursorRectangleSelection01,
+                      tooltip: '框选截图区域',
+                      selected: activeTool == CaptureTool.selection,
+                      onPressed: () => onToolSelected(CaptureTool.selection),
+                    ),
+                    _ToolbarIconButton(
+                      // 用 rectangular-stroke-rounded 那个扁平矩形，和“框选”
+                      // （cursor-rectangle-selection）在形状上区分得开。
+                      icon: HugeIcons.strokeRoundedRectangular,
+                      tooltip: '标注矩形',
+                      selected: activeTool == CaptureTool.rectangle,
+                      onPressed: () => onToolSelected(CaptureTool.rectangle),
+                    ),
+                    _ToolbarIconButton(
+                      icon: HugeIcons.strokeRoundedArrowDownLeft01,
+                      tooltip: '标注箭头',
+                      selected: activeTool == CaptureTool.arrow,
+                      onPressed: () => onToolSelected(CaptureTool.arrow),
+                    ),
+                    _ToolbarIconButton(
+                      icon: HugeIcons.strokeRoundedText,
+                      tooltip: '标注文字',
+                      selected: activeTool == CaptureTool.text,
+                      onPressed: () => onToolSelected(CaptureTool.text),
+                    ),
+                    const _ToolbarDivider(),
+                    _ToolbarColorPalette(
+                      selectedColor: selectedColor,
+                      onSelected: onColorSelected,
+                    ),
+                    const _ToolbarDivider(),
+                    _AiActionGroup(
+                      busy: busy,
+                      onTranslate: onTranslate,
+                      onExplain: onExplain,
+                      onDeepUnderstand: onDeepUnderstand,
+                    ),
+                    const _ToolbarDivider(),
+                    _ToolbarTextButton(
+                      icon: HugeIcons.strokeRoundedSave,
+                      tooltip: '保存 PNG',
+                      onPressed: busy ? null : onSave,
+                    ),
+                    const SizedBox(width: 4),
+                    _ToolbarTextButton(
+                      icon: HugeIcons.strokeRoundedCopy01,
+                      tooltip: '复制到剪贴板',
+                      busy: busy,
+                      onPressed: busy ? null : onCopy,
+                    ),
+                  ],
                 ),
               ),
             ),
