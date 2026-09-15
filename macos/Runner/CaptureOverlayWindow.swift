@@ -31,9 +31,7 @@ final class CaptureOverlayWindow {
     if #available(macOS 11.0, *) {
       window.titlebarSeparatorStyle = .none
     }
-    window.standardWindowButton(.closeButton)?.isHidden = true
-    window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-    window.standardWindowButton(.zoomButton)?.isHidden = true
+    hideStandardWindowButtons(in: window)
     // 有原生圆角裁剪，圆角外侧不会露出窗口背景，这里只需要一个不透明的深色兜底。
     // 底色等同 Dart 侧 `HaxAiColors.scaffoldBg`（lib/features/ai/views/widgets/ai_colors.dart，0xFF121318）。
     window.isOpaque = true
@@ -42,6 +40,29 @@ final class CaptureOverlayWindow {
     window.isMovable = true
     window.isMovableByWindowBackground = false
     window.hasShadow = true
+  }
+
+  /// 藏掉系统自带的红黄绿按钮：窗口的视觉和交互完全由 Flutter 负责（右上角自己画的
+  /// 关闭按钮），留着系统按钮就是重复的一套。
+  ///
+  /// 单独抽出来是因为**改 styleMask 会让 AppKit 把按钮重新显示出来**：`exitOverlay()`
+  /// 和 `enableResizablePanel()` 都要在改完 styleMask 之后再藏一遍。
+  static func hideStandardWindowButtons(in window: NSWindow) {
+    window.standardWindowButton(.closeButton)?.isHidden = true
+    window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+    window.standardWindowButton(.zoomButton)?.isHidden = true
+  }
+
+  /// 让面板可以被拖动边缘改大小，并重新藏掉系统按钮。
+  ///
+  /// `styleMask.insert(.resizable)` 会触发 AppKit 重新排标题栏，系统按钮会冒出来；
+  /// 所以插完必须紧跟一次 hideStandardWindowButtons。
+  func enableResizablePanel() {
+    guard let window else { return }
+    window.styleMask.insert(.resizable)
+    Self.hideStandardWindowButtons(in: window)
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
   }
 
   func attach(messenger: FlutterBinaryMessenger, window: NSWindow) {
@@ -58,6 +79,9 @@ final class CaptureOverlayWindow {
         result(nil)
       case "exitOverlay":
         self?.exitOverlay()
+        result(nil)
+      case "enableResizablePanel":
+        self?.enableResizablePanel()
         result(nil)
       default:
         result(FlutterMethodNotImplemented)

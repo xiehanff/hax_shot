@@ -897,12 +897,40 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
 配成 AI 面板尺寸（456×680）显示出来，用于调 AI 面板的 UI。“我已授权，重新检查”
 在调试模式下只反馈当前真实授权状态。
 
+#### 聊天窗口可以拖边缘改大小，但不会小于默认尺寸
+
+AI 面板的默认尺寸（`_aiWindowSize = 456×680`）同时就是窗口的**最小尺寸**：
+用户可以把窗口拖大，拖不回比默认更小——默认尺寸是「顶部条 + 消息列表 + 输入栏」
+刚好放得下的布局，再小就没法用了。实现在 `_configureAiWindow()`：
+
+```text
+CaptureOverlayWindow.enableResizablePanel()   ← 原生：插 .resizable + 再藏一遍系统按钮
+windowManager.setMinimumSize(_aiWindowSize)   ← 下限 = 默认尺寸
+windowManager.setSize(_aiWindowSize)
+```
+
+两个坑：
+
+- **必须有个原生入口**。`window_manager.setResizable(true)` 在 macOS 上是
+  `styleMask.insert(.resizable)`，而这会让 AppKit 把系统自带的红黄绿按钮**重新显示
+  出来**（和右上角 Flutter 自己画的 ✕ 重复）。Dart 侧没有“创建后再隐藏系统按钮”的
+  API，所以只有原生层能在同一步里「插 `.resizable` + 再藏一遍按钮」——
+  即 `CaptureOverlayWindow.enableResizablePanel()`。
+- `setMinimumSize` 和 `setSize` 在 `window_manager` 里都是**窗口 frame**（不是 content），
+  两者取同一个值，“能拖到的下限”才正好等于默认尺寸。
+
+全屏截图浮层不受影响：`becomeOverlay()` 会把 `styleMask` 换成 `[.borderless]`，
+`.resizable` 随之丢掉。
+
 #### macOS 窗口交给 Flutter 自己管
 
 不要 macOS 原生的红黄绿按钮（它们会压在 Flutter AppBar 自己的 ✕ 上）：
 
 - 托盘宿主/设置窗口：`WindowOptions.windowButtonVisibility = false`（`window_manager`
   的 macOS 实现里是 `standardWindowButton(...)?.isHidden = true`）；
+- 任何**改动 `styleMask` 的地方改完都要再藏一遍**系统按钮（`hideStandardWindowButtons`）：
+  改 styleMask 会让 AppKit 把三个按钮重新显示出来。已经踩过一次：给聊天窗口加
+  `.resizable` 之后红黄绿又冒出来了；
 - `--capture` 进程的窗口（引导/错误态）：Runner 直接 `styleMask = [.borderless]`，
   抓屏成功后由 `CaptureOverlayWindow.becomeOverlay()` 改成全屏浮层。
   无边框窗口靠 Flutter 自己拖：引导页标题行绑定了 `windowManager.startDragging()`。

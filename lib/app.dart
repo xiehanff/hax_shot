@@ -60,6 +60,9 @@ class HaxShotApp extends StatefulWidget {
 class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   // 宽度沿用 Plume 的侧栏比例（456 = 6px 把手 + 320 侧栏的观感），高度刻意留矮
   // 一点，别占满整块屏。
+  //
+  // 同时也是聊天窗口的**最小尺寸**：允许用户拖边缘改大，但不允许比默认尺寸更小
+  //（见 _configureAiWindow）。
   static const Size _aiWindowSize = Size(456, 680);
 
   HaxAiController? _aiController;
@@ -103,7 +106,18 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
   /// 负责前置条件与异常处理，这里不吞异常。
   Future<void> _configureAiWindow() async {
     await WidgetsBinding.instance.endOfFrame;
-    await windowManager.setMinimumSize(const Size(320, 480));
+    // 聊天窗口允许拖边缘改大小，但最小就是默认尺寸：默认尺寸是「顶部条 + 消息列表 +
+    // 输入栏」刚好放得下的布局，再小就没法用了。
+    //
+    // 可缩放不能省：macOS 的 styleMask 由 Runner 自己整块赋值
+    //（CaptureOverlayWindow.applyPanelAppearance 里是 [.titled, .fullSizeContentView]），
+    // 里面没有 .resizable，不插进去的话拖边缘完全没反应。走原生入口是因为插完还得
+    // 再藏一遍系统红黄绿按钮（见 enableResizablePanel）。
+    // 全屏浮层不受影响：becomeOverlay() 会把 styleMask 换成 [.borderless]。
+    await CaptureOverlayWindow.instance.enableResizablePanel();
+    // minSize 和 setSize 在 window_manager 里都是窗口 frame，两者取同一个值，
+    // 所以“能拖到的下限”正好是默认尺寸。
+    await windowManager.setMinimumSize(_aiWindowSize);
     await windowManager.setSize(_aiWindowSize);
     await windowManager.center();
     await showWindow();

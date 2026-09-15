@@ -32,6 +32,22 @@ final class CaptureOverlayWindow {
     await windowManager.setFullScreen(false);
   }
 
+  /// 把窗口切成「可拖动边缘改大小的面板」。
+  ///
+  /// 必须走原生：macOS 的 `styleMask` 由 Runner 整块赋值，`window_manager` 的
+  /// `setResizable` 插完 `.resizable` 之后 AppKit 会把系统自带的红黄绿按钮重新显示
+  /// 出来，和面板右上角 Flutter 自己画的关闭按钮重复。只有原生层能在同一步里
+  /// 「插 .resizable + 再藏一遍按钮」。
+  ///
+  /// 非 macOS 平台窗口本来就是可缩放的，不需要做什么。
+  Future<void> enableResizablePanel() async {
+    if (_enabled) {
+      await _channel.invokeMethod<void>('enableResizablePanel');
+      return;
+    }
+    await windowManager.setResizable(true);
+  }
+
   /// 让窗口盖住菜单栏和 Dock（macOS 由 Runner 设置窗口层级）。
   Future<void> becomeOverlay() async {
     if (_enabled) {
