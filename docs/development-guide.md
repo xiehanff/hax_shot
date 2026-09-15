@@ -189,26 +189,34 @@ SingleInstanceGuard.acquire()
 
 ### 3.4 托盘宿主的启动顺序
 
-`lib/app.dart` 的 `_initializeDesktopIntegration()` 里的顺序是刻意排的，不要按“先注册
-快捷键、再建图标”的直觉调换：
+`lib/app.dart` 的 `_initializeDesktopIntegration()`：
 
 ```text
 lib/app.dart _initializeDesktopIntegration()
 _initializeWindowSafely()      ← setPreventClose / hide / endOfFrame
-    → _initializeTraySafely()      ← 用户看到的第一样东西（图标 + 菜单）
     → _initializeShortcutSafely()  ← 全局快捷键（macOS 走一次 Carbon）
+    → _initializeTraySafely()      ← 图标 + 菜单
     → _initializeWelcomeSafely()   ← 欢迎页
 ```
 
-图标和菜单是用户唯一能操作托盘的入口，放最前面：`shortcutService.activate()` 要读
-`SharedPreferences` 并走一次 Carbon `RegisterEventHotKey`，欢迎页要读磁盘
-（`hax_shot.onboarding_seen`），这两步都会拖慢“菜单栏图标出现”。欢迎页放最后：它失败
-也只影响自己，图标和菜单已经建好了。
+**快捷键排在托盘前面，不要按“图标要最先出现”的直觉调换。** 错误隔离 ≠ 卡死隔离：托盘
+这一步要摸 AppKit 的 status item，一旦它挂住（拿不到临时 frame、缺 AppIndicator、
+Plugin 卡在原生调用里），排在后面的快捷键注册就根本不会执行——这正是“按了没反应”
+的成因之一。Hax Shot 是截图工具：**快捷键可用 > 菜单栏显示快捷键文字**，托盘菜单晚
+一拍显示状态完全可以接受。
+
+配套的两条约束：
+
+- 托盘菜单的标签只读**内存里的注册状态**（`activeBinding` / `configuredBinding`），
+  **不读** `SharedPreferences`；
+- 启动链上剩下的偏好读取（快捷键绑定、欢迎页标记）都带超时
+  （`MacosShortcutService._preferences()`、`FirstRunOnboarding.timeout`），
+  坏掉的 `NSUserDefaults` domain 不会把任何一步永久吊住。
 
 **每个步骤都有自己的 `try/catch`（`_initializeXxxSafely`），互不阻断**。以前四步共用
-一个大 `try/catch`，托盘图标建不出来（缺 AppIndicator、status item 拿到临时 frame……）
-会让后面的快捷键注册**根本不执行**，而 `catch` 里只有一行 `debugPrint`——Release 用户
-看到的就是“快捷键没反应”。现在这四步各自失败只记自己的 `*_init_failed` 事件。
+一个大 `try/catch`，托盘图标建不出来会让后面的快捷键注册**根本不执行**，而 `catch` 里
+只有一行 `debugPrint`——Release 用户看到的就是“快捷键没反应”。现在这四步各自失败只记
+自己的 `*_init_failed` 事件。
 
 ### 3.5 截图触发链诊断日志
 
@@ -221,9 +229,17 @@ Linux  $XDG_STATE_HOME/hax_shot/logs/hax_shot.log（退回 ~/.local/state/...）
 ```
 
 单文件 2 MB、最多保留 4 个（`hax_shot.log.1` …）。只记生命周期/状态/错误，**不记**截图
-内容、OCR 文本、AI 对话、屏幕文本、API Key。`--capture` 子进程在 `exitProcessNow()`
-（SIGKILL）前的那几条必须用 `logSync`，异步写会丢。事件名与错误码是稳定契约，都在
+内容、OCR 文本、AI 对话、屏幕文本、API Key（敏感 key 由 `_redactedKeyFragments` 兜底
+替换成 `[redacted]`，超长值截断到 1000 字符）。事件名与错误码是稳定契约，都在
 `lib/features/diagnostics/diagnostic_events.dart`，改名等于把历史日志废掉。
+
+两个实现约束，改的时候别退回去：
+
+- **全部同步写**。宿主和 `--capture` 子进程都写同一个文件，异步排队会让同一进程内
+  `log(A); log(B)` 变成 B 先落盘；同步 append 的开销在低频事件下可以忽略。
+- **`append + rotate` 走 `<log>.lock` 的 OS 文件锁**。进程内的串行队列管不了跨进程：
+  宿主和子进程可能同时判断“超过上限了”然后同时 rename。锁由内核维护，被 SIGKILL 也会
+  自动释放。
 
 一次正常截图（宿主 + 子进程共用同一个 `request_id`）：
 
@@ -232,9 +248,12 @@ shortcut_trigger            ← 快捷键真的触发了；没有这一条就是
 capture_request_created     ← 宿主建了请求文件
 capture_process_spawn_success
 capture_child_started       ← 子进程 main() 跑到了；宿主靠它区分“没起来”
-capture_lock_acquired
+capture_lock_acquired       ← 子进程写的，以及宿主观察到的（observed_by: host）
 capture_ready               ← 抓屏成功，浮层已铺满屏幕
 ```
+
+宿主会把自己观察到的 ACK 阶段也记一遍（`observed_by: host`），所以**宿主日志单独就能
+串出完整链路**，不用去子进程的 pid 里找那一行。
 
 排查分叉（等价于 6.6 的菜单/快捷键对照表，但不用人肉复现）：
 
@@ -634,8 +653,18 @@ frame              = CaptureDisplay.targetScreen().frame
 
 ### 6.6 全局快捷键
 
-macOS 没有 gsettings，用成熟的第三方包 **`hotkey_manager`**（macOS 端依赖 soffes/HotKey，
-底层是 Carbon `RegisterEventHotKey`）注册全局热键，不自己写 Carbon 调用。
+macOS 没有 gsettings。全局热键**直接调 Carbon**，实现在
+`macos/Runner/ShortcutBridge.swift`（Dart 侧 `lib/features/settings/macos_shortcut_bridge.dart`）。
+
+**为什么不再用 `hotkey_manager` 注册**：`hotkey_manager_macos 0.2.0` 的 Swift
+`register()` **无条件 `result(true)`**，而 soffes/HotKey 内部的 `RegisterEventHotKey`
+失败时是静默 `return`。于是「Carbon 没注册上」和「注册成功」在 Dart 侧长得一模一样：
+设置页显示“已启用”、用户按下去毫无反应。自建桥只做三件事——透传
+`RegisterEventHotKey` / `UnregisterEventHotKey` 的真实 OSStatus、把按键转成 Dart 回调——
+注册状态机仍然全在 Dart 里。
+
+`hotkey_manager` 只保留用来把绑定字符串解析成 `HotKey` / `LogicalKeyboardKey`
+（`lib/features/settings/hotkey_binding.dart`）。
 
 首次启动时如果没有已保存的绑定，会写入并使用默认值 `<Alt><Shift>z`（即 `⌥⇧Z`）——
 菜单栏图标可能被 Bartender 之类的工具收进隐藏区，所以必须有一个不依赖图标的入口。
@@ -682,17 +711,32 @@ Rust 原生层不参与热键注册，`--capture` 进程也不注册热键。
 本机实测过的那次“⌥Z 没反应”，最后查出来是第二类：热键本身一直是好的（按下去能跑到
 `_startCapture()`、子进程也起来了），真正卡住的是抓屏进程拿不到屏幕录制授权。
 
-另外两个容易误判的点：
+Carbon 的 `RegisterEventHotKey` **跨进程不独占**：别的 app 已经占了同一个组合，本进程
+注册依然返回 `noErr`。所以“用探针试一下能不能注册”不能用来判断热键是否被占用。
 
-- `hotkey_manager_macos 0.2.0` 的 Swift `register()` **无条件 `result(true)`**，它不检查
-  soffes/HotKey 内部 `RegisterEventHotKey` 的返回值。所以 Dart 侧
-  `await hotKeyManager.register(...)` 正常返回**不等于**系统真的记住了这个组合。
-- Carbon 的 `RegisterEventHotKey` **跨进程不独占**：别的 app 已经占了同一个组合，本进程
-  注册依然返回 `noErr`。所以“用探针试一下能不能注册”不能用来判断热键是否被占用。
+#### 一个反直觉的坑：必须用 `GetEventDispatcherTarget()`
 
-真要定位时，先看抓屏进程有没有起来（`pgrep -f -- '--capture'`），再给 `_startCapture()`
-临时加文件日志。从 Finder 启动的 Release 版 `stdout` 落到 launchd，`debugPrint` 看不到，
-所以这类环境差异只能写文件。
+`ShortcutBridge` 里 `InstallEventHandler` 和 `RegisterEventHotKey` 传的目标都必须是
+**`GetEventDispatcherTarget()`**，不能用 `GetApplicationEventTarget()`。
+
+本机实测过：用 `GetApplicationEventTarget()` 时两个调用都返回 `noErr`
+（日志里 `shortcut_register_success` 一切正常），但按 ⌥⇧Z 处理器**一次都不会被调用**——
+因为 application target 是 Carbon 自己那套 `RunApplicationEventLoop()` 的投递目标，而
+Flutter 用的是标准 `NSApplication` 事件循环。soffes/HotKey 用的就是
+`GetEventDispatcherTarget()`，这也是为什么老实现能工作。
+
+> 顺带一条：`shortcut_register_success` **只表示 Carbon 接受了这个组合**（`noErr`）。
+> 想验证“按下去真的会响”，看 `shortcut_trigger`。
+
+#### 怎么在没有真键盘的情况下验证全局热键
+
+合成按键是可以触发全局热键的，用 `CGEvent.post(tap: .cghidEventTap)` 即可，但**必须**：
+poster 跑真正的 `NSApplication` 事件循环（`app.run()`）、`CGEventSource` 用
+`.combinedSessionState`、并且 poster 自己**不要**注册同一个组合（否则事件会被 poster
+自己吃掉，结果没有判断力）。`osascript -e 'tell application "System Events" to keystroke'`
+和 System Events 的 `keystroke` 对这条链路不可靠，别用它验证。
+
+#### 注册状态、改绑事务与唤醒恢复
 
 #### 注册状态、改绑事务与唤醒恢复
 
@@ -715,9 +759,29 @@ registrationStatus(Listenable)`，`activate()` / `reactivate()` / `saveBinding()
 UI 必须显示“全局快捷键当前不可用”。因此 `_activeBinding` 在尝试改绑前就会清空——它表示
 “当前真的注册了什么”，不是“配置里写了什么”。
 
-`hotkey_manager_macos 0.2.0` 的 Swift `register()` **无条件 `result(true)`**，Dart 侧
-分辨不出 Carbon 是否真的记住了组合。所以这里只能保证“注册调用没有抛异常”；启动注册失败
-会**有限重试一次**（`retryDelay`），不做无限重试。设置页在 macOS 上把「当前注册状态」
+原生桥返回的是真实 OSStatus，所以 `status = active` 现在表示 **Carbon 接受了这个
+组合**（`noErr`）；失败会带上 osStatus 进日志（`extra.os_status`），常见值
+`-9878 eventHotKeyExistsErr` 表示被系统保留或本进程已占用。启动注册失败会**有限重试
+一次**（`retryDelay`），不做无限重试。
+
+三个绑定概念必须分开，别混：
+
+| 概念 | 含义 | 什么时候会不一致 |
+| --- | --- | --- |
+| `activeBinding` | 系统现在真的会响应的组合 | 注册失败时为空 |
+| `configuredBinding` | 偏好设置里存着的组合 | 注册成功但偏好写失败时（返回 `Success(persisted: false)`） |
+| `persisted` | 本次结果有没有写进偏好 | 写失败时 false，UI 显示“本次已生效但没能保存” |
+
+托盘菜单和设置页显示的都优先是 `activeBinding`，并且会在两者不一致时把配置值也写出来；
+**不能拿配置当“当前快捷键”**。
+
+`clearBinding()` 返回 `bool`：注销失败或配置没删成时返回 false，UI 不允许报“已删除”。
+注销失败还会中止本次改绑（`SHORTCUT_UNREGISTER_FAILED`），因为那时旧 Carbon handler
+可能还活着，继续注册会变成两个 handler 一起触发截图。
+
+`activate` / `reactivate` / `saveBinding` / `clearBinding` 都排进同一条串行队列
+（`_serialized`）：唤醒事件可能在初次 `activate()` 还在读偏好时就到达，两条路径同时
+注销/注册会叠出重复 handler；`reactivate()` 自己另外还有 single-flight 和 1s 合并窗口。设置页在 macOS 上把「当前注册状态」
 单独成一张卡片显示，它只反映注册调用是否成功，回答不了「系统是否真的记住了这个组合」。
 
 macOS 睡眠/唤醒、锁屏/解锁后 Carbon 热键可能失效。托盘宿主是 `LSUIElement` 隐藏窗口
@@ -765,6 +829,7 @@ launchd 自动加载，而立即 bootstrap 会在用户已经运行托盘宿主�
 | 文件 | 职责 |
 |---|---|
 | `macos/Runner/MainFlutterWindow.swift` | `--capture` 浮层的窗口层级和 frame；`SystemLifecycleBridge`（唤醒/解锁 → Dart） |
+| `macos/Runner/ShortcutBridge.swift` | 直接调 Carbon 注册全局快捷键，把真实 OSStatus 返回 Dart |
 | `macos/Runner/CaptureDisplay.swift` | 目标显示器选择，规则必须和 Rust 保持一致 |
 | `macos/Runner/AppDelegate.swift` | 关闭设置窗口不结束进程 |
 | `macos/Runner/Info.plist` | `LSUIElement`（菜单栏应用，无 Dock 图标）、显示名 |
