@@ -25,7 +25,7 @@
 # 只在本机开发用；不需要了就 `--delete` 并删掉信任项（钥匙串访问 → 证书 → 信任）。
 #
 # 注意：**这个证书不能用于分发**。要发给别人必须用 Apple Developer 账号里的
-# “Developer ID Application” 证书并公证，见 docs/macos-distribution.md。
+# “Developer ID Application” 证书并公证，见 docs/packaging.md 的「macOS 打包与分发」。
 set -euo pipefail
 
 identity_name="Hax Shot Dev"

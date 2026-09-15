@@ -240,7 +240,7 @@ echo
 if [[ $status_ok -eq 0 ]]; then
   if [[ "$build_mode" == "debug" ]]; then
     echo "debug 镜像与安装检查通过：$dmg_path"
-    echo "（本机联调用；分发仍需 Developer ID 签名 + 公证，见 docs/macos-distribution.md）"
+    echo "（本机联调用；分发仍需 Developer ID 签名 + 公证，见 docs/packaging.md 的「macOS 打包与分发」）"
   else
     echo "分发链路检查通过：$dmg_path"
   fi

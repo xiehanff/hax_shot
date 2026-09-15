@@ -175,7 +175,7 @@ jobs:
       - name: Resolve Dart dependencies
         run: flutter pub get
 
-      # 签名策略（见 docs/ci-release.md 第 5 节）：
+      # 签名策略（见 docs/packaging.md 的「签名与公证」）：
       #   没有证书      → ad-hoc DMG，文件名带 -unsigned，Release 正文加警告（只算内部测试包）
       #   有证书没凭据  → 直接失败（半配置状态不允许静默发出去）
       #   证书 + 凭据    → 必须签 + 公证，任何一步失败都会让 job 挂掉
@@ -328,7 +328,7 @@ jobs:
           fi
           {
             printf '> %s：`HaxShot-*-unsigned.dmg` 是 ad-hoc 签名的内部测试包，在别人的 Mac 上会被 Gatekeeper 拒绕。\n' "$marker"
-            printf '> 正式分发需要 Developer ID 证书 + 公证（见 docs/ci-release.md 第 5 节）。\n\n'
+            printf '> 正式分发需要 Developer ID 证书 + 公证（见 docs/packaging.md 的「签名与公证」）。\n\n'
             printf '%s\n' "$body"
           } > notes.md
           gh release edit "$TAG" --notes-file notes.md
