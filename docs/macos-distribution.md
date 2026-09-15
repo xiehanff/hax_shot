@@ -9,7 +9,7 @@
 
 - `macos/Runner/Configs/AppInfo.xcconfig` 里 `ARCHS = arm64`，`scripts/build_macos_rust.sh`
   按 `$ARCHS` 逐架构构建 Rust dylib（当前只会走 `aarch64-apple-darwin`）；
-- 产物验证：`lipo -archs /Applications/hax_shot.app/Contents/MacOS/hax_shot` 应为 `arm64`，
+- 产物验证：`lipo -archs /Applications/HaxShot.app/Contents/MacOS/HaxShot` 应为 `arm64`，
   `Contents/Frameworks/` 下所有框架和 `libhax_shot_native.dylib` 也都只能是 `arm64`；
 - DMG 文件名固定带 `-arm64`（例如 `HaxShot-1.3.0-arm64.dmg`）。
 
@@ -71,12 +71,17 @@ macOS 把“屏幕录制”授权绑在代码签名上：
 
 ### 本机开发：别用 `flutter run` 授权
 
-`flutter run` 启动的 app 责任进程是终端，屏幕录制授权会记在终端上，Hax Shot 不会出现在
+`flutter run` 启动的 app 责任进程是终端，屏幕录制授权会记在终端上，HaxShot 不会出现在
 系统设置列表里。开发时用：
 
 ```bash
-scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Shot 成为责任进程）
+scripts/run_macos_debug.sh            # 构建 debug、用本地证书重签、再 open（HaxShot 成为责任进程）
 ```
+
+**它会顺手用本地证书重签**：Debug 配置默认是 ad-hoc（`CODE_SIGN_IDENTITY = "-"`），授权记录
+绑 cdhash，改一行代码重建就失效——调权限相关功能时几乎没法用。加上
+`scripts/macos_dev_cert.sh --trust` 创建的那个证书之后就固定绑在证书上，重建不用再授权。
+想复现 ad-hoc 的授权问题才用 `--ad-hoc` 跳过重签。
 
 ### 本机开发怎么办
 
@@ -87,16 +92,19 @@ scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动（Hax Sh
   “开关是开的但进程没权限、也不再弹框”的死结；
 - `scripts/macos_dev_cert.sh` 可以创建一个自签名的本地证书，让开发期授权跨构建稳定。
   **仅限本机开发**：自签名证书无法公证，给别人的 app 用它仍然会被 Gatekeeper 拒绝。
+  建好之后 `install_macos_app.sh --dev-cert`（release）和 `run_macos_debug.sh`（debug）
+  都会自动用它重签；从 ad-hoc 切过来时先 `tccutil reset ScreenCapture
+  com.github.xiehanff.haxShot` 清掉那条对不上号的旧记录，再重新授权一次即可。
 
 ## 4. 别人的 Mac 上第一次运行会经历什么
 
 ```text
-1. 挂载 DMG → 拖 hax_shot.app 到“应用程序” → 打开
+1. 挂载 DMG → 拖 HaxShot.app 到“应用程序” → 打开
    （已公证：直接打开；未公证：右键→打开，或去“隐私与安全性”里放行）
 2. 没有 Dock 图标！它是菜单栏应用（LSUIElement），只在菜单栏右侧出现一个小图标
 3. 按 ⌥⇧Z 或点菜单栏图标 → “立即截屏”
 4. 第一次会弹出自己的授权引导（小窗口，不是全屏）：
-   「打开系统设置」→ 在“隐私与安全性 → 屏幕录制”勾选 Hax Shot → 回到 app
+   「打开系统设置」→ 在“隐私与安全性 → 屏幕录制”勾选 HaxShot → 回到 app
    → 检测到授权后自动继续截图
 5. 想换快捷键：菜单栏图标 → “设置” → 录制组合键（默认已经是 ⌥⇧Z）
 6. 想用 AI：AI 面板里填 DeepSeek API Key
@@ -128,7 +136,7 @@ scripts/uninstall_macos_app.sh --keep-prefs    # 保留快捷键等偏好设置
 scripts/uninstall_macos_app.sh --dir ~/Apps    # 应用装在别处
 ```
 
-清掉的东西：运行中的进程、`<dir>/hax_shot.app`、`~/Library/LaunchAgents/<bundle id>.plist`
+清掉的东西：运行中的进程、`<dir>/HaxShot.app`、`~/Library/LaunchAgents/<bundle id>.plist`
 （含 `launchctl bootout`）、屏幕录制授权记录（`tccutil reset`）、偏好设置 plist，以及系统
 生成的 `Saved Application State` / `Caches` / `HTTPStorages` 目录。开发用自签名证书和
 `build/macos/` 里的构建产物不在范围里，脚本结尾会提示对应命令。
@@ -151,7 +159,7 @@ app 签名完整（codesign --verify --deep --strict）
 bundle 内动态库都已签名
 Info.plist 是菜单栏应用（LSUIElement）
 应用图标已打进 bundle（AppIcon.icns + CFBundleIconName）
-DMG 能挂载且内含 hax_shot.app / Applications 快捷方式
+DMG 能挂载且内含 HaxShot.app / Applications 快捷方式
 Gatekeeper 接受 app（spctl）
 DMG 已公证并 stapled
 ```

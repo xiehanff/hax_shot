@@ -1,6 +1,6 @@
 # Rust native layer
 
-Hax Shot 的原生层按平台拆成两个后端，对外只暴露一份 C ABI：
+HaxShot 的原生层按平台拆成两个后端，对外只暴露一份 C ABI：
 
 ```text
 rust/src/lib.rs     C ABI、错误状态、临时文件路径

@@ -1,14 +1,14 @@
-# Hax Shot 参考源码结论
+# HaxShot 参考源码结论
 
 ## 1. 参考仓库选择
 
-| 参考项目 | 在 Hax Shot 中参考什么 | 不参考什么 |
+| 参考项目 | 在 HaxShot 中参考什么 | 不参考什么 |
 |---|---|---|
 | Reticle | 冻结画面、框选、输出流水线、贴图产品体验 | Swift/AppKit、ScreenCaptureKit、完整功能 |
 | SnapShotKit | point/pixel 坐标规范、统一 flatten、PNG/剪贴板输出 | macOS TCC、Carbon、SwiftUI 代码 |
 | Screenshot | 最小主链路、单帧捕获、排除 overlay、Save/Copy | 未接通的 Editor/LayerManager、缺少错误处理的部分 |
 
-## 2. Hax Shot MVP1 的最终边界
+## 2. HaxShot MVP1 的最终边界
 
 MVP1 定义基础截图链路；MVP2 的自启动、矩形、箭头和文字标注实现见 [`mvp2.md`](./mvp2.md)。
 
@@ -31,7 +31,7 @@ GNOME 系统快捷键 Alt+Z
 - PNG 保存路径选择；
 - PNG 图片剪贴板；
 - 截图失败、权限失败和超时提示；
-- Hax Shot 图标的 GNOME 托盘集成；应用常驻托盘，不显示主应用窗口；
+- HaxShot 图标的 GNOME 托盘集成；应用常驻托盘，不显示主应用窗口；
 - MVP2 的矩形、箭头和文字标注使用 Flutter 统一预览和导出，不将标注逻辑放入 Rust 截图后端。
 
 ### 明确不实现
@@ -178,15 +178,15 @@ Reticle、Screenshot 和 GNOME 原生截图 UI 都采用“先拿完整屏幕帧
 
 ### Overlay 排除
 
-macOS 参考项目将 overlay 窗口 ID 从 ScreenCaptureKit 捕获内容中排除。Hax Shot 在 Flutter 窗口显示前通过 Mutter ScreenCast 获取冻结帧，再显示选区窗口，不能把正在显示的 UI 当成截图源。
+macOS 参考项目将 overlay 窗口 ID 从 ScreenCaptureKit 捕获内容中排除。HaxShot 在 Flutter 窗口显示前通过 Mutter ScreenCast 获取冻结帧，再显示选区窗口，不能把正在显示的 UI 当成截图源。
 
 ### 单一输出真源
 
-SnapShotKit 的 `PDFExporter.flatten` 让 PNG、剪贴板、Pin 和导出共用同一份最终图。Hax Shot MVP2 已有矩形、箭头和文字标注，保存和复制必须继续共用同一份带标注的裁剪 PNG，不能分别生成两份结果。
+SnapShotKit 的 `PDFExporter.flatten` 让 PNG、剪贴板、Pin 和导出共用同一份最终图。HaxShot MVP2 已有矩形、箭头和文字标注，保存和复制必须继续共用同一份带标注的裁剪 PNG，不能分别生成两份结果。
 
 ### 错误不能静默
 
-参考项目中存在 `nil` 静默返回和首帧无限等待问题。Hax Shot 必须加入：
+参考项目中存在 `nil` 静默返回和首帧无限等待问题。HaxShot 必须加入：
 
 - Mutter ScreenCast/GStreamer 不可用；
 - 捕获超时；

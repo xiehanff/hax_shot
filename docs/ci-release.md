@@ -1,6 +1,6 @@
 # CI 与 GitHub Release
 
-Hax Shot 的发布目标是让“代码合并”和“发布安装包”分开：普通 `main` 分支 push 只更新源码、
+HaxShot 的发布目标是让“代码合并”和“发布安装包”分开：普通 `main` 分支 push 只更新源码、
 只跑 [`verify.yml`](../.github/workflows/verify.yml) 的检查；只有推送版本 tag 时，
 [`release.yml`](../.github/workflows/release.yml) 才会构建三个平台的安装包并发布
 GitHub Release。
@@ -152,9 +152,9 @@ Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上�
 验证 macOS 产物：
 
 ```bash
-hdiutil attach HaxShot-1.3.0-arm64.dmg          # 能挂载且内含 hax_shot.app
-lipo -archs /Volumes/Hax\ Shot/hax_shot.app/Contents/MacOS/hax_shot   # arm64
-spctl -a -vvv -t exec /Volumes/Hax\ Shot/hax_shot.app                 # 有签名+公证时 should be accepted
+hdiutil attach HaxShot-1.3.0-arm64.dmg          # 能挂载且内含 HaxShot.app
+lipo -archs /Volumes/HaxShot/HaxShot.app/Contents/MacOS/HaxShot   # arm64
+spctl -a -vvv -t exec /Volumes/HaxShot/HaxShot.app                 # 有签名+公证时 should be accepted
 ```
 
 验证 Linux 产物（Fedora GNOME Wayland / Ubuntu GNOME Wayland）：

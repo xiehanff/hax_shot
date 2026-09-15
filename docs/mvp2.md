@@ -4,7 +4,7 @@ MVP2 在原有“冻结截图 → 框选 → 保存/复制”流程上增加四�
 
 ## 1. 开机自启动
 
-Hax Shot 不使用 root 权限，也不修改系统级服务。设置页的“开机自启动”开关会在当前用户目录创建或删除：
+HaxShot 不使用 root 权限，也不修改系统级服务。设置页的“开机自启动”开关会在当前用户目录创建或删除：
 
 ```text
 ~/.config/autostart/com.github.xiehanff.hax_shot.desktop

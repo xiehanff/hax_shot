@@ -1,4 +1,4 @@
-# Hax Shot 图标、Dock 和托盘
+# HaxShot 图标、Dock 和托盘
 
 ## 图标来源
 
@@ -37,7 +37,7 @@ linux/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png
 
 ## Dock 图标
 
-Hax Shot 普通进程是 tray-only，不显示主应用窗口，也不进入任务栏；下面的
+HaxShot 普通进程是 tray-only，不显示主应用窗口，也不进入任务栏；下面的
 desktop/icon 配置主要用于 GNOME 识别临时 `--capture` 窗口和安装入口。
 
 Linux 原生窗口在 `linux/runner/my_application.cc` 中通过：
@@ -84,7 +84,7 @@ status item；窗口在 `runApp` 前隐藏时，太早创建会拿到临时菜�
   [`development-guide.md`](./development-guide.md#调试-ui-入口)；
 - “设置”显示临时设置页，统一管理快捷键和登录自启动；
 - 普通进程不显示主窗口；
-- 托盘菜单的“立即截屏”启动新的 `hax_shot --capture` 进程；
+- 托盘菜单的“立即截屏”启动新的 `HaxShot --capture` 进程；
 - 左键点击图标不打开主窗口，右键使用原生托盘菜单。
 
 GNOME Linux 依赖 AppIndicator 扩展。Fedora 开发环境已安装：
@@ -94,7 +94,7 @@ libayatana-appindicator-gtk3-devel
 gnome-shell-extension-appindicator
 ```
 
-`tray_manager` 的 Linux 实现不支持 `setToolTip` 和 `popUpContextMenu`，因此 Hax Shot 没有调用这两个未实现的方法；右键菜单由 AppIndicator 原生处理。
+`tray_manager` 的 Linux 实现不支持 `setToolTip` 和 `popUpContextMenu`，因此 HaxShot 没有调用这两个未实现的方法；右键菜单由 AppIndicator 原生处理。
 
 ## 安装快捷键和用户图标
 

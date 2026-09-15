@@ -1,6 +1,6 @@
 # Linux 打包与分发
 
-Hax Shot 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
+HaxShot 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
 
 ## 本地构建安装包
 
@@ -156,7 +156,7 @@ libayatana-appindicator3-1
 
 GNOME AppIndicator 扩展在 RPM 里作为推荐依赖提供。目标机器还必须运行 GNOME Wayland 会话，并提供 Mutter ScreenCast D-Bus 服务和 PipeWire 用户服务。
 
-特别注意：安装成功不代表所有桌面环境都支持 Hax Shot。KDE、X11、wlroots、多显示器和没有 AppIndicator 的 GNOME 环境不在当前保证范围内。DEB 目前只在 Ubuntu 24.04（GNOME Wayland）验证过构建，未在 Debian 上实测安装。
+特别注意：安装成功不代表所有桌面环境都支持 HaxShot。KDE、X11、wlroots、多显示器和没有 AppIndicator 的 GNOME 环境不在当前保证范围内。DEB 目前只在 Ubuntu 24.04（GNOME Wayland）验证过构建，未在 Debian 上实测安装。
 
 ## Rust 动态库为什么可以直接随包
 

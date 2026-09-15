@@ -1,4 +1,4 @@
-# Hax Shot 当前实现与后续开发指南
+# HaxShot 当前实现与后续开发指南
 
 > 这份文档记录的是**当前代码已经实现的行为**，不是最初的设计草案。后续 Agent 开始改 UI、截图流程或 Linux 集成前，应先读本文件，再读 [`reference-decisions.md`](./reference-decisions.md) 和 [`icon-and-tray.md`](./icon-and-tray.md)。
 
@@ -23,7 +23,7 @@ fvm flutter --version
 
 ## 1. 先记住产品边界
 
-Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有托盘图标（Linux GNOME 托盘 / macOS 菜单栏）和托盘菜单。
+HaxShot 是一个 **tray-only** 应用：普通进程没有主应用窗口，只有托盘图标（Linux GNOME 托盘 / macOS 菜单栏）和托盘菜单。
 
 托盘菜单目前只有：
 
@@ -46,7 +46,7 @@ Hax Shot 是一个 **tray-only** 应用：普通进程没有主应用窗口，�
 ```text
 Alt+Z / 托盘“立即截屏”
     ↓
-启动一个新的 hax_shot --capture 进程
+启动一个新的 HaxShot --capture 进程
     ↓
 窗口保持隐藏，Rust 通过 Mutter ScreenCast + PipeWire 获取一帧冻结画面
     ↓
@@ -202,7 +202,7 @@ _initializeWindowSafely()      ← setPreventClose / hide / endOfFrame
 **快捷键排在托盘前面，不要按“图标要最先出现”的直觉调换。** 错误隔离 ≠ 卡死隔离：托盘
 这一步要摸 AppKit 的 status item，一旦它挂住（拿不到临时 frame、缺 AppIndicator、
 Plugin 卡在原生调用里），排在后面的快捷键注册就根本不会执行——这正是“按了没反应”
-的成因之一。Hax Shot 是截图工具：**快捷键可用 > 菜单栏显示快捷键文字**，托盘菜单晚
+的成因之一。HaxShot 是截图工具：**快捷键可用 > 菜单栏显示快捷键文字**，托盘菜单晚
 一拍显示状态完全可以接受。
 
 配套的两条约束：
@@ -288,7 +288,7 @@ ACK 走 requestId 对应的小 JSON 文件（`capture_requests/<id>.json`），�
 
 `org.freedesktop.portal.Screenshot` 是标准授权接口，但 GNOME Wayland 的 Screenshot 路径可能播放截图闪光/相机声音。它适合普通“拍一张屏幕”的工具，不适合本项目的“先冻结、再框选”体验。
 
-GNOME Shell 自己的截图 UI 使用 Mutter 内部的 `screenshot_stage_to_content()` 获取合成器内容，再在 Shell actor 上绘制遮罩。外部应用无法直接调用这个 Shell 内部对象，所以 Hax Shot 使用 Mutter 对外的 ScreenCast D-Bus 接口复现同样的顺序。
+GNOME Shell 自己的截图 UI 使用 Mutter 内部的 `screenshot_stage_to_content()` 获取合成器内容，再在 Shell actor 上绘制遮罩。外部应用无法直接调用这个 Shell 内部对象，所以 HaxShot 使用 Mutter 对外的 ScreenCast D-Bus 接口复现同样的顺序。
 
 ### 4.2 Rust 的实际调用顺序
 
@@ -452,6 +452,22 @@ fvm flutter build macos --release
 `ARCHS = arm64`，脚本按 `$ARCHS` 的第一个架构构建对应 target，保证 dylib 和主程序同架构。
 要支持 Intel 时删掉 `ARCHS` 那一行，并把脚本改成按 `$ARCHS` 逐架构构建后 `lipo -create`。
 
+#### 命名约定：哪些能跟着产品名改，哪些不能
+
+产品名统一是 **HaxShot**（`PRODUCT_NAME` / `CFBundleDisplayName` / 安装路径
+`/Applications/HaxShot.app` / 可执行文件 `HaxShot` / DMG 卷名）。但下面这些是跨进程、
+跨语言或已经落盘的**标识**，改名只会砸自己的脚：
+
+| 保持不变 | 为什么 |
+| --- | --- |
+| `com.github.xiehanff.haxShot` | bundle id 是 TCC 授权、偏好设置、单实例锁、LaunchAgent 的键；改了屏幕录制授权和用户配置全部作废 |
+| `hax_shot --capture`（Linux） | Linux 二进制名由 `flutter build linux` 按 pubspec 的包名生成，`/usr/bin/hax_shot` 是 deb/rpm 的既定路径 |
+| `hax_shot/shortcut`、`hax_shot/capture_window`、`hax_shot/lifecycle` | MethodChannel 名，Dart 与原生两侧必须一致 |
+| `libhax_shot_native` / `hax_shot_target_display` | Rust dylib 名与 C ABI 符号，构建脚本和 `dlopen` 都按它找 |
+| `hax_shot.capture_shortcut` | 偏好设置的 key（改了等于把用户的快捷键设置丢掉） |
+| `hax_shot.lock` / `hax_shot_capture.lock` / `hax_shot.log` | 锁文件与日志文件名 |
+| `Hax Shot Dev` | `scripts/macos_dev_cert.sh` 创建的本地签名证书身份名；改它要重新建证书并重新授权 |
+
 #### 本机安装 / 本机 DMG
 
 ```bash
@@ -476,7 +492,7 @@ scripts/install_macos_app.sh --dir ~/Apps    # 装到别的目录
 scripts/install_macos_app.sh --zip out.zip   # 顺带打一个 zip
 ```
 
-脚本依次做：`fvm flutter build macos --release` → `pkill -x hax_shot` 结束旧实例（托盘宿主
+脚本依次做：`fvm flutter build macos --release` → `pkill -x HaxShot` 结束旧实例（托盘宿主
 常驻，不退出会占住 bundle）→ 替换 bundle 并 `touch` → 用 LaunchServices 的
 `lsregister -f` **显式登记**新 bundle（路径写死成
 `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister`，
@@ -491,19 +507,19 @@ scripts/install_macos_app.sh --zip out.zip   # 顺带打一个 zip
 
 macOS 把屏幕录制授权记在**责任进程**上。`flutter run` 启动的 app 是终端的子进程，
 责任进程是终端：系统弹窗写的是“终端想要录制屏幕”，授权也记在终端名下，
-Hax Shot 自己不会出现在“屏幕录制”列表里，于是怎么都授权不了。
+HaxShot 自己不会出现在“屏幕录制”列表里，于是怎么都授权不了。
 
-要调试权限相关功能，用 `open` 启动构建产物，让 Hax Shot 成为责任进程：
+要调试权限相关功能，用 `open` 启动构建产物，让 HaxShot 成为责任进程：
 
 ```bash
 scripts/run_macos_debug.sh            # 构建 debug 并用 open 启动
 scripts/run_macos_debug.sh --release
 # 等价于：
-open build/macos/Build/Products/Debug/hax_shot.app
+open build/macos/Build/Products/Debug/HaxShot.app
 ```
 
 `flutter run -d macos` 仍然适合调 UI —— 前提是你的**终端**已经有屏幕录制权限，
-这时子进程会继承终端的授权（不会弹窗、列表里也没有 Hax Shot）。
+这时子进程会继承终端的授权（不会弹窗、列表里也没有 HaxShot）。
 
 
 macOS 不允许应用静默抓屏。关键是**没授权时绝对不能显示全屏浮层**：浮层是 borderless +
@@ -518,7 +534,7 @@ macOS 不允许应用静默抓屏。关键是**没授权时绝对不能显示全
 Dart 先问 NativeBridge.screenCaptureAuthorized()（Rust: CGPreflightScreenCaptureAccess）
     ├── 未授权 → 显示 CapturePermissionGuide（小窗口里），并调用
     │             hax_shot_request_screen_capture_access()（CGRequestScreenCaptureAccess）
-    │             弹一次系统对话框 + 把 Hax Shot 注册进“屏幕录制”列表
+    │             弹一次系统对话框 + 把 HaxShot 注册进“屏幕录制”列表
     │             用户点“打开系统设置”跳转，回来点“我已授权，重新检查”
     └── 已授权 → Rust 抓屏
             ├── 成功 → CaptureOverlayWindow.becomeOverlay()（borderless + .screenSaver +
@@ -562,17 +578,17 @@ sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
   service kTCCServiceScreenCapture`）→ 开关看着是开的，进程还是没权限；
 - `tccutil reset ScreenCapture com.github.xiehanff.haxShot` 会把记录删掉。之后系统**不一定**
   再弹授权框（同一个 app 的弹框有节流），而“录屏与系统录音”面板只列有记录的应用 →
-  列表里就彻底看不到 Hax Shot 了，用户没有任何入口去勾选。
+  列表里就彻底看不到 HaxShot 了，用户没有任何入口去勾选。
 
 恢复办法（都不需要重启）：
 
 ```text
 系统设置 → 隐私与安全性 → 录屏与系统录音 → 列表下方的 “+”
-    → 选 /Applications/hax_shot.app → 开关打开
+    → 选 /Applications/HaxShot.app → 开关打开
 ```
 
 `+` 是有的（15.3 实测，位于屏幕录制列表底部）；加完之后
-`SecurityPrivacyExtension` 会弹那个“「hax_shot.app」想要录制此电脑的屏幕和音频”的系统框，
+`SecurityPrivacyExtension` 会弹那个“「HaxShot.app」想要录制此电脑的屏幕和音频”的系统框，
 点“打开系统设置”就会把它登记进列表。引导页的步骤 2 和“重置授权记录”的提示里都写了这条。
 
 实测（macOS 15，2026-09）：`tccutil reset` 之后 hax_shot **仍然留在列表里，只是开关变成
@@ -602,6 +618,25 @@ scripts/install_macos_app.sh --dev-cert
   `install_macos_app.sh --dev-cert` 现在会自己幂等地补这一步；另外
   `macos_dev_cert.sh --trust` 里导出证书原本写成 `security find-certificate -k <keychain>`，
   `-k` 不是合法选项（keychain 只能当位置参数），会直接报 illegal option——已修。
+
+#### debug 构建也要用证书签名
+
+`flutter build macos --debug` / Xcode 直接跑 Debug 配置时，默认是 **ad-hoc 签名**
+（`CODE_SIGN_IDENTITY = "-"`），于是上面那套「授权绑 cdhash、重建即失效、开关看着是开的
+却没权限」在 debug 阶段每次都发生一遍——调权限相关功能时几乎没法用。
+
+所以 `scripts/run_macos_debug.sh` 构建完会自动用 `Hax Shot Dev` 重签（保留
+`get-task-allow` / JIT / `disable-library-validation` entitlements，debug 必须留着），
+并先 `pkill -x HaxShot` 再 `open`，保证启动的是刚构建的那份。想复现 ad-hoc 的授权问题就加
+`--ad-hoc` 跳过重签。
+
+从 ad-hoc 切到证书签名时，旧那条授权记录对不上号，需要 reset 一次再重新授权：
+
+```bash
+tccutil reset ScreenCapture com.github.xiehanff.haxShot
+```
+
+之后 debug / release 都固定绑在证书上，改代码重建不用再授权。
 
 切到证书签名之后，TCC 里那条记录的**形态**会变，可以查出来确认（见上文的读取命令）：
 
@@ -893,7 +928,7 @@ B 屏”。所以托盘宿主只在**触发的那一瞬间**读一次光标，�
 macOS：按快捷键（Carbon 热键回调）／点托盘菜单 —— 都在宿主进程里读
 Linux：GNOME 自定义快捷键直接启动 hax_shot --capture，拿不到光标屏（见上面的硬约束）
     ↓ NativeBridge.cursorDisplay() → hax_shot_cursor_display()
-    ↓ hax_shot --capture --display <id>
+    ↓ HaxShot --capture --display <id>
     ├── Rust：hax_shot_capture_screen 按 <id> 抓屏
     └── Swift：CaptureDisplay.targetScreen() 调 Rust 拿同一块屏，把浮层铺上去
 ```
@@ -916,8 +951,8 @@ Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步�
 调试：欢迎页          FirstRunGuide（不写“已看过”标记，每次都能重看）
 调试：快捷键设置      ShortcutSettingsPage
 调试：权限引导        CapturePermissionGuide（不影响真实权限状态）
-调试：截图浮层        hax_shot --capture（和“立即截屏”同一条路径）
-调试：AI 对话窗口      hax_shot --capture --debug-ai
+调试：截图浮层        HaxShot --capture（和“立即截屏”同一条路径）
+调试：AI 对话窗口      HaxShot --capture --debug-ai
 ```
 
 `--debug-ai` 只在 debug 构建的托盘菜单里用到：捕获进程启动后不抓屏，直接把窗口
@@ -981,7 +1016,7 @@ windowManager.setSize(_aiWindowSize)
 #    xcodebuild test 自己编；先整包 `flutter build macos --debug` 会白花约两分钟。
 fvm flutter build macos --config-only --debug
 # 2. 必须 Debug 配置：Release 关掉了 testability，会报 “not compiled for testing”
-# 3. 先退出正在运行的 Hax Shot：单实例锁会让宿主 app 启动即退出，
+# 3. 先退出正在运行的 HaxShot：单实例锁会让宿主 app 启动即退出，
 #    XCTest 只会说 “Early unexpected exit / Test crashed with signal kill”
 xcodebuild test -workspace macos/Runner.xcworkspace -scheme Runner \
   -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO
@@ -1051,7 +1086,7 @@ filter 字节和 deflate 膨胀余量），`hax_shot_encode_png` 返回写入字
 
 **结束进程必须用 `lib/features/app/hard_exit.dart` 的 `exitProcessNow()`**（`SIGKILL`
 自己），不要用 `dart:io` 的 `exit(0)`：在 macOS 上 `exit(0)` 会挂在 Flutter 引擎注册的
-atexit 收尾里，进程继续活着——窗口和托盘图标都消失了，`pgrep -x hax_shot` 还能看到。
+atexit 收尾里，进程继续活着——窗口和托盘图标都消失了，`pgrep -x HaxShot` 还能看到。
 捕获进程每次截图后走的就是这条路，泄漏的进程会越攒越多；托盘“退出”之后快捷键还生效
 也是同一个原因（Carbon 注册随进程存活）。`await windowManager.destroy()` 也不能替代：
 `main()` 早期插件通道还没注册，这个 Future 永远不返回。Swift 侧同理用 `_exit(0)`
@@ -1074,7 +1109,7 @@ nib 会在启动阶段就把主窗口排到最前，而这时 Flutter 还没画�
 捕获进程是 `.screenSaver` 层级、铺满整块屏的浮层：**一旦它退不出去，用户连菜单栏都点不到，
 整台电脑就没法用了**。所以：
 
-- 快捷键触发时 Hax Shot 通常不是前台应用；`becomeOverlay()` 必须先
+- 快捷键触发时 HaxShot 通常不是前台应用；`becomeOverlay()` 必须先
   `NSApp.activate(ignoringOtherApps: true)`，再由 Dart `show()`。不能继续依赖
   `window_manager.show()` 里“先显示、后异步激活”的顺序，否则 AppKit 可能把已经抓完屏的浮层
   排到当前应用后面，用户看到的就是快捷键没反应；
@@ -1156,7 +1191,7 @@ gsettings binding = <Alt>z
 快捷键不是 Flutter 内部注册的。Wayland 下普通应用不能可靠地伪造任意全局热键，所以由 GNOME 自定义快捷键执行：
 
 ```text
-hax_shot --capture
+HaxShot --capture
 ```
 
 ### `Exec` 和 desktop ID 的区别
@@ -1176,7 +1211,7 @@ NoDisplay=false
 StartupWMClass=com.github.xiehanff.hax_shot
 ```
 
-注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `hax_shot --capture`。`NoDisplay=false` 让 Hax Shot 出现在 GNOME 应用列表中；从应用列表启动后仍只驻留托盘，不显示主窗口。
+注意：`Exec` 是普通 tray 宿主，不是 `--capture`；真正的快捷键命令由 gsettings 单独保存为 `hax_shot --capture`。`NoDisplay=false` 让 HaxShot 出现在 GNOME 应用列表中；从应用列表启动后仍只驻留托盘，不显示主窗口。
 
 桌面文件名、Wayland app ID、`StartupWMClass`、图标名必须保持一致：
 
@@ -1375,7 +1410,7 @@ fvm flutter build linux --release
 ./scripts/install-gnome-shortcut.sh
 ```
 
-正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 Hax Shot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
+正在运行的托盘进程通常已经缓存了旧图标，必须退出并重新启动 HaxShot；只替换 PNG 文件不一定会立即刷新已经显示的 AppIndicator 图标。
 
 ### 主题色（`lib/hax_colors.dart`）
 
@@ -1460,12 +1495,22 @@ build/linux/x64/debug/bundle/hax_shot --capture
 不要用宽泛的 `pkill -f 'fvm flutter run -d linux'` 清理进程，它可能误杀其他项目的 Flutter 调试会话。优先根据工作目录和 PID 判断，或者只使用：
 
 ```bash
-pkill -x hax_shot
+pkill -x HaxShot
 ```
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`：发布提交只改版本号，紧接着就会被 tag 的 Release workflow 构建，不需要再跑一次 Verify。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。
+
+`RunnerTests` 有两个容易踩的坑（都实测踩过）：
+
+- **本地要验证这一步，先 `pkill -x HaxShot`**：RunnerTests 的宿主就是 HaxShot.app，
+  它的 `main()` 会抢单实例锁，抢不到直接 SIGKILL，表现成 “Test crashed with signal kill
+  before starting test execution / Early unexpected exit”，看着像测试本身崩了；
+- **`TEST_HOST`、产物引用、`@testable import` 的模块名都是跟着 `PRODUCT_NAME` 的**。
+  改产品名（例如 `hax_shot` → `HaxShot`）时这三处都要一起改，漏一处就是
+  “Could not find test host” 或 “no such module”。本地 `flutter test` 覆盖不到这一层，
+  只有 `xcodebuild test` / CI 的 macOS job 才会暴露。`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`：发布提交只改版本号，紧接着就会被 tag 的 Release workflow 构建，不需要再跑一次 Verify。
 
 发布前本地执行：
 

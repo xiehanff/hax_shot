@@ -27,7 +27,7 @@ hax_shot 的项目级约定。和 `~/.pi/agent/AGENTS.md` 的通用约定冲突�
 - 排查 macOS “按了没反应/不起作用”类问题，先看进程和权限（`pgrep -f -- '--capture'`、
   读 `kTCCServiceScreenCapture` 那条记录），确认了再动代码；两个进程共用
   `_startCapture()`，先点菜单栏“立即截屏”也能一步分叉。
-- 构建产物：`build/macos/Build/Products/Release/hax_shot.app`，分发镜像
+- 构建产物：`build/macos/Build/Products/Release/HaxShot.app`，分发镜像
   `build/macos/HaxShot-<版本>-arm64.dmg`；debug 镜像
   `build/macos/HaxShot-<版本>-arm64-debug.dmg`（`scripts/build_macos_dmg.sh --debug [--install]`，
   本机联调用，ad-hoc 签名不公证）。

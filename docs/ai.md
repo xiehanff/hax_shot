@@ -1,8 +1,8 @@
-# Hax Shot AI
+# HaxShot AI
 
 ## 功能范围
 
-Hax Shot 的 AI 功能用于分析当前截图选区，支持：
+HaxShot 的 AI 功能用于分析当前截图选区，支持：
 
 - 翻译截图；
 - 解释截图；
@@ -49,7 +49,7 @@ lib/features/ai/
 packages/plume_ai_chat/
 ```
 
-该 package 负责会话历史、HTTP/SSE、reasoning、流式预览、Stop、follow-up suggestions 和通用消息模型。Hax Shot 不应再实现第二套 AI 请求或流式状态管理。
+该 package 负责会话历史、HTTP/SSE、reasoning、流式预览、Stop、follow-up suggestions 和通用消息模型。HaxShot 不应再实现第二套 AI 请求或流式状态管理。
 
 ## 截图 Action
 
@@ -67,7 +67,7 @@ Translate / Explain / Deep Understand
 
 ## API Key
 
-API Key 由 Hax Shot Host 使用 `shared_preferences` 保存：
+API Key 由 HaxShot Host 使用 `shared_preferences` 保存：
 
 ```text
 hax_shot.deepseek_api_key
@@ -83,7 +83,7 @@ AI 页面复用截图子进程，不创建第二个原生窗口。顶部条中�
 的布局结构。
 
 调 AI 面板 UI 不需要真的截图：debug 构建的托盘菜单有“调试：AI 对话窗口”，它启动
-`hax_shot --capture --debug-ai`，捕获进程启动后跳过抓屏、直接把窗口显示成 AI 面板。
+`HaxShot --capture --debug-ai`，捕获进程启动后跳过抓屏、直接把窗口显示成 AI 面板。
 
 ## 本地验证
 

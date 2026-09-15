@@ -1,8 +1,8 @@
 # 第三方声明
 
-## Hax Shot 自有内容
+## HaxShot 自有内容
 
-Hax Shot 源代码采用根目录的 [MIT License](./LICENSE)。当前应用图标由外部 `.icns` 资源生成，图标版权和许可应以原始资源为准，不作为本项目原创内容声明。
+HaxShot 源代码采用根目录的 [MIT License](./LICENSE)。当前应用图标由外部 `.icns` 资源生成，图标版权和许可应以原始资源为准，不作为本项目原创内容声明。
 
 ## 运行时和开发依赖
 
@@ -17,7 +17,7 @@ Hax Shot 源代码采用根目录的 [MIT License](./LICENSE)。当前应用图�
 
 ## 随仓库分发的字体资源
 
-`assets/fonts/GBaiMarkerPen.ttf`（10.3 MiB）**不是 Hax Shot 原创内容**，随仓库一起分发：
+`assets/fonts/GBaiMarkerPen.ttf`（10.3 MiB）**不是 HaxShot 原创内容**，随仓库一起分发：
 
 - 字体名：`851 GBai Marker` / `851 GBai 记号笔`（pubspec 里声明为 family `GBaiMarkerPen`，全文只用于 AI 面板顶部条的 `HaxShot` 字标）；
 - 版本：`Version 0.04`；字体内嵌版权行：`copyright 8:51:22 pm, edited by lamda05`；
@@ -28,7 +28,7 @@ Hax Shot 源代码采用根目录的 [MIT License](./LICENSE)。当前应用图�
 
 ## 参考项目
 
-`references/` 下的仓库只用于本地源码阅读，不属于 Hax Shot 的运行时代码，也不会随 GitHub 源码提交：
+`references/` 下的仓库只用于本地源码阅读，不属于 HaxShot 的运行时代码，也不会随 GitHub 源码提交：
 
 - Reticle：Apache-2.0 + Commons Clause；
 - SnapShotKit：MIT；

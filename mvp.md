@@ -1,4 +1,4 @@
-# Hax Shot Flutter + Rust MVP1 方案
+# HaxShot Flutter + Rust MVP1 方案
 
 > 本文记录基础截图链路的 MVP1 方案和历史验收标准。当前 MVP2 已增加自启动、矩形、箭头和文字标注；发布安装包（DMG/DEB/RPM）的流程见 [`docs/ci-release.md`](docs/ci-release.md)。参考源码阅读报告见 [`docs/README.md`](docs/README.md)，实现前先阅读 `docs/reference-decisions.md`。
 
@@ -11,7 +11,7 @@
 3. 鼠标拖拽框选截图区域；
 4. 工具栏支持保存到本地路径；
 5. 点击复制按钮，将 PNG 图片复制到系统剪贴板；
-6. 普通启动只驻留托盘，支持 Hax Shot 图标和托盘菜单。
+6. 普通启动只驻留托盘，支持 HaxShot 图标和托盘菜单。
 
 本版本只解决“快捷键截图 → 框选 → 保存/复制”这条主链路，不追求 Snipaste 的完整功能。
 
@@ -84,7 +84,7 @@ Wayland 下应用不能可靠地自行注册任意全局快捷键。因此 MVP �
 ```text
 Alt + Z
     ↓
-启动 hax_shot --capture
+启动 HaxShot --capture
     ↓
 Rust 通过 Mutter ScreenCast 获取无快门声帧
     ↓
@@ -93,8 +93,8 @@ Flutter 打开黑色半透明框选窗口
 
 在 GNOME 中增加自定义快捷键：
 
-- 名称：`Hax Shot`
-- 命令：`/项目构建路径/hax_shot --capture`
+- 名称：`HaxShot`
+- 命令：`/项目构建路径/HaxShot --capture`
 - 快捷键：`Alt+Z`
 
 这样组合键仍然可以触发框选，同时避免在 Wayland 下实现不可靠的进程内全局热键监听。

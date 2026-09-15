@@ -1,6 +1,6 @@
-# Hax Shot
+# HaxShot
 
-Hax Shot 是一个 **tray-only** 的桌面截图工具：按下全局快捷键后先获取冻结画面，再在 Flutter 中框选、标注，最后保存 PNG、复制到图片剪贴板或交给 AI 理解。
+HaxShot 是一个 **tray-only** 的桌面截图工具：按下全局快捷键后先获取冻结画面，再在 Flutter 中框选、标注，最后保存 PNG、复制到图片剪贴板或交给 AI 理解。
 
 当前支持 Linux（Fedora GNOME + Wayland）和 macOS 两个平台，共用同一套 Flutter UI 和 Rust 原生接口：
 
@@ -123,7 +123,7 @@ fvm flutter build macos --release
 构建产物为：
 
 ```text
-build/macos/Build/Products/Release/hax_shot.app
+build/macos/Build/Products/Release/HaxShot.app
 ```
 
 macOS 常用脚本：
@@ -138,7 +138,7 @@ scripts/uninstall_macos_app.sh  # 卸载：应用、自启动项、授权记录�
 macOS 首次启动会自动使用默认快捷键 `⌥⇧Z`（菜单栏图标可能被 Bartender 这类工具收进
 隐藏区，所以默认就有一个不依赖图标的入口）；可以在托盘菜单“设置”里改。
 第一次截图时不会直接弹全屏框选，而是先弹一个小窗口的授权引导：点“打开系统设置”勾选
-Hax Shot，再点“我已授权，重新检查”即可（没授权时不会盖住整个屏幕）。
+HaxShot，再点“我已授权，重新检查”即可（没授权时不会盖住整个屏幕）。
 
 ## 安装 GNOME 快捷键
 
@@ -197,4 +197,4 @@ tag 的版本号必须匹配 `pubspec.yaml` 中 `+` 前的版本号，例如 `1.
 
 ## 许可证
 
-Hax Shot 源代码采用 [MIT License](./LICENSE)。当前应用图标来自外部 `.icns` 资源；第三方依赖、GNOME/GStreamer/PipeWire 组件和参考仓库分别遵循各自许可证，详见 [第三方声明](./THIRD_PARTY_NOTICES.md)。
+HaxShot 源代码采用 [MIT License](./LICENSE)。当前应用图标来自外部 `.icns` 资源；第三方依赖、GNOME/GStreamer/PipeWire 组件和参考仓库分别遵循各自许可证，详见 [第三方声明](./THIRD_PARTY_NOTICES.md)。
