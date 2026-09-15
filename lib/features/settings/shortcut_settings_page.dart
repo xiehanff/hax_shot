@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../hax_colors.dart';
 import 'autostart_service.dart';
+import 'shortcut_registration.dart';
 import 'shortcut_service.dart';
 import '../window/rounded_window.dart';
 
@@ -168,21 +169,39 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       _message = '正在保存：$label';
     });
 
-    try {
-      await shortcutService.saveBinding(binding);
-      if (!mounted) return;
-      setState(() {
-        _binding = binding;
-        _recording = false;
-        _saving = false;
-        _message = '已设置为 $label';
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _message = '保存快捷键失败：$error';
-      });
+    // 改绑是事务：注册失败时服务会尝试回滚旧绑定，这里必须按结果区分文案，
+    // 不能“写进偏好设置”就报“已设置”。
+    final result = await shortcutService.saveBinding(binding);
+    if (!mounted) return;
+    switch (result) {
+      case ShortcutActivationSuccess(:final persisted):
+        setState(() {
+          _binding = binding;
+          _recording = false;
+          _saving = false;
+          // 注册成功不等于配置已保存：偏好写失败时本次可用，但重启会回到旧值。
+          _message = persisted
+              ? '已设置为 $label'
+              : '已设置为 $label（本次已生效，但没能保存，重启后会恢复原快捷键）';
+        });
+      case ShortcutActivationFailure(
+        :final error,
+        :final restoredBinding,
+        :final rollbackFailed,
+      ):
+        setState(() {
+          _recording = false;
+          _saving = false;
+          if (rollbackFailed) {
+            _message = '新快捷键注册失败，原快捷键也未能恢复，全局快捷键当前不可用：$error';
+          } else if (restoredBinding != null) {
+            _message =
+                '新快捷键注册失败，已恢复原快捷键 '
+                '${bindingDisplayLabel(restoredBinding)}：$error';
+          } else {
+            _message = '注册快捷键失败：$error';
+          }
+        });
     }
   }
 
@@ -360,6 +379,32 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                                 icon: const Icon(Icons.close),
                               ),
                       ),
+                    ),
+                    const SizedBox(height: 16),
+                    // 「配置了什么」和「当前是否真的注册上了」必须分开显示：macOS 上
+                    // 读取配置成功不等于 Carbon 真的记住了这个组合。
+                    ValueListenableBuilder<ShortcutRegistrationStatus>(
+                      valueListenable: shortcutService.registrationStatus,
+                      builder: (context, status, _) {
+                        final bool active =
+                            status == ShortcutRegistrationStatus.active;
+                        return Card(
+                          child: ListTile(
+                            leading: Icon(
+                              active
+                                  ? Icons.check_circle_outline
+                                  : Icons.error_outline,
+                            ),
+                            title: Text(shortcutStatusLabel(status)),
+                            subtitle: Text(
+                              Platform.isMacOS
+                                  ? '当前注册状态（只反映注册调用是否成功；'
+                                        'macOS 底层库不回读 Carbon 结果）'
+                                  : '当前注册状态',
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
                     FilledButton.icon(

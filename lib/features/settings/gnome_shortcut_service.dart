@@ -1,16 +1,27 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
+import '../diagnostics/diagnostic_events.dart';
+import '../diagnostics/diagnostic_log.dart';
+import 'shortcut_registration.dart';
 import 'shortcut_service.dart';
 
 /// GNOME custom shortcut location used by Hax Shot.
+///
+/// 快捷键由 GNOME 自己持有（gsettings 里保存的是 `hax_shot --capture`），宿主
+/// 不需要向系统注册任何东西，所以这里没有 macOS 那样的注册/回滚事务：
+/// `saveBinding` 就是一次 gsettings 写入，写成功即“已生效”。
 final class GnomeShortcutService implements ShortcutService {
   GnomeShortcutService({
     String? executablePath,
     Future<ProcessResult> Function(String, List<String>)? processRunner,
+    DiagnosticLogService? log,
   }) : _executablePath = executablePath ?? Platform.resolvedExecutable,
        _processRunner =
            processRunner ??
-           ((executable, arguments) => Process.run(executable, arguments));
+           ((executable, arguments) => Process.run(executable, arguments)),
+       _log = log ?? DiagnosticLogService.instance;
 
   static final instance = GnomeShortcutService();
 
@@ -23,11 +34,72 @@ final class GnomeShortcutService implements ShortcutService {
 
   final String _executablePath;
   final Future<ProcessResult> Function(String, List<String>) _processRunner;
+  final DiagnosticLogService _log;
 
-  /// GNOME 自己持有快捷键（gsettings 里保存的是 `hax_shot --capture`），
-  /// 按一下由系统直接启动子进程，托盘宿主不需要注册什么。
+  final ValueNotifier<ShortcutRegistrationStatus> _status =
+      ValueNotifier<ShortcutRegistrationStatus>(
+        ShortcutRegistrationStatus.inactive,
+      );
+
+  String? _activeBinding;
+  Object? _lastError;
+  DateTime? _lastRegisteredAt;
+
   @override
-  Future<void> activate({required void Function() onTriggered}) async {}
+  ShortcutRegistrationStatus get status => _status.value;
+
+  @override
+  String? get activeBinding => _activeBinding;
+
+  @override
+  Object? get lastError => _lastError;
+
+  @override
+  DateTime? get lastRegisteredAt => _lastRegisteredAt;
+
+  @override
+  ValueListenable<ShortcutRegistrationStatus> get registrationStatus => _status;
+
+  /// GNOME 自己持有快捷键，宿主只需要确认 gsettings 里有没有配好。
+  @override
+  Future<ShortcutActivationResult> activate({
+    required void Function() onTriggered,
+  }) async {
+    if (Platform.isLinux) {
+      // GNOME 会直接启动 `hax_shot --capture`，宿主的回调永远不会被用到。
+      _log.log(
+        'shortcut_activate_skipped',
+        message: 'GNOME 由 gsettings 直接启动捕获进程，宿主不注册全局快捷键',
+      );
+    }
+    try {
+      final binding = await readBinding();
+      if (binding == null) {
+        _activeBinding = null;
+        _setStatus(ShortcutRegistrationStatus.inactive);
+        return const ShortcutActivationFailure(
+          binding: '',
+          error: '还没有配置 GNOME 自定义快捷键',
+        );
+      }
+      _activeBinding = binding;
+      _lastError = null;
+      _lastRegisteredAt = DateTime.now();
+      _setStatus(ShortcutRegistrationStatus.active);
+      return ShortcutActivationSuccess(binding: binding);
+    } on Object catch (error) {
+      _lastError = error;
+      _setStatus(ShortcutRegistrationStatus.failed);
+      return ShortcutActivationFailure(
+        binding: _activeBinding ?? '',
+        error: error,
+        errorCode: DiagnosticErrorCode.shortcutRegisterFailed,
+      );
+    }
+  }
+
+  @override
+  Future<ShortcutActivationResult> reactivate() => activate(onTriggered: () {});
 
   @override
   Future<String?> readBinding() async {
@@ -37,16 +109,39 @@ final class GnomeShortcutService implements ShortcutService {
   }
 
   @override
-  Future<void> saveBinding(String binding) async {
-    await _ensureCustomKeybindingIsActive();
-    await _setGsettings(bindingSchema, 'name', name);
-    await _setGsettings(bindingSchema, 'command', _captureCommand);
-    await _setGsettings(bindingSchema, 'binding', binding);
+  Future<ShortcutActivationResult> saveBinding(String binding) async {
+    try {
+      await _ensureCustomKeybindingIsActive();
+      await _setGsettings(bindingSchema, 'name', name);
+      await _setGsettings(bindingSchema, 'command', _captureCommand);
+      await _setGsettings(bindingSchema, 'binding', binding);
+    } on Object catch (error) {
+      _lastError = error;
+      _setStatus(ShortcutRegistrationStatus.failed);
+      return ShortcutActivationFailure(
+        binding: binding,
+        error: error,
+        errorCode: DiagnosticErrorCode.shortcutRegisterFailed,
+        restoredBinding: _activeBinding,
+      );
+    }
+    _activeBinding = binding;
+    _lastError = null;
+    _lastRegisteredAt = DateTime.now();
+    _setStatus(ShortcutRegistrationStatus.active);
+    return ShortcutActivationSuccess(binding: binding);
   }
 
   @override
   Future<void> clearBinding() async {
     await _setGsettings(bindingSchema, 'binding', '');
+    _activeBinding = null;
+    _setStatus(ShortcutRegistrationStatus.inactive);
+  }
+
+  void _setStatus(ShortcutRegistrationStatus value) {
+    if (_status.value == value) return;
+    _status.value = value;
   }
 
   Future<void> _ensureCustomKeybindingIsActive() async {
