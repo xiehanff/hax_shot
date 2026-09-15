@@ -179,8 +179,8 @@ Future<void> main(List<String> args) async {
   );
 }
 
-/// 同步写请求状态 + 同步写日志：后面紧跟的多半是 `exitProcessNow()`（SIGKILL），
-/// 异步写会丢。
+/// 写请求状态 + 写日志。两者都是同步落盘：后面紧跟的多半是
+/// `exitProcessNow()`（SIGKILL），异步写会丢。
 void _ack({
   required String? requestId,
   required String? source,
@@ -193,7 +193,7 @@ void _ack({
 }) {
   if (requestId == null) return;
   CaptureRequestChannel.instance.writeStateSync(requestId, state, extra: extra);
-  DiagnosticLogService.instance.logSync(
+  DiagnosticLogService.instance.log(
     event,
     level: level,
     requestId: requestId,

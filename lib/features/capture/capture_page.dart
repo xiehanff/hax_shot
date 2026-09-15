@@ -201,7 +201,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     final requestId = widget.requestId;
     if (requestId == null) return;
     CaptureRequestChannel.instance.writeStateSync(requestId, state);
-    DiagnosticLogService.instance.logSync(
+    DiagnosticLogService.instance.log(
       event,
       level: level,
       requestId: requestId,

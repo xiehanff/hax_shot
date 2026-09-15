@@ -20,7 +20,7 @@ void main() {
     }
   });
 
-  test('每次 log 追加一行 JSON，字段包含 time/event/level/pid', () async {
+  test('每次 log 追加一行 JSON，字段包含 time/event/level/pid', () {
     final log = DiagnosticLogService(directory: directory);
     log.log(
       DiagnosticEvent.shortcutTrigger,
@@ -34,7 +34,6 @@ void main() {
       errorCode: DiagnosticErrorCode.captureProcessSpawnFailed,
       message: '多行\n消息',
     );
-    await log.flush();
 
     final lines = log.logFile.readAsLinesSync();
     expect(lines, hasLength(2));
@@ -57,7 +56,7 @@ void main() {
     expect(second['message'], '多行 消息');
   });
 
-  test('超过上限时轮转，并且最多保留 maxFiles 个文件', () async {
+  test('超过上限时轮转，并且最多保留 maxFiles 个文件', () {
     final log = DiagnosticLogService(
       directory: directory,
       maxBytes: 200,
@@ -66,7 +65,6 @@ void main() {
     for (var index = 0; index < 40; index++) {
       log.log('event_$index', message: 'x' * 40);
     }
-    await log.flush();
 
     expect(log.logFile.existsSync(), isTrue);
     expect(File('${log.logFile.path}.1').existsSync(), isTrue);
@@ -76,9 +74,9 @@ void main() {
     expect(log.logFile.lengthSync(), lessThanOrEqualTo(log.maxBytes + 400));
   });
 
-  test('logSync 立刻落盘（子进程 SIGKILL 前也能读到）', () {
+  test('log 立刻落盘（子进程 SIGKILL 前也能读到）', () {
     final log = DiagnosticLogService(directory: directory);
-    log.logSync(
+    log.log(
       DiagnosticEvent.captureLockAcquired,
       requestId: 'req-1',
       source: 'shortcut',
@@ -90,14 +88,13 @@ void main() {
     expect(entry['request_id'], 'req-1');
   });
 
-  test('不记录截图、AI、Token 等敏感字段', () async {
+  test('不记录截图、AI、Token 等敏感字段', () {
     final log = DiagnosticLogService(directory: directory);
     log.log(
       DiagnosticEvent.captureReady,
       requestId: 'req-2',
       extra: <String, Object?>{'binding': '<Alt><Shift>z', 'duration_ms': 42},
     );
-    await log.flush();
     final raw = log.logFile.readAsStringSync();
     expect(raw.contains('png'), isFalse);
     expect(raw.contains('api_key'), isFalse);
@@ -111,7 +108,7 @@ void main() {
     expect(entry['event'], DiagnosticEvent.captureReady);
   });
 
-  test('敏感 key 的值被脱敏，超长值被截断到 1000 字符', () async {
+  test('敏感 key 的值被脱敏，超长值被截断到 1000 字符', () {
     final log = DiagnosticLogService(directory: directory);
     log.log(
       DiagnosticEvent.captureReady,
@@ -122,7 +119,6 @@ void main() {
         'duration_ms': 42,
       },
     );
-    await log.flush();
 
     final entry =
         jsonDecode(log.logFile.readAsLinesSync().single)

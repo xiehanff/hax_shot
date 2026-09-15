@@ -168,6 +168,12 @@ final class CaptureLauncher {
       );
     } finally {
       _launching = false;
+      // 每次触发顺手清一次过期请求文件：宿主可能连续跑几天，只在启动时清会一直涨。
+      try {
+        _channel.cleanupExpired();
+      } on Object {
+        // 清理失败不影响截图。
+      }
     }
   }
 
@@ -246,6 +252,9 @@ final class CaptureLauncher {
   }
 
   /// 轮询请求文件，直到子进程报告拿到锁（或明确的失败态），或者超时。
+  ///
+  /// 宿主**自己**把观察到的阶段也记一遍日志：这样宿主日志单独就能串出完整链路
+  ///（spawn → child_started → lock_acquired），不用去翻子进程的 `pid` 找那一行。
   Future<CaptureLaunchResult> _awaitAcknowledgement({
     required String requestId,
     required CaptureTriggerSource source,
@@ -259,6 +268,15 @@ final class CaptureLauncher {
       switch (state) {
         case CaptureRequestChannel.stateLockAcquired:
         case CaptureRequestChannel.stateCaptureReady:
+          _log.log(
+            DiagnosticEvent.captureLockAcquired,
+            requestId: requestId,
+            source: source.logValue,
+            extra: <String, Object?>{
+              'observed_by': 'host',
+              'child_pid': childPid,
+            },
+          );
           return CaptureLaunchStarted(requestId: requestId, pid: childPid);
         case CaptureRequestChannel.stateLockBusy:
           return CaptureLaunchRejected(
@@ -283,7 +301,18 @@ final class CaptureLauncher {
             errorCode: DiagnosticErrorCode.captureStartupFailed,
           );
         case CaptureRequestChannel.stateChildStarted:
-          childStarted = true;
+          if (!childStarted) {
+            childStarted = true;
+            _log.log(
+              DiagnosticEvent.captureChildStarted,
+              requestId: requestId,
+              source: source.logValue,
+              extra: <String, Object?>{
+                'observed_by': 'host',
+                'child_pid': childPid,
+              },
+            );
+          }
         default:
           break;
       }

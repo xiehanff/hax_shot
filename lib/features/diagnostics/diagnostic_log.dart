@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,6 +17,15 @@ import 'diagnostic_events.dart';
 /// - 单文件超过 [maxBytes] 就轮转，最多保留 [maxFiles] 个文件，不会无限增长；
 /// - 只写诊断字段，**不写**截图内容、OCR 文本、AI 对话、屏幕文本、API Key；
 /// - 写失败只影响日志本身，永远不向调用方抛异常。
+///
+/// 两个刻意选择：
+///
+/// 1. **全部同步写**。宿主和 `--capture` 子进程都会写同一个文件，异步排队会让
+///    同一进程内 `log(A); logSync(B)` 变成 B 先落盘（日志顺序错乱比慢几微秒糟得多）。
+///    事件都是低频的（一次截图十几条），同步 append 的开销可以忽略。
+/// 2. **`append + rotate` 走 OS 文件锁**。`_pending` 那种进程内串行管不了跨进程：
+///    宿主和子进程可能同时判断「超过上限了」然后同时 rename，顺序会乱、还会丢行。
+///    锁由内核维护，进程被 SIGKILL 也会自动释放，不会留下悬空锁。
 final class DiagnosticLogService {
   DiagnosticLogService({
     Directory? directory,
@@ -47,8 +55,9 @@ final class DiagnosticLogService {
   File get logFile =>
       File('${_directory.path}${Platform.pathSeparator}$fileName');
 
-  /// 串行化写入，保证同一时刻只有一个 append 在跑（也就保证行不会交错）。
-  Future<void> _pending = Future<void>.value();
+  /// 跨进程临界区用的锁文件（永久存在，只借它做 flock 的落点）。
+  File get lockFile =>
+      File('${_directory.path}${Platform.pathSeparator}$fileName.lock');
 
   /// 平台默认的日志目录：和单实例锁放在同一个 Application Support 目录下。
   static Directory defaultDirectory() {
@@ -68,9 +77,11 @@ final class DiagnosticLogService {
     return Directory('$state/hax_shot/logs');
   }
 
-  /// 记一条事件。永不抛异常，也永不阻塞调用方。
+  /// 记一条事件。永不抛异常。
   ///
   /// [event] / [errorCode] 用 [DiagnosticEvent] / [DiagnosticErrorCode] 里的常量。
+  /// 写盘是同步的（见类文档），所以返回后日志一定已经在文件里——包括
+  /// `exitProcessNow()`（SIGKILL）前的最后几条。
   void log(
     String event, {
     String level = LogLevel.info,
@@ -95,57 +106,33 @@ final class DiagnosticLogService {
     final line = jsonEncode(entry);
     // debug 构建里同时给终端一份，改完即查时不用去翻文件。
     debugPrint('[hax-shot] $line');
-    _pending = _pending.then((_) => _append(line)).catchError((Object _) {});
+    _write(line);
   }
 
-  /// 同步追加（子进程启动早期用：`exitProcessNow()` 是 SIGKILL，异步写会丢）。
-  void logSync(
-    String event, {
-    String level = LogLevel.info,
-    String? requestId,
-    String? source,
-    String? errorCode,
-    String? message,
-    Map<String, Object?> extra = const <String, Object?>{},
-  }) {
-    final entry = <String, Object?>{
-      'time': isoTimestamp(DateTime.now()),
-      'event': event,
-      'level': level,
-      'pid': pid,
-    };
-    if (requestId != null) entry['request_id'] = requestId;
-    if (source != null) entry['source'] = source;
-    if (errorCode != null) entry['error_code'] = errorCode;
-    if (message != null) entry['message'] = _oneLine(message);
-    _applyExtra(entry, extra);
+  /// 追加一行。整段（准备目录 → 轮转 → append）都在跨进程锁里。
+  void _write(String line) {
+    RandomAccessFile? lock;
     try {
       _prepare();
+      lock = lockFile.openSync(mode: FileMode.append);
+      // 阻塞式独占锁：持锁时间只有一个 append，不会造成可感知的等待；
+      // 锁由内核维护，持锁进程被 SIGKILL 也会立刻释放。
+      lock.lockSync(FileLock.exclusive);
       _rotateIfNeeded();
-      logFile.writeAsStringSync(
-        '${jsonEncode(entry)}\n',
-        mode: FileMode.append,
-        flush: true,
-      );
-    } on Object {
-      // 日志不能影响主流程。
-    }
-  }
-
-  /// 等待已排队的写入落盘（测试和优雅退出用）。
-  Future<void> flush() => _pending;
-
-  Future<void> _append(String line) async {
-    try {
-      _prepare();
-      await _rotateIfNeededAsync();
-      await logFile.writeAsString(
-        '$line\n',
-        mode: FileMode.append,
-        flush: true,
-      );
+      logFile.writeAsStringSync('$line\n', mode: FileMode.append, flush: true);
     } on Object {
       // 磁盘满 / 权限不对都不该把事件丢掉而影响调用方。
+    } finally {
+      try {
+        lock?.unlockSync();
+      } on Object {
+        // 关掉句柄也会释放锁。
+      }
+      try {
+        lock?.closeSync();
+      } on Object {
+        // 忽略。
+      }
     }
   }
 
@@ -158,12 +145,6 @@ final class DiagnosticLogService {
   void _rotateIfNeeded() {
     if (!logFile.existsSync()) return;
     if (logFile.lengthSync() <= maxBytes) return;
-    _rotateFiles();
-  }
-
-  Future<void> _rotateIfNeededAsync() async {
-    if (!await logFile.exists()) return;
-    if (await logFile.length() <= maxBytes) return;
     _rotateFiles();
   }
 

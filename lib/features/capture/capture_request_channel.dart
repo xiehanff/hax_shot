@@ -104,27 +104,44 @@ final class CaptureRequestChannel {
     return state is String ? state : null;
   }
 
-  void delete(String requestId) {
+  /// 删掉一个请求文件。超过 [maxAge] 才删；[cutoff] 由 [cleanupExpired] 传进来，
+  /// 避免每个文件都算一次时间。
+  void delete(
+    String requestId, {
+    Duration maxAge = staleAfter,
+    DateTime? cutoff,
+  }) {
     try {
       final file = fileFor(requestId);
-      if (file.existsSync()) file.deleteSync();
+      if (!file.existsSync()) return;
+      final deadline = cutoff ?? DateTime.now().subtract(maxAge);
+      if (file.statSync().modified.isAfter(deadline)) return;
+      file.deleteSync();
     } on Object {
       // 删不掉就留着，下次清理会处理。
     }
   }
 
   /// 清理过期请求文件；正在执行的请求（刚刚写过）不会被删。
+  ///
+  /// 宿主启动时清一次，之后每次截图结束后再清一次：宿主可能连续运行几天，
+  /// 只在启动时清的话 `capture_requests/` 会一直涨。
   void cleanupExpired({Duration maxAge = staleAfter}) {
     try {
       if (!_directory.existsSync()) return;
       final cutoff = DateTime.now().subtract(maxAge);
       for (final entity in _directory.listSync()) {
         if (entity is! File) continue;
-        try {
-          if (entity.statSync().modified.isBefore(cutoff)) entity.deleteSync();
-        } on Object {
-          // 单个文件失败不影响其它文件。
+        final name = entity.uri.pathSegments.last;
+        if (!name.endsWith('.json') || name.endsWith('.json.tmp')) {
+          // 保留一个原子写的残留 `.tmp` 也无妨，但它不算请求文件。
+          continue;
         }
+        delete(
+          name.substring(0, name.length - '.json'.length),
+          maxAge: maxAge,
+          cutoff: cutoff,
+        );
       }
     } on Object {
       // 目录不可读就跳过清理。
