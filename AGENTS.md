@@ -18,8 +18,11 @@ hax_shot 的项目级约定。和 `~/.pi/agent/AGENTS.md` 的通用约定冲突�
 
 ## 其他
 
-- 技术细节、踩过的坑、为什么不能那么写，都记在 `docs/development-guide.md`，改代码时
-  顺手同步它；
+- 技术细节、踩过的坑、为什么不能那么写，都记在 `docs/development-guide.md`；打包与发布
+  （Linux 包 / macOS DMG 与签名公证 / CI）记在 `docs/packaging.md`；README 只面向用户讲
+  “怎么用”，不要把实现细节写回去；
+- **文档只有这两份 + `rust/README.md`，不要再新建文档**。内容重复就合并进现有文档；
+  不写原理介绍和参考读物（没人看），只写“约束 / 怎么改 / 踩过的坑 / 怎么验证”；
 - macOS 本机构建一律用 `scripts/install_macos_app.sh --dev-cert`。ad-hoc 签名没有证书，
   屏幕录制授权只能绑 cdhash，**每次重建都会失效**；而系统设置里的开关看着还是开的、
   并且不再弹授权框——表现是“快捷键/截图没反应”而不是报错，极易被当成代码 bug。

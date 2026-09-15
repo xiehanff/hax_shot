@@ -1,6 +1,10 @@
 # HaxShot 当前实现与后续开发指南
 
-> 这份文档记录的是**当前代码已经实现的行为**，不是最初的设计草案。后续 Agent 开始改 UI、截图流程或 Linux 集成前，应先读本文件，再读 [`reference-decisions.md`](./reference-decisions.md) 和 [`icon-and-tray.md`](./icon-and-tray.md)。
+> 这份文档记录的是**当前代码已经实现的行为**，不是最初的设计草案。后续 Agent 开始改 UI、截图流程或 Linux 集成前，应先读本文件；参考仓库与许可证约束见 §17，图标与托盘见 §11。
+
+文档地图：**只有四份**（不要再加）——用户向的 [`README.md`](../README.md)、本文件（代码怎么跑、
+改哪里、别碰什么）、[`packaging.md`](./packaging.md)（打包与发布）、[`rust/README.md`](../rust/README.md)。
+这里只写约束和踩过的坑，不写原理介绍。
 
 ## 0. 开发工具链
 
@@ -77,7 +81,7 @@ Alt+Z / 托盘“立即截屏”
 | `lib/features/window/panel_chrome.dart` | 欢迎页 / 授权引导共用的面板视觉（`PanelColors` / `PanelText` / `PanelButtons` / `PanelHeader` / `PanelCard` / `PanelNote`） | 新加这类“临时小窗口”直接用它，别在页面里另写一套字号和圆角；`PanelHeader` 整条可拖，标题必须套 `IgnorePointer` |
 | `lib/features/settings/shortcut_settings_page.dart` | 快捷键录制、开机自启动开关 | 快捷键通过 `gsettings` 写入，启动项通过 `AutostartService` 写入当前用户 XDG 配置 |
 | `lib/features/capture/capture_page.dart` | 冻结图加载、框选、保存、复制 | `_capture()` 完成前不要显示捕获窗口；保存/复制使用同一份裁剪逻辑 |
-| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角、纯白图标、BackdropFilter；外圈 2px 玻璃边是灰蓝渐变 `haxAccent` → `haxAccentDeep`（原来是紫→靛，别改回去）；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
+| `lib/features/capture/capture_toolbar.dart` | 磨砂玻璃工具条、HugeIcons 图标和标注工具 | 保持全圆角胶囊、纯白图标、BackdropFilter；**不要边框**，悬浮感靠最外层 Container 上两层向下的阴影（blur 28/offset 0,14 + blur 8/offset 0,3），阴影必须画在没有祖先 ClipRRect 的那一层，否则会被裁掉；矩形/箭头/文字工具通过 callback 切换，颜色由 CapturePage 持有并用于预览和最终 PNG |
 | `lib/features/capture/screenshot_canvas.dart` | 图片适配、遮罩、选区和矩形/箭头/文字绘制、point→pixel 映射 | `ScreenshotLayout` 的坐标是 Flutter logical pixels，最终裁剪和标注导出是物理像素 |
 | `lib/native/native_bridge.dart` | Dart FFI 封装 | 不在这里执行 DBus 或 `wl-copy`，这些都属于 Rust 原生层 |
 | `rust/src/lib.rs` | Mutter ScreenCast、GStreamer、`wl-copy`、C ABI | 不要悄悄回退到 Screenshot Portal，否则会重新出现 GNOME 快门声 |
@@ -940,7 +944,7 @@ DPI：抓屏是物理像素，浮层是该显示器的逻辑尺寸，`Screenshot
 **不做的**：不支持一次框选跨越两块屏。macOS 开了「显示器有独立 Space」（默认）时
 WindowServer 会把窗口限制在一块屏上，跨屏选区必须为每块屏各开一个浮层窗口（Capso、
 Snapzy、better-shot、flameshot 都是这个架构），属于独立的一步；详见
-[`docs/reference-decisions.md`](./reference-decisions.md)。
+§17「参考仓库与许可证约束」。
 
 #### 调试 UI 入口
 
@@ -1383,6 +1387,21 @@ AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口�
 系统的 titled 窗口画，顶部条铺满即可，见 [窗口圆角](#窗口圆角)。
 `test/ai_panel_chrome_test.dart` 守着顶部条存在、且 `titleBarBg` 与 `scaffoldBg` 不同。
 
+### AI 侧栏的硬约束
+
+- AI 必须吃 `ScreenshotExporter.renderPng()` 的最终 PNG：**不能重新截图、不能绕过标注、
+  不能单独裁剪原图**；
+- 新的截图 Action（翻译/解释/深入理解）会**新建视觉会话**（清空旧会话）；同一轮里的普通
+  追问只发文字，不重复上传截图；
+- **AI 会话只活在当前截图进程里**，不做历史会话持久化——进程退出即丢；
+- 凭据由 Host 用 `shared_preferences` 存（`hax_shot.deepseek_api_key`），
+  `packages/plume_ai_chat` 不负责保存，只从 Host 的 callback 读；
+- 不要再实现第二套 AI 请求 / 流式状态管理，通用对话能力全在 `packages/plume_ai_chat`
+  （会话历史、HTTP/SSE、reasoning、流式预览、Stop、follow-up suggestions）；
+- 网络请求最长等 60 秒，用户可以用输入框的 Stop 取消当前生成；
+- 本地验证：`cd packages/plume_ai_chat && fvm flutter test`，真实请求需要在设置页配
+  DeepSeek API Key。
+
 ## 11. 图标更换流程
 
 当前图标由 `skills/icns-handle` 从外部 `.icns` 提取并生成 Linux PNG 组，源文件不进入仓库。
@@ -1402,6 +1421,16 @@ python3 /path/to/icns_handle.py generate source.icns \
 | `linux/icons/hicolor/*/apps/com.github.xiehanff.hax_shot.png` | GNOME desktop/icon theme |
 | `linux/icons/hicolor/256x256/apps/com.github.xiehanff.hax_shot.png` | GTK runner 的 `data/hax_shot_icon.png` 来源 |
 | `linux/icons/hax_shot.png`、`linux/icons/com.github.xiehanff.hax_shot.png` | 手工保留的 256px 兼容副本：`scripts/generate_icons.sh` 不生成它们，也没有任何构建引用 |
+
+源图是 `assets/icons/hax_shot_source.png`（当前 1254×1254、带透明背景，图形自带约 7%
+透明留白，所以生成时直接缩放，**不要再加内边距**）。生成尺寸：16、24、32、48、64、128、
+256、512px，macOS 另有 1024。
+
+Linux 原生窗口在 `linux/runner/my_application.cc` 里 `gtk_window_set_icon_from_file()`
+加载 bundle 内的 `data/hax_shot_icon.png`，同时 `gtk_window_set_icon_name(APPLICATION_ID)`
+走 hicolor 图标组；CMake 安装 `share/applications/com.github.xiehanff.hax_shot.desktop` 与
+`share/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png`。
+Windows 的 ICO 与 resources **只是为将来保留**（Windows 平台未实现，见 §14），脚本照常生成。
 
 更换图标后必须同时完成：
 
@@ -1526,10 +1555,10 @@ cargo test --manifest-path rust/Cargo.toml
 tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 
 ```text
-version: 1.3.0+1  →  git push origin v1.3.0
+version: 1.4.8+1  →  git push origin v1.4.8
 ```
 
-推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run release.yml` 干跑。macOS 签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`ci-release.md`](./ci-release.md)。
+推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run release.yml` 干跑。macOS 签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`packaging.md` 的发布一节](./packaging.md#发布tag版本约定与ci)。
 
 ## 14. 已知限制和未完成项
 
@@ -1596,7 +1625,7 @@ Windows（未实现）：
 
 如果任务是调整托盘：只改 `TrayHostPage`，不要添加主应用窗口；截图必须通过 `--capture` 子进程启动。
 
-如果任务是调整截图后端：先阅读 `docs/snapclip-source-review.md`，保持 Mutter ScreenCast 的调用顺序，不要替换为 Screenshot Portal。
+如果任务是调整截图后端：保持 Mutter ScreenCast 的调用顺序，不要替换为 Screenshot Portal（原因见 §4 与 §17）。
 
 如果任务是多显示器：先读 [6.9 多显示器](#69-多显示器)。macOS 的选屏规则（`--display` →
 光标 → 主屏）只在 `rust/src/macos.rs` 的 `resolve_target_display()` 里实现一遍，Swift 通过
@@ -1607,7 +1636,7 @@ Windows（未实现）：
 如果任务涉及托盘/菜单栏图标：macOS 菜单栏用**应用图标本身**（`assets/icons/hax_shot.png`，
 `setIcon` 不传 `isTemplate`），Linux 同一张 PNG，Windows 用 `hax_shot.ico`。有人试过改成单色
 template 方案（`isTemplate: true` + 单色遮罩图），被要求改回：菜单栏图标必须和应用图标一致，
-不要以“深色菜单栏看不清”为理由再引入第二张图标。详见 [`docs/icon-and-tray.md`](./icon-and-tray.md)。
+不要以“深色菜单栏看不清”为理由再引入第二张图标。见 §11。
 
 如果任务是调整图标/Dock 匹配：先检查 application ID、desktop 文件名、`Icon` 名称和 `StartupWMClass`，再用 `icns-handle` 生成图标、运行安装脚本并重启旧进程；Wayland 下 GNOME Dock 仍使用旧缓存时需要注销并重新登录。
 
@@ -1629,3 +1658,37 @@ new 出来、`dispose()` 里 `_aiController?.dispose()`），**不走 GetX regis
 在用的参数、`send()` 自己会填 `displayText/displayImageBytes`，不要顺手删。
 
 一句话记忆：**先确定这是 tray 宿主还是 `--capture` 窗口，再修改对应层；不要让隐藏时序、desktop ID 或 ScreenCast 顺序被无意破坏。**
+
+## 16. 标注交互边界
+
+一次截图里有**两个不同的矩形**，别混：
+
+1. **截图选区**：第一次拖拽决定最终保存/复制的范围；
+2. **标注范围**：点矩形/箭头工具后，在选区内部再拖拽。
+
+第二次拖拽**不改变截图选区**，只新增标注，且标注的起点终点被限制在选区内。工具条上
+「框选截图区域」和「标注矩形」是两个按钮，只有前者会重新开一次截图选区。
+
+| 工具 | 交互 | 约束 |
+| --- | --- | --- |
+| 矩形 | 选颜色 → 在选区内拖拽 → 松开提交 | 用 `Rect.fromPoints`，任意方向拖都有效 |
+| 箭头 | 选颜色 → 按下拖动 → 松开提交 | 起点是箭尾、终点是尖端，拖动距离决定长度；线段 + 两条开放式翼 |
+| 文字 | 在选区内单击 → 输入 → 四角缩放 / 顶部抓手移动 | 四角缩放按比例同步字号；抓手上的关闭按钮删除当前文字；**编辑态（边框/控制点/抓手/关闭按钮）不写进最终 PNG**；点已有文字重新编辑，点别处先提交当前文字 |
+
+这些交互**没有自动化测试**，只能在真机上手动验：截图 → 依次点矩形/箭头/文字在选区内
+操作 → 点复制或保存 → 检查导出的 PNG 里只有标注、没有编辑态控件。
+
+## 17. 参考仓库与许可证约束
+
+参考仓库只克隆到 `references/` 本地阅读，**不随项目发布、也不复制代码**；原来的 4 份
+源码阅读报告（reticle / snapshotkit / screenshot / snapclip）已删除，需要时看 git 历史。
+
+| 参考 | 在 HaxShot 里怎么用 | 许可约束 |
+| --- | --- | --- |
+| Reticle | 冻结画面、框选、输出流水线、贴图的产品体验 | Apache-2.0 **+ Commons Clause**：不能按普通 Apache 复用代码 |
+| SnapShotKit | point/pixel 坐标规范、统一 flatten、PNG/剪贴板输出 | MIT：复用需保留版权和许可证文本 |
+| Screenshot | 最小主链路、单帧捕获、排除 overlay、Save/Copy | README 声称 MIT 但仓库缺 LICENSE 正文：上游确认前不复制 |
+| snapclip | GNOME Wayland 的 Mutter ScreenCast + PipeWire 单帧捕获 | 只参考调用顺序 |
+
+最要紧的一条：**保持 Mutter ScreenCast 的调用顺序，不要替换成 Screenshot Portal**
+（Portal 会播放快门声/闪光，产品不接受，见 §4）。

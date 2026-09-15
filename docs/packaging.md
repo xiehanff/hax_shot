@@ -1,8 +1,20 @@
-# Linux 打包与分发
+# 打包与分发
 
-HaxShot 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
+一份文档覆盖三件事：**Linux 包（DEB/RPM）**、**macOS 包（DMG + 签名/公证）**、**CI 发布流程**。
+改打包链路前先看这里，不要新建文档。
 
-## 本地构建安装包
+产物命名（三平台一起看，tag 必须和 `pubspec.yaml` 对得上）：
+
+```text
+pubspec 1.4.8+1  →  tag v1.4.8
+  macOS  HaxShot-1.4.8-arm64.dmg（没签名/公证时必须叫 HaxShot-1.4.8-arm64-unsigned.dmg）
+  DEB    hax-shot_1.4.8+1_amd64.deb
+  RPM    hax-shot-1.4.8-1.x86_64.rpm
+```
+
+Linux 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
+
+## Linux：本地构建安装包
 
 准备：
 
@@ -38,61 +50,14 @@ build/linux/x64/release/hax-shot_<version>_amd64.deb
 `/opt/hax-shot`，`/usr/bin/hax_shot` 只是转发包装，桌面入口、图标和
 `install-gnome-shortcut.sh` 装到系统标准位置。
 
-## GitHub Actions 发布安装包
+## Linux 侧在 CI 里的构建
 
-`.github/workflows/release.yml` 只监听版本 tag 的 push：
+tag 触发的 `release.yml` 用**同一套脚本**构建 DEB 和 RPM（`scripts/build_linux_deb.sh --skip-build`
+/ `scripts/build_linux_rpm.sh --skip-build`），并校验两个包都带上 `libhax_shot_native.so`，
+再把包同时存成 Actions artifact 和 GitHub Release 资产。完整的发布约定、签名/公证和失败处理
+见下面的「发布」一节——**不要在这里另写一份流程**。
 
-```yaml
-on:
-  push:
-    tags: ['v*']
-```
-
-普通 `main` push、Pull Request 和手动运行都不会触发打包。tag 去掉 `v` 后必须等于 `pubspec.yaml` 中 `+` 之前的版本号。例如：
-
-```text
-pubspec.yaml: version: 1.3.0+1
-Git tag:        v1.3.0
-DEB:            hax-shot_1.3.0+1_amd64.deb
-RPM:            hax-shot-1.3.0-1.x86_64.rpm（Fedora 本机构建会带 .fc44）
-DMG:            HaxShot-1.3.0-arm64.dmg
-```
-
-本地检查通过后，创建并推送 tag：
-
-```bash
-fvm flutter analyze
-fvm flutter test
-cargo fmt --manifest-path rust/Cargo.toml --check
-cargo check --manifest-path rust/Cargo.toml
-cargo test --manifest-path rust/Cargo.toml
-
-git tag -a v1.3.0 -m "Release v1.3.0"
-git push origin v1.3.0
-```
-
-工作流会用同样的脚本构建 DEB 和 RPM（Linux 侧）以及 DMG（macOS 侧），并把产物同时保存为
-Actions artifact、上传到对应 GitHub Release 的 Assets。Dart/Rust 检查由 `main` push 上的
-`verify.yml` 负责，不在发布流程里重复。完整发布约定见
-[CI 与 GitHub Release](./ci-release.md)。
-
-脚本会把以下内容一起放进 `/opt/hax-shot`：
-
-- Flutter runner 和 `libapp.so`；
-- Flutter/plugin 动态库；
-- Rust 原生库 `libhax_shot_native.so`；
-- Flutter assets 和图标数据。
-
-RPM 和 DEB 都安装：
-
-```text
-/usr/bin/hax_shot
-/usr/share/applications/com.github.xiehanff.hax_shot.desktop
-/usr/share/icons/hicolor/<size>x<size>/apps/com.github.xiehanff.hax_shot.png
-/usr/share/hax-shot/install-gnome-shortcut.sh
-```
-
-## 安装和卸载
+## Linux：安装和卸载
 
 ```bash
 sudo dnf install ./build/linux/x64/release/hax-shot-*.rpm
@@ -182,7 +147,7 @@ cargo build --manifest-path rust/Cargo.toml --release
 
 包本身不需要携带 Rust 源码或 Cargo registry。
 
-## 发布前检查
+## Linux：发布前检查
 
 在 Fedora/Ubuntu GNOME Wayland 机器上安装 RPM（或 DEB）后，至少验证：
 
@@ -207,3 +172,350 @@ command -v wl-copy
 ## 当前不发布 AppImage
 
 AppImage 可以携带 Flutter bundle 和 Rust `.so`，但不能可靠携带并隔离 GNOME/Mutter ScreenCast、PipeWire 会话、GStreamer 插件和 Wayland 剪贴板协议。因此当前只发布 RPM 和 DEB；如果未来增加 AppImage，它只能作为依赖宿主 GNOME 服务的便携包，不能承诺完全自包含。
+
+## macOS 打包与分发
+
+这份文档只讲**分发给别人**（不是本机自测）的链路。本机开发请用
+[`development-guide.md`](./development-guide.md) 里的 `scripts/install_macos_app.sh`。
+
+### 0. 只支持 Apple Silicon（arm64）
+
+本项目**不支持 Intel Mac**，也不做通用二进制（universal）：
+
+- `macos/Runner/Configs/AppInfo.xcconfig` 里 `ARCHS = arm64`，`scripts/build_macos_rust.sh`
+  按 `$ARCHS` 逐架构构建 Rust dylib（当前只会走 `aarch64-apple-darwin`）；
+- 产物验证：`lipo -archs /Applications/HaxShot.app/Contents/MacOS/HaxShot` 应为 `arm64`，
+  `Contents/Frameworks/` 下所有框架和 `libhax_shot_native.dylib` 也都只能是 `arm64`；
+- DMG 文件名固定带 `-arm64`（例如 `HaxShot-<版本>-arm64.dmg`）。
+
+在 Intel 机器上 macOS 自己会拦下：提示“不能打开，因为此类型 Mac 不支持”，这是预期行为，
+不需要我们额外做检测。
+
+### 1. 一条命令
+
+```bash
+### 有 Developer ID 证书时自动签名
+scripts/build_macos_dmg.sh
+
+### 明确指定身份 / 并提交 Apple 公证
+MACOS_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+  NOTARY_PROFILE=hax-shot scripts/build_macos_dmg.sh --notarize
+
+### 只对已有产物做验收检查
+scripts/build_macos_dmg.sh --verify-only
+
+### 本机联调用的 debug 镜像（ad-hoc 签名、不公证）：
+scripts/build_macos_dmg.sh --debug            # → build/macos/HaxShot-<版本>-arm64-debug.dmg
+scripts/build_macos_dmg.sh --debug --install   # 再把 app 从 DMG 装进 /Applications
+```
+
+产出：
+
+```text
+build/macos/HaxShot-<version>-<arch>.dmg
+```
+
+脚本会按顺序做五件事，并在最后逐项验收：构建 → 用 Developer ID 重新签名（bundle 内先签
+framework/dylib，再签 app）→ 打 DMG（含 `/Applications` 快捷方式）→ 可选公证 + staple →
+验收检查。
+
+### 2. 分发给别人的机器，缺哪一环会怎样
+
+| 环节 | 缺了会怎样 | 谁提供 |
+|---|---|---|
+| Developer ID Application 签名 | Gatekeeper 报“无法验证开发者/已损坏”，用户打不开 | 付费 Apple Developer 账号里的证书 |
+| 硬化运行时（`ENABLE_HARDENED_RUNTIME = YES`） | 无法通过公证 | 已在 `macos/Runner/Configs/Release.xcconfig` 里开好 |
+| 公证 + staple | 首次打开需要用户手动右键→打开（新系统可能直接拒绝） | `xcrun notarytool` + keychain profile |
+| bundle 内 framework/dylib 同身份签名 | library validation 拒绝加载 Rust dylib | `scripts/build_macos_rust.sh` 用 `EXPANDED_CODE_SIGN_IDENTITY` 签，脚本也会兜底重签 |
+
+注意：**Apple Development 证书不能分发**，本机那把已经吊销；也没有可用于生产的
+自签名方案——自签名证书只适合本机开发（见下文）。
+
+### 3. 屏幕录制授权：为什么必须保持同一个签名身份
+
+macOS 把“屏幕录制”授权绑在代码签名上：
+
+- **ad-hoc 签名**（`CODE_SIGN_IDENTITY = "-"`）绑定的是构建产物指纹，每次重新构建都变 →
+  系统设置里那条旧记录（开关看着是开的）和二进制对不上，既没权限也不再弹授权框。
+- **Developer ID 签名**绑定的是证书 + bundle id → 用户授权一次之后，后续版本升级
+  （甚至换版本号）都保留授权，不会反复要求授权。
+
+所以正式分发的 app **必须**用 Developer ID 签名，不只是为了 Gatekeeper，也是为了升级时
+不折腾用户。`tccutil reset` 那种修复手段只是给本地开发兜底的（见
+`lib/features/settings/screen_capture_permission.dart`）。
+
+### 本机开发：别用 `flutter run` 授权
+
+`flutter run` 启动的 app 责任进程是终端，屏幕录制授权会记在终端上，HaxShot 不会出现在
+系统设置列表里。开发时用：
+
+```bash
+scripts/run_macos_debug.sh            # 构建 debug、用本地证书重签、再 open（HaxShot 成为责任进程）
+```
+
+**它会顺手用本地证书重签**：Debug 配置默认是 ad-hoc（`CODE_SIGN_IDENTITY = "-"`），授权记录
+绑 cdhash，改一行代码重建就失效——调权限相关功能时几乎没法用。加上
+`scripts/macos_dev_cert.sh --trust` 创建的那个证书之后就固定绑在证书上，重建不用再授权。
+想复现 ad-hoc 的授权问题才用 `--ad-hoc` 跳过重签。
+
+### 本机开发怎么办
+
+开发期是 ad-hoc 签名，会反复遇到上面的错位。当前实现按 `hax_pick` 的做法处理：
+
+- 引导页每 750ms 轮询一次授权状态，切回前台时立刻重查；检测到已授权就自动重启抓屏进程继续；
+- 引导页提供「重置授权记录」＝ `tccutil reset ScreenCapture <bundle id>`，专门解开
+  “开关是开的但进程没权限、也不再弹框”的死结；
+- `scripts/macos_dev_cert.sh` 可以创建一个自签名的本地证书，让开发期授权跨构建稳定。
+  **仅限本机开发**：自签名证书无法公证，给别人的 app 用它仍然会被 Gatekeeper 拒绝。
+  建好之后 `install_macos_app.sh --dev-cert`（release）和 `run_macos_debug.sh`（debug）
+  都会自动用它重签；从 ad-hoc 切过来时先 `tccutil reset ScreenCapture
+  com.github.xiehanff.haxShot` 清掉那条对不上号的旧记录，再重新授权一次即可。
+
+### 4. 别人的 Mac 上第一次运行会经历什么
+
+```text
+1. 挂载 DMG → 拖 HaxShot.app 到“应用程序” → 打开
+   （已公证：直接打开；未公证：右键→打开，或去“隐私与安全性”里放行）
+2. 没有 Dock 图标！它是菜单栏应用（LSUIElement），只在菜单栏右侧出现一个小图标
+3. 按 ⌥⇧Z 或点菜单栏图标 → “立即截屏”
+4. 第一次会弹出自己的授权引导（小窗口，不是全屏）：
+   「打开系统设置」→ 在“隐私与安全性 → 屏幕录制”勾选 HaxShot → 回到 app
+   → 检测到授权后自动继续截图
+5. 想换快捷键：菜单栏图标 → “设置” → 录制组合键（默认已经是 ⌥⇧Z）
+6. 想用 AI：AI 面板里填 DeepSeek API Key
+```
+
+#### 升级后一定要退出旧实例
+
+全局快捷键是**正在运行的那个实例**注册的。如果旧版本还在跑（菜单栏里那个图标），
+即使你把新版本拷进 /Applications，按快捷键触发的仍然是旧实例 —— 表现就是“快捷键
+截屏看起来和托盘截屏不是同一个版本”。`scripts/install_macos_app.sh` 会先 `pkill`
+再替换 bundle，所以走脚本安装/升级不会踩这个坑。
+
+### 已知会让人困惑的点
+
+- **第 2 步**：菜单栏应用没有 Dock 图标，新用户容易以为没启动。已实现首次启动欢迎窗口
+  （`lib/features/onboarding/first_run_guide.dart`，标记 `hax_shot.onboarding_seen`），
+  说明图标位置、快捷键和首次授权，并带「打开设置」入口。
+- **菜单栏图标可能被菜单栏管理工具藏起来**（本机就是 Bartender 把它收进隐藏区），
+  所以默认快捷键 `⌥⇧Z` 是必需的兜底入口。
+- **API Key 目前存在 shared_preferences（明文 plist）**。正式分发建议改存 Keychain。
+
+### 5. 卸载
+
+```bash
+scripts/install_macos_app.sh                   # 重新安装（会先退出正在运行的旧实例）
+scripts/uninstall_macos_app.sh                 # 卸载并清掉用户数据
+scripts/uninstall_macos_app.sh --dry-run       # 先看会做什么
+scripts/uninstall_macos_app.sh --keep-prefs    # 保留快捷键等偏好设置
+scripts/uninstall_macos_app.sh --dir ~/Apps    # 应用装在别处
+```
+
+清掉的东西：运行中的进程、`<dir>/HaxShot.app`、`~/Library/LaunchAgents/<bundle id>.plist`
+（含 `launchctl bootout`）、屏幕录制授权记录（`tccutil reset`）、偏好设置 plist，以及系统
+生成的 `Saved Application State` / `Caches` / `HTTPStorages` 目录。开发用自签名证书和
+`build/macos/` 里的构建产物不在范围里，脚本结尾会提示对应命令。
+
+清偏好设置用的是 `defaults delete <bundle id>`，不是 `rm` 那个 plist：直接删文件会让
+cfprefsd 留着坏掉的 domain，卸载后**第一次**启动会没有全局快捷键（菜单栏图标仍在，
+再启动一次才自愈），原因和排查见 [开发指南 6.6](./development-guide.md)。
+
+### 6. 发布前检查清单
+
+```bash
+scripts/generate_macos_icons.sh    # 从 assets/icons/hax_shot.svg 更新 AppIcon
+scripts/build_macos_dmg.sh --notarize
+```
+
+脚本的验收项（全 ✅ 才算通畅）：
+
+```text
+app 签名完整（codesign --verify --deep --strict）
+bundle 内动态库都已签名
+Info.plist 是菜单栏应用（LSUIElement）
+应用图标已打进 bundle（AppIcon.icns + CFBundleIconName）
+DMG 能挂载且内含 HaxShot.app / Applications 快捷方式
+Gatekeeper 接受 app（spctl）
+DMG 已公证并 stapled
+```
+
+## 发布：tag、版本约定与 CI
+
+HaxShot 的发布目标是让“代码合并”和“发布安装包”分开：普通 `main` 分支 push 只更新源码、
+只跑 [`verify.yml`](../.github/workflows/verify.yml) 的检查；只有推送版本 tag 时，
+[`release.yml`](../.github/workflows/release.yml) 才会构建三个平台的安装包并发布
+GitHub Release。
+
+### 1. 触发规则
+
+工作流位于：
+
+```text
+.github/workflows/release.yml
+```
+
+它只有一个触发器：
+
+```yaml
+on:
+  push:
+    tags:
+      - 'v*'
+```
+
+因此以下操作不会发布 Release：
+
+- `git push origin main`；
+- 修改 PR；
+- 手动 `workflow_dispatch` 干跑（见下文）。
+
+补充：`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`。发布流程是先推
+`release: vX.Y.Z`（只改版本号）再推 tag，这个提交不会触发 Verify——同一个 commit 由
+Release 跑一遍就够，否则两个 workflow 会把它各构建一次。带代码的提交不受影响。
+
+以下操作会触发打包：
+
+```bash
+git push origin v1.4.8
+```
+
+### 干跑（不发布）
+
+`release.yml` 还支持 `workflow_dispatch`：构建 job（Linux、macOS）全部执行并上传
+Actions artifact，但最后一步发布 Release 只在 tag push 时运行。改打包脚本或工作流
+之后，先在 Actions 页面手动 Run workflow（或 `gh workflow run release.yml`）干跑一次，
+确认绿了再打 tag——不要用真 tag 试错。
+
+### 2. 版本约定
+
+tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号。工作流第一步就会检查这个关系，
+不一致立刻失败，避免把错误版本上传到 Release。
+
+| `pubspec.yaml` | Git tag | Release Assets |
+|---|---|---|
+| `1.4.8+1` | `v1.4.8` | `HaxShot-1.4.8-arm64.dmg`、`hax-shot_1.4.8+1_amd64.deb`、`hax-shot-1.4.8-1.x86_64.rpm` |
+
+其中：
+
+- `1.4.8` 是应用版本，也是 DMG 名字和 RPM 的 Version；
+- `+1` 是 DEB 的完整版本（`1.4.8+1`）和 Fedora RPM 的 Release；
+- RPM 在 Fedora 本机构建时会带 `.fc44`，在 CI（Ubuntu 的 rpmbuild）里没有这个发行版后缀；
+- `v1.4.8` 是 GitHub Release 的 tag 和页面名称。
+
+### 3. 发布流程
+
+先在本地完成开发和验证：
+
+```bash
+fvm flutter analyze
+fvm flutter test
+fvm flutter build linux --debug
+fvm flutter build linux --release
+cargo fmt --manifest-path rust/Cargo.toml --check
+cargo check --manifest-path rust/Cargo.toml
+cargo test --manifest-path rust/Cargo.toml
+```
+
+确认工作树只包含本次发布内容后，先在 `pubspec.yaml` 更新版本并提交主分支：
+
+```bash
+git add .
+git commit -m "release: v1.4.8"
+git push origin main
+```
+
+这一步只改 `pubspec.yaml`，不会触发 `verify.yml`（见第 1 节的 `paths-ignore`）：这个
+commit 马上就会被 tag 的 Release workflow 完整构建一遍，没必要再跑一次 Verify。
+
+需要发布时，在**已经推送的**那个 commit 上创建带注释的 tag：
+
+```bash
+git tag -a v1.4.8 -m "Release v1.4.8"
+git push origin v1.4.8
+```
+
+### 4. GitHub Actions 做什么
+
+`release.yml` 分成四个 job：
+
+| job | runner | 作用 |
+|---|---|---|
+| `preflight` | `ubuntu-24.04` | 校验 tag 与 `pubspec.yaml` 版本一致（会消耗 macOS 分钟数之前就失败） |
+| `linux` | `ubuntu-24.04` | 构建 Linux release bundle，再打 `--skip-build` 的 DEB 和 RPM，校验两个包都带上 `libhax_shot_native.so` |
+| `macos` | `macos-14`（arm64） | 校验 runner 架构，签名（可选）→ 公证（可选）→ 打 DMG，校验 app、Rust dylib 都是 arm64 |
+| `release` | `ubuntu-24.04` | 汇总两个平台的产物，创建或更新 GitHub Release |
+
+每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
+
+Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
+（Linux 与 macOS 两个 job），tag 应该指向已经过检查的 commit。
+
+如果同一个 tag 的 Release 已经存在（例如补传 macOS 产物），`release` job 会用
+`--clobber` 覆盖同名资产，而不会创建第二个 Release。
+
+### 5. macOS 签名与公证（分发必需）
+
+策略是**不允许静默发出未公证的 DMG**：
+
+| 仓库 secret 情况 | 行为 |
+|---|---|
+| 没有 `MACOS_CERTIFICATE_P12` | 构建 ad-hoc DMG，文件名写成 `HaxShot-<版本>-arm64-unsigned.dmg`，并在 Release 正文顶部加一段“未签名/未公证、不能当常规安装包分发”的警告 |
+| 有证书但缺 `APPLE_ID`/`APPLE_APP_PASSWORD`/`APPLE_TEAM_ID` | **macOS job 直接失败**：半配置状态不允许发布未公证的包 |
+| 证书 + 公证凭据齐全 | 必须签名 + 公证 + staple（`build_macos_dmg.sh --notarize`），任何一步失败都会让 job 挂掉 |
+
+也就是说：ad-hoc 包只能以 `-unsigned` 的内部测试包形式出现，永远不会冒充成正式安装包。
+要对外分发 macOS 版本，需要在仓库 **Settings → Secrets and variables → Actions** 里配置：
+
+| Secret | 说明 |
+|---|---|
+| `MACOS_SIGN_IDENTITY` | 形如 `Developer ID Application: Name (TEAMID)` |
+| `MACOS_CERTIFICATE_P12` | Developer ID 证书导出成 `.p12` 后 base64 编码（`base64 -i cert.p12 \| pbcopy`） |
+| `MACOS_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设置的密码 |
+| `MACOS_KEYCHAIN_PASSWORD` | CI 里临时 keychain 的密码，随意填 |
+| `APPLE_ID` | 公证用的 Apple ID |
+| `APPLE_APP_PASSWORD` | 该 Apple ID 的 app-specific password |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
+
+配好之后，打 tag 前先干跑一次确认签名/公证链路通，再推 tag。缺证书阶段的公开版本，按
+上一节「macOS 打包与分发」告知用户 DMG 只用于内部测试。
+
+### 6. 发布后的检查
+
+在仓库的 **Releases** 页面确认：
+
+- Release tag 与 `pubspec.yaml` 版本一致，且不是 Draft；
+- Assets 里三个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
+  `HaxShot-<版本>-arm64-unsigned.dmg`）、`hax-shot_<版本>_amd64.deb`、
+  `hax-shot-<版本>-<release>.x86_64.rpm`；
+- 如果只有 `-unsigned` DMG，Release 正文顶部应该已经有未签名警告；
+- Release notes 由 `--generate-notes` 生成（会带上本次 tag 之前的 PR/commit 列表）。
+
+验证 macOS 产物：
+
+```bash
+hdiutil attach HaxShot-1.4.8-arm64.dmg          # 能挂载且内含 HaxShot.app
+lipo -archs /Volumes/HaxShot/HaxShot.app/Contents/MacOS/HaxShot   # arm64
+spctl -a -vvv -t exec /Volumes/HaxShot/HaxShot.app                 # 有签名+公证时 should be accepted
+```
+
+验证 Linux 产物（Fedora GNOME Wayland / Ubuntu GNOME Wayland）：
+
+```bash
+sudo dnf install ./hax-shot-1.4.8-1.x86_64.rpm        # 或 sudo apt install ./hax-shot_1.4.8+1_amd64.deb
+/usr/share/hax-shot/install-gnome-shortcut.sh
+```
+
+### 7. 失败处理
+
+- **版本检查失败**：确认 tag 去掉 `v` 后等于 `pubspec.yaml` 中 `+` 前的版本；
+- **Linux 打包失败**：本地复现 `./scripts/build_linux_deb.sh --skip-build` /
+  `./scripts/build_linux_rpm.sh --skip-build`（脚本和 CI 走同一套代码）；
+- **macOS 构建失败**：注意 runner 必须是 arm64，项目不支持 Intel Mac，也不做 universal；
+- **签名/公证失败**：先确认证书没过期、`MACOS_SIGN_IDENTITY` 与导入的证书完全一致；
+  公证凭据错误会直接在 `notarytool store-credentials` 或 submit 阶段报错；
+- **Release 上传失败**：确认工作流有 `contents: write` 权限，或重跑同一个 tag 的 workflow。
+
+需要重新上传同名安装包时，修复后重跑同一个 tag 的 workflow 即可覆盖资产（见第 4 节）。
+
+一句话总结：**main push 只更新代码，`git push origin vX.Y.Z` 才构建 DMG/DEB/RPM 并发布
+GitHub Release。**
