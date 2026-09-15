@@ -48,7 +48,7 @@ jobs:
             echo "The build metadata (+N) becomes the Fedora RPM release number." >&2
             exit 1
           fi
-          echo "Releasing Hax Shot ${tag_version} (pubspec ${pubspec_version})."
+          echo "Releasing HaxShot ${tag_version} (pubspec ${pubspec_version})."
 
   linux:
     name: Linux (.deb + .rpm)
@@ -155,7 +155,7 @@ jobs:
           set -euo pipefail
           arch="$(uname -m)"
           if [[ "${arch}" != "arm64" ]]; then
-            echo "This runner is ${arch}; Hax Shot only ships arm64 macOS builds." >&2
+            echo "This runner is ${arch}; HaxShot only ships arm64 macOS builds." >&2
             exit 1
           fi
 
@@ -304,7 +304,7 @@ jobs:
             gh release upload "$TAG" "${assets[@]}" --clobber
           else
             gh release create "$TAG" "${assets[@]}" \
-              --title "Hax Shot ${TAG}" \
+              --title "HaxShot ${TAG}" \
               --generate-notes \
               --verify-tag
           fi
