@@ -604,6 +604,8 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
                           onCancel: _cancel,
                           onSave: () => _save(layout),
                           onCopy: () => _copy(layout),
+                          onExtractText: () =>
+                              _askAi(HaxAiAction.extractText, layout),
                           onTranslate: () =>
                               _askAi(HaxAiAction.translate, layout),
                           onExplain: () => _askAi(HaxAiAction.explain, layout),

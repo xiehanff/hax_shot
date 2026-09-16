@@ -10,10 +10,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test('action labels and prompts describe all screenshot actions', () {
+    expect(HaxAiAction.extractText.label, '提取文字');
     expect(HaxAiAction.translate.label, '翻译截图');
     expect(HaxAiAction.explain.label, '解释截图');
     expect(HaxAiAction.deepUnderstand.label, '深入理解截图');
 
+    expect(HaxAiPrompts.forAction('extractText'), HaxAiPrompts.extractText());
     expect(HaxAiPrompts.forAction('translate'), HaxAiPrompts.translate());
     expect(HaxAiPrompts.forAction('explain'), HaxAiPrompts.explain());
     expect(

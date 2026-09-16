@@ -15,6 +15,7 @@ class CaptureToolbar extends StatelessWidget {
     required this.onCancel,
     required this.onSave,
     required this.onCopy,
+    this.onExtractText,
     this.onTranslate,
     this.onExplain,
     this.onDeepUnderstand,
@@ -29,6 +30,7 @@ class CaptureToolbar extends StatelessWidget {
   final VoidCallback onCancel;
   final VoidCallback onSave;
   final VoidCallback onCopy;
+  final VoidCallback? onExtractText;
   final VoidCallback? onTranslate;
   final VoidCallback? onExplain;
   final VoidCallback? onDeepUnderstand;
@@ -120,6 +122,7 @@ class CaptureToolbar extends StatelessWidget {
                     const _ToolbarDivider(),
                     _AiActionGroup(
                       busy: busy,
+                      onExtractText: onExtractText,
                       onTranslate: onTranslate,
                       onExplain: onExplain,
                       onDeepUnderstand: onDeepUnderstand,
@@ -355,12 +358,14 @@ class _ToolbarColorSwatch extends StatelessWidget {
 class _AiActionGroup extends StatelessWidget {
   const _AiActionGroup({
     required this.busy,
+    required this.onExtractText,
     required this.onTranslate,
     required this.onExplain,
     required this.onDeepUnderstand,
   });
 
   final bool busy;
+  final VoidCallback? onExtractText;
   final VoidCallback? onTranslate;
   final VoidCallback? onExplain;
   final VoidCallback? onDeepUnderstand;
@@ -370,6 +375,11 @@ class _AiActionGroup extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _ToolbarIconButton(
+          icon: HugeIcons.strokeRoundedTextSelect,
+          tooltip: '提取文字',
+          onPressed: busy ? null : onExtractText,
+        ),
         _ToolbarIconButton(
           icon: HugeIcons.strokeRoundedTranslate,
           tooltip: '翻译截图',

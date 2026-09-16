@@ -195,6 +195,7 @@ class HaxAiController extends GetxController {
 
   String _promptFor(HaxAiAction action) {
     return switch (action) {
+      HaxAiAction.extractText => HaxAiPrompts.extractText(),
       HaxAiAction.translate => HaxAiPrompts.translate(),
       HaxAiAction.explain => HaxAiPrompts.explain(),
       HaxAiAction.deepUnderstand => HaxAiPrompts.deepUnderstand(),

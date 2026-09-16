@@ -54,6 +54,7 @@ void main() {
   testWidgets('AI actions invoke callbacks and are disabled while busy', (
     tester,
   ) async {
+    var extracted = false;
     var translated = false;
     var explained = false;
     var deeplyUnderstood = false;
@@ -71,6 +72,7 @@ void main() {
               onCancel: () {},
               onSave: () {},
               onCopy: () {},
+              onExtractText: () => extracted = true,
               onTranslate: () => translated = true,
               onExplain: () => explained = true,
               onDeepUnderstand: () => deeplyUnderstood = true,
@@ -81,20 +83,25 @@ void main() {
     }
 
     await tester.pumpWidget(buildToolbar(busy: false));
+    await tester.tap(find.byTooltip('提取文字'));
     await tester.tap(find.byTooltip('翻译截图'));
     await tester.tap(find.byTooltip('解释截图'));
     await tester.tap(find.byTooltip('深入理解截图'));
+    expect(extracted, isTrue);
     expect(translated, isTrue);
     expect(explained, isTrue);
     expect(deeplyUnderstood, isTrue);
 
+    extracted = false;
     translated = false;
     explained = false;
     deeplyUnderstood = false;
     await tester.pumpWidget(buildToolbar(busy: true));
+    await tester.tap(find.byTooltip('提取文字'));
     await tester.tap(find.byTooltip('翻译截图'));
     await tester.tap(find.byTooltip('解释截图'));
     await tester.tap(find.byTooltip('深入理解截图'));
+    expect(extracted, isFalse);
     expect(translated, isFalse);
     expect(explained, isFalse);
     expect(deeplyUnderstood, isFalse);

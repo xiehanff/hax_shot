@@ -1302,7 +1302,7 @@ lib/features/capture/capture_page.dart
 5. 通过 `CustomSingleChildLayout` 获取真实工具栏尺寸，不能写死宽度，因为字体、按钮文字和主题可能改变组件宽度；同时必须在 `SingleChildLayoutDelegate.getConstraintsForChild` 中返回 `constraints.loosen()`，否则子工具栏会被施加全屏紧约束，既会跑到左上/左侧，也会让其背景遮住整张截图；
 6. viewport 和 toolbar 都留 12px 边距，避免贴住屏幕边缘。
 
-当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、文字标注、颜色板（红/紫/黄/绿/橙）以及截图 AI 操作：翻译、解释、深入理解。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头通过拖拽绘制，文字工具通过单击创建输入框，并可拖动四角缩放字号。颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
+当前 `CaptureToolbar` 包含取消、保存、复制、截图框选、矩形标注、箭头标注、文字标注、颜色板（红/紫/黄/绿/橙）以及截图 AI 操作：提取文字、翻译、解释、深入理解。图标统一使用 `hugeicons` 的 `strokeRounded` 风格；矩形和箭头通过拖拽绘制，文字工具通过单击创建输入框，并可拖动四角缩放字号。颜色由 CapturePage 持有并用于预览和最终 PNG。拖拽中的临时矩形仍然绘制边框，但工具栏要等 `selectionCommitted` 在 `onPanEnd` 中变为 true 后才显示。开始下一次截图选区拖拽时立即清空旧标注。
 
 已添加 `test/selection_toolbar_placement_test.dart` 覆盖顶部、底部、左右边缘、几乎占满屏幕，以及真实 `CustomSingleChildLayout` 尺寸约束。
 
@@ -1333,6 +1333,10 @@ lib/features/ai/
 ```
 
 通用对话能力完整复用 `packages/plume_ai_chat`，包括 reasoning、流式 Markdown、Stop、会话历史、图片输入和 follow-up suggestions。普通追问只发送文字，不会重复上传上一张截图；新的截图操作会新建视觉会话。
+
+截图 Action 与提示词的对应关系在 `lib/features/ai/services/hax_ai_prompts.dart`，**新增动作要同时改三处**：`HaxAiAction`（enum + label）、`HaxAiPrompts.forAction()`、`HaxAiController._promptFor()`，工具条按钮另加 `CaptureToolbar.onXxx`。
+
+聊天区的 Markdown 与代码块渲染在 `lib/features/ai/views/widgets/chat_bubble.dart`（`ChatBubble` + `CodeBlock`）。代码块头部右上角有复制按钮（复制围栏里的原始文本，不含语言标识），用 `Clipboard.setData`；「提取文字」的提示词要求模型只吐一个代码块，两者配合起来用户点一下就能拿走全文。**改代码块头部布局时不要把复制按钮挤掉**，它是这个动作唯一的出口。
 
 AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口。标题栏支持拖动，右上角关闭按钮结束当前截图进程。API Key 保存到 `shared_preferences`，key 为 `hax_shot.deepseek_api_key`。
 
@@ -1395,7 +1399,7 @@ AI 窗口是截图子进程中的普通页面，不新增第二个原生窗口�
 
 - AI 必须吃 `ScreenshotExporter.renderPng()` 的最终 PNG：**不能重新截图、不能绕过标注、
   不能单独裁剪原图**；
-- 新的截图 Action（翻译/解释/深入理解）会**新建视觉会话**（清空旧会话）；同一轮里的普通
+- 新的截图 Action（提取文字/翻译/解释/深入理解）会**新建视觉会话**（清空旧会话）；同一轮里的普通
   追问只发文字，不重复上传截图；
 - **AI 会话只活在当前截图进程里**，不做历史会话持久化——进程退出即丢；
 - 凭据由 Host 用 `shared_preferences` 存（`hax_shot.deepseek_api_key`），

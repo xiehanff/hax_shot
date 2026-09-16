@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:gpt_markdown/custom_widgets/markdown_config.dart'
     show GptMarkdownConfig;
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:hugeicons/hugeicons.dart';
 import 'package:loading_indicator/loading_indicator.dart';
 import 'package:plume_ai_chat/plume_ai_chat.dart'
     show ChatMessage, MessageAuthor;
@@ -414,7 +417,7 @@ class _ReasoningPanelState extends State<ReasoningPanel> {
   }
 }
 
-class CodeBlock extends StatelessWidget {
+class CodeBlock extends StatefulWidget {
   const CodeBlock({
     super.key,
     required this.language,
@@ -471,9 +474,37 @@ class CodeBlock extends StatelessWidget {
   };
 
   @override
+  State<CodeBlock> createState() => _CodeBlockState();
+}
+
+class _CodeBlockState extends State<CodeBlock> {
+  /// “已复制”反馈的保留时长。
+  static const Duration _copiedFeedbackDuration = Duration(milliseconds: 1200);
+
+  bool _copied = false;
+  Timer? _copiedResetTimer;
+
+  @override
+  void dispose() {
+    _copiedResetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copyCode() async {
+    await Clipboard.setData(ClipboardData(text: widget.code));
+    if (!mounted) return;
+    _copiedResetTimer?.cancel();
+    setState(() => _copied = true);
+    _copiedResetTimer = Timer(_copiedFeedbackDuration, () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final String hlLang =
-        _langMap[language.toLowerCase()] ?? language.toLowerCase();
+        CodeBlock._langMap[widget.language.toLowerCase()] ??
+        widget.language.toLowerCase();
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
@@ -484,31 +515,69 @@ class CodeBlock extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
             decoration: const BoxDecoration(
               color: Color(0xFF21252B),
               borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
             ),
-            child: Text(
-              language,
-              style: const TextStyle(
-                color: AppColors.textTertiary,
-                fontSize: 11,
-              ),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    widget.language,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textTertiary,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                _CopyCodeButton(copied: _copied, onPressed: _copyCode),
+              ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: closed
+            child: widget.closed
                 ? HighlightView(
-                    code,
+                    widget.code,
                     language: hlLang,
                     theme: atomOneDarkTheme,
-                    textStyle: _codeTextStyle,
+                    textStyle: CodeBlock._codeTextStyle,
                   )
-                : Text(code, style: _codeTextStyle),
+                : Text(widget.code, style: CodeBlock._codeTextStyle),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 代码块头部右上角的一键复制，复制的是围栏里的原始文本（不含语言标识）。
+class _CopyCodeButton extends StatelessWidget {
+  const _CopyCodeButton({required this.copied, required this.onPressed});
+
+  final bool copied;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: copied ? '已复制' : '复制',
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          child: HugeIcon(
+            icon: copied
+                ? HugeIcons.strokeRoundedCheckmarkCircle02
+                : HugeIcons.strokeRoundedCopy01,
+            color: copied ? AppColors.accentBright : AppColors.textTertiary,
+            size: 14,
+            strokeWidth: 1.6,
+          ),
+        ),
       ),
     );
   }
