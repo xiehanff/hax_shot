@@ -90,9 +90,12 @@ jobs:
           test -x build/linux/x64/release/bundle/hax_shot
           test -f build/linux/x64/release/bundle/lib/libhax_shot_native.so
 
-  # macOS 已经是正式平台（有 RunnerTests 守着窗口/TCC 相关行为），但 Release workflow
-  # 只构建、不跑测试，所以这里补一个 PR 级门禁：Swift/ObjC 改坏了、macOS 编不过，要在
-  # 合入前发现，而不是等打 tag 的时候才发现。
+  # macOS 侧的 PR 级门禁：保证「macOS 编得过 + macOS 专属的 Dart 测试通过」。
+  # `flutter test` 不能省：hotkey_binding / screen_capture_permission 里有只在 macOS 上
+  # 跑的用例（Carbon 键码、TCC），Linux job 覆盖不到。
+  # RunnerTests（XCTest）不在这里跑：它上一次要花 2m13s，大头是给 app-hosted 测试编一份
+  # Debug app，收益不值这个时长。要验证窗口 styleMask / 圆角，按
+  # docs/development-guide.md 「窗口圆角」里的命令本地手动跑。
   macos:
     name: macOS tests and build
     runs-on: macos-14
@@ -129,31 +132,7 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml
 
       # RunnerTests 是 macOS 侧唯一的行为门禁（窗口 styleMask / 圆角 / traffic light），
-      # 之前只存在于本地。两个约束：
-      #   1. `macos/Flutter/ephemeral/*.xcfilelist` 和 Pods 的 xcfilelist 必须先由 Flutter
-      #      生成，直接 xcodebuild 会报 “Unable to load contents of file list”
-      #      （`flutter pub get` 不够）。用 `--config-only`：只生成这些配置 + 跑 pod install，
-      #      不编译 app —— Debug app 由下面的 xcodebuild test 自己编，不要在这里先整包
-      #      构建一遍，否则白花约两分钟；
-      #   3. 跑之前不能有正在运行的 HaxShot：RunnerTests 的宿主就是 HaxShot.app，
-      #      它的 main() 会抢单实例锁，抢不到直接 SIGKILL，报 “Test crashed with signal
-      #      kill before starting test execution / Early unexpected exit”。本地手动复现
-      #      这一步时先 pkill -x HaxShot。
-      #   2. 测试必须用 Debug 配置：RunnerTests 是 `@testable import HaxShot`（模块名跟
-      #      PRODUCT_NAME 走），Release 关掉了 testability，会报 “Module 'HaxShot' was not
-      #      compiled for testing”。
-      # CODE_SIGNING_ALLOWED=NO：CI 没有证书，测试也不需要签名。
-      - name: Generate macOS Xcode config
-        run: flutter build macos --config-only --debug
-
-      - name: Run RunnerTests (XCTest)
-        run: |
-          xcodebuild test \
-            -workspace macos/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Debug \
-            -destination 'platform=macOS,arch=arm64' \
-            CODE_SIGNING_ALLOWED=NO
-
+      # 本地手动跑的命令和两个硬约束（先 --config-only、必须 Debug 配置、先 pkill -x
+      # HaxShot）记在 docs/development-guide.md 的「窗口圆角」一节。
       - name: Build macOS release bundle
         run: flutter build macos --release

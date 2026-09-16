@@ -1009,9 +1009,10 @@ windowManager.setSize(_aiWindowSize)
 `CaptureOverlayWindow.applyPanelAppearance(to:)` 配成
 `.titled + .fullSizeContentView` + 透明隐藏标题栏：既拿到系统原生圆角（角外直接是
 桌面），又保持无标题栏观感，还不会出现 macOS 的红黄绿（没有 `.closable` 等，三个按钮
-是 nil）。`RunnerTests.testPanelAppearanceUsesNativeRoundedWindow` 守着这个配置。
+是 nil）。`RunnerTests.testPanelAppearanceUsesNativeRoundedWindow` 守着这个配置，但这个
+XCTest **不在 CI 里跑**（见第 13 节）：改过窗口外观，自己跑下面这套命令。
 
-这个测试是 **app-hosted** 的（`@testable import hax_shot`，宿主就是应用本体），所以本地跑它有三条硬要求，不然报的错跟真实问题毫无关系：
+这个测试是 **app-hosted** 的（`@testable import HaxShot`，宿主就是应用本体），所以本地跑它有三条硬要求，不然报的错跟真实问题毫无关系：
 
 ```bash
 # 1. 先让 Flutter 生成 macos/Flutter/ephemeral/*.xcfilelist 和 Pods 的文件列表：直接
@@ -1537,9 +1538,16 @@ pkill -x HaxShot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `RunnerTests`（XCTest）/ `flutter build macos --release`。macOS job 在跑 XCTest 前用 `flutter build macos --config-only --debug` 生成 xcfilelist（不编译 app），Debug app 直接由 `xcodebuild test` 构建——不要再加一步整包 `flutter build macos --debug`。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `flutter build macos --release`。
 
-`RunnerTests` 有两个容易踩的坑（都实测踩过）：
+macOS job 里的 `flutter test` **不能删**：`hotkey_binding_test`、`screen_capture_permission_test`
+里有只在 macOS 上跑的用例（Carbon 键码、TCC 分支），Linux job 覆盖不到。
+
+macOS job **不跑 `RunnerTests`（XCTest）**：它一步要 2m13s，大头是给 app-hosted 测试编一份
+Debug app，日常收益不值这个时长（`flutter build macos --release` 已经在守「macOS 编得过」）。
+窗口 styleMask / 圆角这类回归靠本地按「窗口圆角」那节的命令手动跑，以及跑一遍 App 来看。
+
+本地手动跑 `RunnerTests` 有两个容易踩的坑（都实测踩过）：
 
 - **本地要验证这一步，先 `pkill -x HaxShot`**：RunnerTests 的宿主就是 HaxShot.app，
   它的 `main()` 会抢单实例锁，抢不到直接 SIGKILL，表现成 “Test crashed with signal kill
@@ -1547,7 +1555,9 @@ GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` 
 - **`TEST_HOST`、产物引用、`@testable import` 的模块名都是跟着 `PRODUCT_NAME` 的**。
   改产品名（例如 `hax_shot` → `HaxShot`）时这三处都要一起改，漏一处就是
   “Could not find test host” 或 “no such module”。本地 `flutter test` 覆盖不到这一层，
-  只有 `xcodebuild test` / CI 的 macOS job 才会暴露。`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`：发布提交只改版本号，紧接着就会被 tag 的 Release workflow 构建，不需要再跑一次 Verify。
+  只有 `xcodebuild test` 才会暴露（CI 已经不跑这一步，改产品名时必须自己跑一次）。
+
+`verify.yml` 的 `push` 触发器带 `paths-ignore: ['pubspec.yaml']`：发布提交只改版本号，紧接着就会被 tag 的 Release workflow 构建，不需要再跑一次 Verify。
 
 发布前本地执行：
 
