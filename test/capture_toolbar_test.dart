@@ -34,7 +34,7 @@ void main() {
 
     // A decoration paint failure can hide every control despite a valid layout.
     expect(tester.takeException(), isNull);
-    expect(find.byType(HugeIcon), findsNWidgets(10));
+    expect(find.byType(HugeIcon), findsNWidgets(11));
     await tester.tap(find.byTooltip('标注矩形'));
     expect(selectedTool, CaptureTool.rectangle);
     await tester.tap(find.byTooltip('标注文字'));
