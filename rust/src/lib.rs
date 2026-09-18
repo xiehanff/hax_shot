@@ -50,8 +50,9 @@ fn write_bytes_to_buffer(bytes: &[u8], buffer: *mut u8, capacity: usize) -> usiz
     bytes.len() + 1
 }
 
-// Phase 1 的 Windows 模块还没有抓屏实现，这个共享 helper 暂时只被 linux/macos 使用；
-// Phase 2 的 `windows::capture_screen_impl` 会用它写临时 PNG。
+/// 三平台共用的临时 PNG 路径：`<系统临时目录>/hax-shot-<pid>-<纳秒>.png`。
+//
+// Windows 的 GDI 抓屏在下一步才会用上它；这里的 allow 随那一步一起移除。
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 fn unique_temp_path() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -60,6 +61,24 @@ fn unique_temp_path() -> PathBuf {
         .unwrap_or_default();
 
     std::env::temp_dir().join(format!("hax-shot-{}-{}.png", std::process::id(), timestamp))
+}
+
+/// 托盘宿主通过 `--display <id>` 传进来的目标显示器标识；没传或不是合法数字时返回 0
+/// （0 的含义是“未指定”，不是“主屏”）。
+///
+/// macOS 与 Windows 共用这一份解析（规则只写一次）；Linux 目前没有这个参数。
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(crate) fn display_id_from_arguments<I: Iterator<Item = String>>(mut arguments: I) -> u32 {
+    const DISPLAY_ARGUMENT: &str = "--display";
+    while let Some(argument) = arguments.next() {
+        if argument == DISPLAY_ARGUMENT {
+            return arguments
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+        }
+    }
+    0
 }
 
 #[cfg(target_os = "linux")]
@@ -129,8 +148,11 @@ pub extern "C" fn hax_shot_target_display(requested: u32) -> u32 {
 /// `MONITORINFOEXW.szDevice` 的 FNV-1a 32 位结果，`0` 保留给“未指定”。
 ///
 /// Rust 是这些字段的唯一来源，C++ / Dart 只消费，不允许自己枚举显示器或重算 hash。
-/// 具体错误码（0 = ok、1 = NO_TARGET、…、7 = NOT_IMPLEMENTED）见
+/// 具体错误码（0 = ok、1 = NO_TARGET、…、6 = INVALID_ARGUMENT）见
 /// `docs/development-guide.md` 的 Windows 一节。
+///
+/// `reserved` 承载抓屏诊断位（摆浮层不看它）：bit 0 = “疑似全黑”，
+/// bit 8..=15 = 采样平均亮度；只查询拓扑的 `hax_shot_target_monitor` 始终填 0。
 #[repr(C)]
 pub struct HaxShotTargetMonitor {
     pub valid: u32,
@@ -167,9 +189,10 @@ pub extern "C" fn hax_shot_last_capture_target(out: *mut HaxShotTargetMonitor) -
 /// Capture one frame of the target display and write it to a temporary PNG.
 ///
 /// The target display is `--display <id>` when the tray host passed one, then the
-/// display under the pointer, then the main display (see `rust/src/macos.rs`).
-/// The Runner calls [`hax_shot_target_display`] to place the overlay on the same
-/// display, so both paths share one rule.
+/// display under the pointer, then the main display (see `rust/src/macos.rs` on
+/// macOS and `rust/src/windows.rs` on Windows). The Runner calls
+/// [`hax_shot_target_display`] (macOS) or [`hax_shot_last_capture_target`]
+/// (Windows) to place the overlay on the same display, so both paths share one rule.
 ///
 /// On success, writes a NUL-terminated temporary PNG path to `out_path` and
 /// returns 0. On failure returns -1, when the output buffer is too small returns
@@ -432,6 +455,23 @@ pub extern "C" fn hax_shot_last_error(buffer: *mut u8, capacity: usize) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    /// macOS 与 Windows 共用的 `--display` 解析（从 macos.rs 提到这里）。
+    #[test]
+    fn reads_requested_display_from_arguments() {
+        let parse = |values: &[&str]| display_id_from_arguments(arguments(values).into_iter());
+
+        assert_eq!(parse(&["--capture", "--display", "3"]), 3);
+        assert_eq!(parse(&["--display", "1", "--capture"]), 1);
+        // 没有指定、值缺失或不是数字时都退回“没有目标显示器”。
+        assert_eq!(parse(&["--capture"]), 0);
+        assert_eq!(parse(&["--capture", "--display"]), 0);
+        assert_eq!(parse(&["--display", "main"]), 0);
+    }
 
     /// 渐变 + 色块，接近截图里 UI 和文字的分布，比纯随机像素更贴近实际。
     fn sample_pixels(width: u32, height: u32) -> Vec<u8> {

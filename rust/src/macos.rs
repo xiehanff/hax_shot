@@ -103,7 +103,11 @@ fn capture_screen_inner() -> Result<PathBuf, CaptureError> {
 }
 
 /// 托盘宿主在触发截图时写入的目标显示器参数。
-const DISPLAY_ARGUMENT: &str = "--display";
+///
+/// 解析函数与 Windows 共用 [`crate::display_id_from_arguments`]（规则只写一次）。
+fn requested_display_id() -> u32 {
+    crate::display_id_from_arguments(std::env::args().skip(1))
+}
 
 /// 选屏规则的核心实现，也是全工程唯一一份：
 /// `requested` → 光标所在显示器 → 主显示器（`!= 0` 且仍处于活动状态才采用）。
@@ -131,23 +135,6 @@ fn target_display() -> CGDisplay {
 pub(crate) fn target_display_id_impl(requested: u32) -> u32 {
     // `CGDisplay::id` 是 core-graphics 暴露的公开字段。
     resolve_target_display(requested).id
-}
-
-/// 读取托盘宿主通过命令行传进来的显示器标识；没传或不是合法数字时返回 0。
-fn requested_display_id() -> u32 {
-    display_id_from_arguments(std::env::args().skip(1))
-}
-
-fn display_id_from_arguments<I: Iterator<Item = String>>(mut arguments: I) -> u32 {
-    while let Some(argument) = arguments.next() {
-        if argument == DISPLAY_ARGUMENT {
-            return arguments
-                .next()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(0);
-        }
-    }
-    0
 }
 
 fn is_active_display(id: u32) -> bool {
@@ -247,25 +234,4 @@ pub(crate) fn copy_png_impl(data: &[u8]) -> Result<(), String> {
         return Err("写入 macOS 剪贴板失败".to_owned());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn arguments(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    #[test]
-    fn reads_requested_display_from_arguments() {
-        let parse = |values: &[&str]| display_id_from_arguments(arguments(values).into_iter());
-
-        assert_eq!(parse(&["--capture", "--display", "3"]), 3);
-        assert_eq!(parse(&["--display", "1", "--capture"]), 1);
-        // 没有指定、值缺失或不是数字时都退回“没有目标显示器”。
-        assert_eq!(parse(&["--capture"]), 0);
-        assert_eq!(parse(&["--capture", "--display"]), 0);
-        assert_eq!(parse(&["--display", "main"]), 0);
-    }
 }
