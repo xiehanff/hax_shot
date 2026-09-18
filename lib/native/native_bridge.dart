@@ -8,43 +8,58 @@ import 'package:ffi/ffi.dart';
 
 final class NativeBridge {
   NativeBridge._() : _library = _openLibrary() {
-    _captureScreen = _library.lookupFunction<_CaptureNative, _CaptureDart>(
-      'hax_shot_capture_screen',
-    );
-    _copyPng = _library.lookupFunction<_CopyPngNative, _CopyPngDart>(
-      'hax_shot_copy_png_to_clipboard',
-    );
-    _cursorDisplay = _library
-        .lookupFunction<_CursorDisplayNative, _CursorDisplayDart>(
-          'hax_shot_cursor_display',
-        );
-    _screenCaptureAuthorized = _library
-        .lookupFunction<
-          _ScreenCaptureAuthorizedNative,
-          _ScreenCaptureAuthorizedDart
-        >('hax_shot_screen_capture_authorized');
-    _requestScreenCaptureAccess = _library
-        .lookupFunction<
-          _RequestScreenCaptureAccessNative,
-          _RequestScreenCaptureAccessDart
-        >('hax_shot_request_screen_capture_access');
-    _lastError = _library.lookupFunction<_LastErrorNative, _LastErrorDart>(
-      'hax_shot_last_error',
-    );
-    _pngBufferSize = _library
-        .lookupFunction<_PngBufferSizeNative, _PngBufferSizeDart>(
-          'hax_shot_png_buffer_size',
-        );
-    _encodePng = _library.lookupFunction<_EncodePngNative, _EncodePngDart>(
-      'hax_shot_encode_png',
-    );
+    try {
+      _captureScreen = _library.lookupFunction<_CaptureNative, _CaptureDart>(
+        'hax_shot_capture_screen',
+      );
+      _copyPng = _library.lookupFunction<_CopyPngNative, _CopyPngDart>(
+        'hax_shot_copy_png_to_clipboard',
+      );
+      _cursorDisplay = _library
+          .lookupFunction<_CursorDisplayNative, _CursorDisplayDart>(
+            'hax_shot_cursor_display',
+          );
+      _screenCaptureAuthorized = _library
+          .lookupFunction<
+            _ScreenCaptureAuthorizedNative,
+            _ScreenCaptureAuthorizedDart
+          >('hax_shot_screen_capture_authorized');
+      _requestScreenCaptureAccess = _library
+          .lookupFunction<
+            _RequestScreenCaptureAccessNative,
+            _RequestScreenCaptureAccessDart
+          >('hax_shot_request_screen_capture_access');
+      _lastError = _library.lookupFunction<_LastErrorNative, _LastErrorDart>(
+        'hax_shot_last_error',
+      );
+      _pngBufferSize = _library
+          .lookupFunction<_PngBufferSizeNative, _PngBufferSizeDart>(
+            'hax_shot_png_buffer_size',
+          );
+      _encodePng = _library.lookupFunction<_EncodePngNative, _EncodePngDart>(
+        'hax_shot_encode_png',
+      );
+    } on ArgumentError catch (error) {
+      // 走到这里说明库本体已经加载成功，缺的是导出表里的符号：多半是拷了旧版本的
+      // DLL，或者 DLL 的依赖没解析全。把加载成功的路径与原始错误一起带上，
+      // 否则现场只能看到 “Failed to lookup symbol” 而不知道是哪个文件。
+      throw NativeBridgeException(
+        'Rust 原生库已加载（$_loadedLibraryPath），但符号缺失：$error',
+      );
+    }
   }
 
   static const _textBufferCapacity = 4096;
 
   /// rust/src/macos.rs 的 SCREEN_CAPTURE_DENIED：没有屏幕录制授权。
   static const _screenCaptureDeniedCode = -3;
+
+  /// macOS / Linux 的动态库前缀名；Windows 没有 `lib` 前缀，也不放在 `lib/` 下。
   static const _libraryName = 'libhax_shot_native';
+
+  /// 真正加载成功的候选路径：把“符号缺失”定位到具体那个文件用。
+  static String _loadedLibraryPath = '';
+
   static final NativeBridge instance = NativeBridge._();
 
   final DynamicLibrary _library;
@@ -208,36 +223,72 @@ final class NativeBridge {
     return utf8.decode(bytes, allowMalformed: true);
   }
 
+  /// 打开 Rust 原生库：按平台列出候选路径，逐个尝试，不依赖当前工作目录。
+  ///
+  /// 顺序：平台惯例位置（macOS 的 `Contents/Frameworks`、Linux 的 `lib/`）→
+  /// exe 旁 → 裸文件名（交给系统自己的搜索规则）。Windows 的第一项就是 exe 旁的
+  /// 绝对路径：用户可能从任意目录启动 exe，只看 PATH 会命到别的版本。
   static DynamicLibrary _openLibrary() {
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    final candidates = Platform.isMacOS
-        ? <String>[
-            // Flutter 把 bundle 内的动态库放在 Contents/Frameworks。
-            '$executableDirectory/../Frameworks/$_libraryName.dylib',
-            '$executableDirectory/$_libraryName.dylib',
-            '$_libraryName.dylib',
-          ]
-        : <String>[
-            '$executableDirectory/lib/$_libraryName.so',
-            '$executableDirectory/$_libraryName.so',
-            '$_libraryName.so',
-          ];
+    final String libraryFileName;
+    final List<String> candidates;
+    if (Platform.isMacOS) {
+      libraryFileName = '$_libraryName.dylib';
+      candidates = <String>[
+        // Flutter 把 bundle 内的动态库放在 Contents/Frameworks。
+        '$executableDirectory/../Frameworks/$libraryFileName',
+        '$executableDirectory/$libraryFileName',
+        libraryFileName,
+      ];
+    } else if (Platform.isWindows) {
+      libraryFileName = 'hax_shot_native.dll';
+      candidates = <String>[
+        '$executableDirectory${Platform.pathSeparator}$libraryFileName',
+        libraryFileName,
+      ];
+    } else {
+      libraryFileName = '$_libraryName.so';
+      candidates = <String>[
+        '$executableDirectory/lib/$libraryFileName',
+        '$executableDirectory/$libraryFileName',
+        libraryFileName,
+      ];
+    }
 
-    Object? lastError;
+    // 汇总**所有**候选取的失败原因，而不是只留最后一条：真正有诊断价值的那条
+    // （例如“文件在，但缺依赖 DLL”）可能出现在前面的候选上。
+    final failures = <String>[];
     for (final candidate in candidates) {
       try {
-        return DynamicLibrary.open(candidate);
+        final library = DynamicLibrary.open(candidate);
+        _loadedLibraryPath = candidate;
+        return library;
       } on Object catch (error) {
-        lastError = error;
+        failures.add(
+          '  $candidate -> ${_describeLoadFailure(candidate, error)}',
+        );
       }
     }
 
-    final fileName = candidates.last;
     throw StateError(
-      '找不到 Rust 原生库 $fileName。'
-      '尝试路径：${candidates.join(', ')}。'
-      '最后错误：$lastError',
+      '找不到 Rust 原生库 $libraryFileName。'
+      '已尝试的路径与失败原因：\n${failures.join('\n')}',
     );
+  }
+
+  /// 把 `DynamicLibrary.open` 的失败分成可区分的情况，别把“文件不存在”和
+  /// “文件在但加载不了”混成同一句。
+  static String _describeLoadFailure(String candidate, Object error) {
+    final File file = File(candidate);
+    if (!file.isAbsolute) {
+      // 裸文件名：Windows 会按 exe 目录 / 系统目录 / PATH 查找，能不能命中由
+      // 系统决定，本地 stat 的结果不代表加载器的结果。
+      return '按系统搜索规则（exe 目录 / 系统目录 / PATH）未能加载：$error';
+    }
+    if (!file.existsSync()) {
+      return '文件不存在：$candidate';
+    }
+    return '文件存在但加载失败（通常是缺少依赖 DLL）：$error';
   }
 }
 
