@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "capture_window_bridge.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -28,6 +29,9 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // 冻结画面浮层（Windows）的窗口属性 owner；普通面板态下不碰窗口。
+  std::unique_ptr<CaptureWindowBridge> capture_window_bridge_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
