@@ -4,6 +4,7 @@
 
 #include "capture_window_bridge.h"
 #include "flutter/generated_plugin_registrant.h"
+#include "windows_shortcut_bridge.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -33,6 +34,11 @@ bool FlutterWindow::OnCreate() {
   capture_window_bridge_ = std::make_unique<CaptureWindowBridge>(
       flutter_controller_->engine()->messenger(), GetHandle());
 
+  // 全局快捷键（Windows）：用**主窗口**的 HWND 注册，所以 WM_HOTKEY 会送到这条
+  // 消息链上；注册/注销共用主线程的消息循环（§21/§22）。
+  shortcut_bridge_ = std::make_unique<WindowsShortcutBridge>(
+      flutter_controller_->engine()->messenger(), GetHandle());
+
   // HaxShot 是托盘应用：窗口的可见性完全由 Dart（window_manager）控制。
   // 这里不注册 SetNextFrameCallback(Show)，也不调 ForceRedraw() 去逼首帧：
   // 宿主启动时窗口必须一直隐藏，`--capture` 子进程更要在浮层准备好之前
@@ -44,8 +50,10 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   // 先摘掉浮层通道再销毁引擎：桥的 handler 捕获了 this，而且它读的 HWND 马上
-  // 就要没了。
+  // 就要没了。快捷键桥同理，而且它的析构里会 `UnregisterHotKey`——趁 HWND 还有效
+  // 先做，不要指望系统在窗口销毁时替你清（§22 销毁）。
   capture_window_bridge_.reset();
+  shortcut_bridge_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -65,6 +73,16 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         capture_window_bridge_->HandleMessage(hwnd, message, wparam, lparam);
     if (bridge_result) {
       return *bridge_result;
+    }
+  }
+
+  // 全局快捷键：只吃掉自己的 WM_HOTKEY（固定 id），其余（包括其它插件注册的
+  // 热键消息）返回 nullopt 继续走原链路。
+  if (shortcut_bridge_) {
+    std::optional<LRESULT> shortcut_result =
+        shortcut_bridge_->HandleMessage(hwnd, message, wparam, lparam);
+    if (shortcut_result) {
+      return *shortcut_result;
     }
   }
 

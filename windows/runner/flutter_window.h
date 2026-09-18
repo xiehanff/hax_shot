@@ -8,6 +8,7 @@
 
 #include "capture_window_bridge.h"
 #include "win32_window.h"
+#include "windows_shortcut_bridge.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -32,6 +33,9 @@ class FlutterWindow : public Win32Window {
 
   // 冻结画面浮层（Windows）的窗口属性 owner；普通面板态下不碰窗口。
   std::unique_ptr<CaptureWindowBridge> capture_window_bridge_;
+
+  // 全局快捷键（Windows）：注册 / 注销 / WM_HOTKEY 转发，业务逻辑全在 Dart。
+  std::unique_ptr<WindowsShortcutBridge> shortcut_bridge_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
