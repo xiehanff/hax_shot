@@ -6,7 +6,7 @@ HaxShot 的原生层按平台拆成三个后端，对外只暴露一份 C ABI：
 rust/src/lib.rs     C ABI、错误状态、临时文件路径、跨平台 PNG 编码
 rust/src/linux.rs   Mutter ScreenCast + GStreamer + wl-copy
 rust/src/macos.rs   CoreGraphics + ImageIO + NSPasteboard
-rust/src/windows.rs GDI 抓屏 + 显示器枚举（Phase 1 只有 placeholder）
+rust/src/windows.rs GDI 抓屏 + 显示器枚举 / 选屏 + 冻结的目标元数据
 ```
 
 生成：
@@ -19,9 +19,12 @@ Windows: hax_shot_native.dll（和 hax_shot.exe 同目录，由 windows/CMakeLis
 
 ## 当前能力
 
-- 截图：抓取目标显示器一帧并写成临时 PNG；
+- 截图：抓取目标显示器一帧并写成临时 PNG（Linux PipeWire / macOS CoreGraphics /
+  Windows GDI）；
 - 目标显示器：`--display <id>` 参数（托盘宿主在触发时写入）→ 光标所在显示器 → 主显示器；
-- 剪贴板：写入图片剪贴板（Linux `wl-copy --type image/png`，macOS `NSPasteboard`）；
+  Windows 侧还额外冻结目标元数据供浮层使用（见下）；
+- 剪贴板：写入图片剪贴板（Linux `wl-copy --type image/png`，macOS `NSPasteboard`；
+  Windows 待 Phase 5）；
 - 快捷键：**不经过 Rust**。macOS 由宿主进程原生侧的 `ShortcutBridge`（Carbon `RegisterEventHotKey`）注册、Dart 侧 `MacosShortcutService` 管状态，触发时再启动 `--capture` 子进程；
 - 通过 C ABI 暴露给 Dart FFI，并统一返回可读错误信息。
 
@@ -52,27 +55,45 @@ Swift 侧 `macos/Runner/CaptureDisplay.swift` 通过 `dlopen` 调 `hax_shot_targ
 拿同一块屏，不再重复实现规则。详见
 [开发指南 6.9](../docs/development-guide.md#69-多显示器)。
 
-## Windows 实现（进行中）
+## Windows 实现
 
-Phase 1 只提供 placeholder：`capture_screen_impl` / `copy_png_impl` 返回可读的
-"not implemented yet"，`cursor_display_impl` 返回 `0`（= 未指定，不是主屏），
-`screen_capture_authorized_impl` / `request_screen_capture_access_impl` 返回 `1`
-（Windows 没有 macOS 那种屏幕录制授权流程）。placeholder 不 `panic` / `unwrap`，也不返回
-伪造的成功。
+- `GetDC(NULL)` → `CreateCompatibleBitmap`（用 screen DC 创建）→ `BitBlt(SRCCOPY | CAPTUREBLT)`
+  → 先 `SelectObject` 选回旧对象，再 `GetDIBits`（top-down，`biHeight = -height`）；
+- DIB 是 BGRA：转 RGBA 时 alpha 一律写 255（普通 GDI 截图的 alpha 不可靠）；
+- 位图 / DC 全部用 RAII guard 回收，PNG 写盘失败会删掉半成品；
+- 尺寸先校验 `0 < w,h <= 32768`、`stride = w * 4` 与 `stride * h` 不溢出；
+  `GetDIBits` 的扫描行数 `!= height` 或系统改写了 `BITMAPINFOHEADER` 都算失败；
+- 不把鼠标指针合成进截图，也不承诺 HDR / 受保护内容 / 独占全屏（见 docs 的 §66 范围）；
+- 剪贴板仍是 placeholder，Phase 5 实现。
+
+选屏规则只在 Rust 实现一次（`rust/src/windows.rs` 的 `resolve_target_monitor`）：
+`--display <id>` → 光标所在显示器 → 主显示器；`0` 表示“未指定”而不是“主屏”。
+C++ / Dart **不允许**自己调 `EnumDisplayMonitors` / `MonitorFromPoint` / `GetMonitorInfoW`，
+也不允许重算 hash。
 
 Windows 专用的两个导出（`#[cfg(target_os = "windows")]`）共用同一个
 `#[repr(C)] HaxShotTargetMonitor`（`valid` / `error_code` / `display_id` / rcMonitor /
-`dpi` / `generation`）：
+`dpi` / `generation`，56 字节）：
 
 - `hax_shot_target_monitor(requested, out)`：只查询当前拓扑（诊断 / 预检用）；
 - `hax_shot_last_capture_target(out)`：读**本进程最近一次成功抓屏冻结**的元数据，摆浮层必须用它。
 
-错误码 `0 = ok`、`1 = NO_TARGET`、…、`7 = NOT_IMPLEMENTED`；可读文本仍走 `hax_shot_last_error`。
+错误码 `0 = ok`、`1 = NO_TARGET`、`2 = ENUM_FAILED`、`3 = DEVICE_NAME_FAILED`、
+`4 = HASH_COLLISION`、`5 = TARGET_STALE`、`6 = INVALID_ARGUMENT`；失败时也会往 `out`
+写一份 `valid = 0` 的结构体，可读文本仍走 `hax_shot_last_error`。
 
-选屏规则与 macOS 一致（`--display` → 光标所在显示器 → 主显示器；`0` 表示未指定）；
-显示器 id 是 `MONITORINFOEXW.szDevice` 的 FNV-1a 32 位（offset basis `0x811C9DC5`、
-prime `0x01000193`，逐 UTF-16 code unit 取低字节，不含终止 NUL）。规则只在 Rust 实现一次：
-C++ / Dart **不允许**自己调 `EnumDisplayMonitors` / `GetMonitorInfoW`，也不允许重算 hash。
+`display_id` 是 `MONITORINFOEXW.szDevice` 的 FNV-1a 32 位（offset basis `0x811C9DC5`、
+prime `0x01000193`，逐 UTF-16 code unit 取低字节，不含终止 NUL，不改大小写）；
+本机实测 `\\.\DISPLAY1` → `3229624234`。hash 落到 0 的屏不可寻址，两块屏相同就是
+`HASH_COLLISION`（明确失败，不“选第一个假装成功”）。
+
+`reserved` 是抓屏诊断位域：bit 0 = 疑似全黑，bit 8..=15 = 采样平均亮度（只告警，
+不判失败）；只查询的 `hax_shot_target_monitor` 始终填 0。
+
+抓屏成功才写冻结槽（`OnceLock<Mutex<...>>`，抓屏线程与调用方不同线程），
+`generation` 每成功一次 +1；目标消失 / rect 变化时 `hax_shot_last_capture_target`
+返回 `TARGET_STALE`，本次截图作废。约束与实测数据见
+[开发指南 18.9–18.13](../docs/development-guide.md#189-目标显示器选屏规则与-display-idphase-2)。
 
 ## 构建
 

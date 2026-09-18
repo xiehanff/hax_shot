@@ -1825,12 +1825,181 @@ Windows 上 Rust DLL 是**动态加载**的（`DynamicLibrary.open`），不是�
 `NativeBridge.instance` 是惰性 static，宿主启动不一定碰它；真实触发点是
 `_displayArguments()`（读光标显示器）与 `--capture` 的抓屏路径。
 
-### 18.8 Phase 1 结束时仍未实现的 Windows 分支（已知，不是回归）
+### 18.8 Phase 1 结束时仍未实现的 Windows 分支
 
 - `lib/features/settings/shortcut_service.dart` 的平台选择只有 macOS 与“其它（= GNOME）”：
   Windows 上会去跑 `gsettings`，于是启动链的 `welcome_init_failed`（`ProcessException`），
   **首次启动的欢迎页不会弹**。托盘菜单、托盘图标不受影响（`tray_init_success`）。真正的
   修法是 Phase 4 的显式三平台选择（Windows 走 RegisterHotKey + 原生桥）；
-- Rust 侧全是 placeholder：抓屏返回 `-1` + “Windows capture backend is not implemented yet”，
-  剪贴板同理，`hax_shot_cursor_display` 返回 0，两个元数据导出返回 `7`（NOT_IMPLEMENTED）。
-  所以“立即截屏”会停在可读的失败面板，这是预期行为。
+- Rust 侧只剩剪贴板还是 placeholder（`copy_png_impl` 返回
+  “Windows clipboard backend is not implemented yet”，Phase 5 实现）。抓屏、选屏与
+  目标元数据已在 Phase 2 实现（见 18.9–18.12）。
+
+### 18.9 目标显示器：选屏规则与 display id（Phase 2）
+
+规则在 `rust/src/windows.rs` 实现一次，macOS / Windows **共用同一套形状**
+（macOS 是 `resolve_target_display`，Windows 是 `resolve_target_monitor`）：
+
+```text
+requested（--display <id>）非 0 且仍存在 → 用它
+否则                                   → 光标所在显示器
+再不行                                 → 主显示器
+```
+
+- `0` 的含义是“未指定”，**不是**“主屏”；`requested` 无效是正常分支（用户可能刚拔掉
+  副屏），既不报错也不造一个假 id，只是退回下一候选；
+- `--display <id>` 由 Rust 自己从 `std::env::args()` 解析（`lib.rs` 的
+  `display_id_from_arguments`，macOS / Windows 共用）；Dart 只负责把托盘宿主那一刻的
+  `cursorDisplay()` 传下去（`lib/app.dart` 的 `_displayArguments()`）。
+
+**display id 是 FNV-1a 32 位**，输入是 `MONITORINFOEXW.szDevice`（形如 `\\.\DISPLAY1`）：
+
+```text
+offset_basis = 0x811C9DC5, prime = 0x01000193
+逐 UTF-16 code unit 取低字节（szDevice 本身是 ASCII）
+每字节：hash ^= byte; hash = hash.wrapping_mul(prime)
+遇到终止 NUL 停止（不含 NUL），不做大小写转换
+```
+
+本机实测：`\\.\DISPLAY1` → `3229624234`（`0xC08027AA`）。策略：
+
+- `hash == 0`：保留值冲突，这块屏**无法寻址**，记诊断且不选它；
+- 两块屏 hash 相同：返回 `HASH_COLLISION(4)`，不允许“选第一个假装成功”；
+- 这个 id 只是**当前拓扑内**的标识，不承诺重启 / 重插后还代表同一台物理显示器。
+
+**只由 Rust 实现一次**：C++ / Dart 不允许调 `EnumDisplayMonitors` / `MonitorFromPoint` /
+`GetMonitorInfoW`，不允许自己写一份 hash，也不允许“拿不到元数据就自己猜个主屏”。
+
+### 18.10 冻结语义与元数据 ABI（Phase 2）
+
+共用同一个 resolver **不等于**共用同一个结果：`requested` 缺失 / 失效时，两次调用之间
+鼠标移动或热插拔完全可能“抓 A 摆 B”。所以 Windows 是“一次解析、两处消费”：
+
+```text
+capture_screen_impl：resolve 一次 → 抓帧 → 写 PNG → 成功才把
+  {generation, display_id, rect, dpi} 写进进程内的冻结槽
+浮层摆位：只读 hax_shot_last_capture_target()，不重新枚举、不重新读鼠标
+```
+
+`generation` 每成功一次抓屏 +1（u64）。冻结槽是
+`static CAPTURE_STATE: OnceLock<Mutex<CaptureState>>`：抓屏跑在 worker isolate 的线程上，
+读元数据在别的线程，所以不能用 `Cell` / `Rc`（宿主进程内不跨进程、不持久化）。
+
+两个 Windows 专用导出（`#[cfg(target_os = "windows")]`，共用 `#[repr(C)]
+HaxShotTargetMonitor`，56 字节）：
+
+```text
+hax_shot_target_monitor(requested: u32, out: *mut HaxShotTargetMonitor) -> i32   只查询，不抓屏；诊断/预检用
+hax_shot_last_capture_target(out: *mut HaxShotTargetMonitor) -> i32             读冻结的本次目标；摆浮层只能用这个
+```
+
+错误码（`error_code` 与返回值同一套，便于 Dart / C++ 两边都读）：
+
+| 值 | 名称 | 含义 |
+| --- | --- | --- |
+| 0 | ok | 成功；`valid=1` |
+| 1 | NO_TARGET | requested / cursor / primary 都拿不到；抓屏前读冻结槽也是它 |
+| 2 | ENUM_FAILED | `EnumDisplayMonitors` 失败（带真实 Win32 错误码） |
+| 3 | DEVICE_NAME_FAILED | `GetMonitorInfoW` 失败（带真实 Win32 错误码） |
+| 4 | HASH_COLLISION | 两块屏 id 相同，或 hash 落到保留值 0 |
+| 5 | TARGET_STALE | 冻结的 `display_id` 已经不在拓扑里，或它的 `rcMonitor` 变了 |
+| 6 | INVALID_ARGUMENT | `out` 指针为空 |
+
+约定：
+
+- 失败时**仍然**往 `out` 写一份 `valid=0` + `error_code=<code>` 的结构体（其它字段清零），
+  调用方可以统一读；可读文本走现有的 `hax_shot_last_error`，不往结构体里塞字符串；
+- `reserved` 是抓屏诊断位域（摆位不看它）：bit 0 = 疑似全黑，bit 8..=15 = 采样平均亮度；
+  `hax_shot_target_monitor`（只查询）始终填 0；
+- `TARGET_STALE` 是 §8.9 的取消信号：目标消失 / 尺寸变化时本次截图作废，**不**拿旧图
+  套新屏、不退回主屏。校验只做“这块屏还在不在、rect 变没变”的只读比对，不重新解析
+  fallback；DPI 变化不在这一步判（Phase 3 摆位时比对 dpi）。
+
+### 18.11 GDI 抓屏：资源契约、尺寸与错误码（Phase 2）
+
+`rust/src/windows.rs` 的 `capture_frame` 按下面顺序走，资源全用 RAII guard 包住
+（`ScreenDc` / `MemoryDc` / `Bitmap`，Drop 顺序 = 位图 → memory DC → screen DC）：
+
+```text
+screen_dc = GetDC(NULL)
+mem_dc    = CreateCompatibleDC(screen_dc)
+bitmap    = CreateCompatibleBitmap(screen_dc, w, h)   ← 必须用 screen DC
+SelectObject(mem_dc, bitmap)
+BitBlt(mem_dc, 0, 0, w, h, screen_dc, left, top, SRCCOPY | CAPTUREBLT)
+SelectObject(mem_dc, old)                             ← ★ 先选回旧对象，再 GetDIBits
+GetDIBits(screen_dc, bitmap, 0, h, buffer, &bmi, DIB_RGB_COLORS)
+```
+
+写的时候不能踩的坑：
+
+- `CreateCompatibleBitmap` 用刚建的 memory DC 会得到 1×1 单色位图；
+- `GetDIBits` 时位图**不能**还被任何 DC 选中（所以先选回旧对象；`Bitmap::drop` 再兜一次）；
+- `left/top` 用 `rcMonitor` 的物理坐标，允许为负，**不** clamp、也不裁成“主屏起点为 0”；
+- 行方向用 top-down（`biHeight = -height`），Flutter 侧不再翻转；验收看的是“图不是上下
+  颠倒的”：拿屏幕 DC 的 `GetPixel(0,0)` / `GetPixel(0,h-1)` 和 PNG 同位置比，本机 4/4
+  命中、垂直翻转后 0/4 命中；
+- alpha 一律写 255，绝不把未初始化的 alpha 写进 PNG（DIB 是 BGRA，转换时顺手改);
+- `GetDIBits` 的返回值是**扫描行数**：`!= height` 就是失败，不按“缓冲区前 N 行有数据”凑合；
+  同时确认系统没有默默改掉我们自己填的 `biSize / biWidth / biHeight / biBitCount /
+  biCompression`；
+- 任何 Win32 调用之前先校验：`0 < w,h <= 32768`、`stride = w * 4`、`stride * h` 都用
+  `checked_mul`；超过上限直接失败，不静默截断；
+- PNG 写盘失败要删掉半成品（0 字节或半截 PNG），删失败不能掩盖主错误。
+
+错误按每个 API 自己的契约取（不要一律 `GetLastError`）：
+
+| API | 失败时取什么 |
+| --- | --- |
+| `EnumDisplayMonitors` / `GetMonitorInfoW` / `GetCursorPos` / `BitBlt` | 文档承诺 set last error，失败后**立刻**读 |
+| `GetDC` / `CreateCompatibleDC` / `CreateCompatibleBitmap` / `SelectObject` | 只承诺返回空句柄，不说 set last error → 记操作名 + 自有错误码 |
+| `GetDIBits` | 返回值是扫描行数 → 记返回值与期望高度，不声称是系统错误 |
+| `GetDpiForMonitor` | `HRESULT` → 失败就把 dpi 填 0 |
+
+错误信息格式（和现有三个平台一致，保留操作名 + 真实 native code）：
+
+```text
+backend=gdi requested=3229624234 source=cursor display_id=3229624234 rect=(0,0,2560,1440)
+  size=2560x1440 stride=10240 dpi=96 BitBlt failed at (0,0,2560,1440): Win32 error 5
+GetDIBits copied 0 scan lines, expected 1440 (bitmap 2560x1440)
+```
+
+`SRCCOPY | CAPTUREBLT` 只是“尽量包括 layered window”，**不是**对硬件 overlay / 鼠标 /
+色彩管理的承诺：本版不合成鼠标指针，也不做 HDR / 受保护内容（§66）。
+
+### 18.12 全黑只告警，不判错（Phase 2）
+
+抓完图后按步长采样（最多 4096 个像素）算平均亮度，写进冻结元数据 `reserved` 的
+bit 8..=15；“平均亮度 ≤ 2 且最亮像素 ≤ 16”时置 bit 0。日志里能看到：
+
+```text
+capture_target_resolved  backend=gdi display_id=… rect=(…) size=2560x1440 dpi=96 generation=1
+capture_suspected_blank  level=warning 疑似全黑（仅告警）：mean_luma=… size=… display_id=…
+```
+
+`capture_target_resolved` 由 `lib/features/capture/capture_page.dart` 抓屏成功后调
+`NativeBridge.lastCaptureTarget()` 记录（同一份冻结数据，不是重新枚举），失败也不影响
+已经成功的抓屏。
+
+黑桌面 / 全黑壁纸 / 过场动画都可能合法地产生“全黑”，所以**不允许**据此自动判失败、
+自动重截，也不把截图内容写进日志。真的出现**可复现**黑图时：先拿日志里的 backend /
+尺寸 / API 结果 / 采样值，再决定是否降级到 `PrintWindow` / WGC / DXGI（Phase 2 不预先实现）。
+
+### 18.13 Phase 2 本机实测结论（2026-09-19）
+
+单屏 2560x1440 @100%（96 dpi）上，仓库外的一次性 `dart:ffi` 脚本直接调 DLL：
+
+```text
+cursor_display()                3229624234（两次一致、非 0）
+target_monitor(0)               ok，display_id 与 cursor_display() 相同
+                                 rect (0,0,2560,1440)，width/height 2560x1440，dpi 96
+target_monitor(0xDEADBEEF)      ok，退回光标所在显示器（requested 无效是正常分支）
+last_capture_target() 抓屏前    NO_TARGET(1)，valid=0
+capture_screen()                0，PNG 路径存在，1.4MB，IHDR 2560x1440 RGBA8
+last_capture_target() 抓屏后    ok，generation=1，display_id/rect 与抓屏前解析一致
+像素抽查                        64 个样本 alpha 全 255、非纯黑 100%、均值 luma ≈105
+角点交叉验证                    屏幕 GetPixel 与 PNG 同位置 4/4 命中（方向 + 通道序正确）
+```
+
+**本机测不了、只能标“待验”**：副屏 / 多屏（含负坐标的左副屏）、混合 DPI、Windows 10、
+HDR / 受保护内容、独占全屏。多屏相关的代码路径（`source=requested` 选中副屏、
+`TARGET_STALE`）在本机无法触发。
