@@ -1590,7 +1590,12 @@ tag 去掉 `v` 后必须匹配 `pubspec.yaml` 中 `+` 前的版本号：
 version: 1.4.8+1  →  git push origin v1.4.8
 ```
 
-推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、Debian/Ubuntu DEB 和 Fedora RPM，最后把三个包一起上传到对应的 GitHub Release。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run release.yml` 干跑。macOS 签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`packaging.md` 的发布一节](./packaging.md#发布tag版本约定与ci)。
+推送 tag 后，工作流会先校验 tag 与 `pubspec.yaml` 版本一致，再分别构建 macOS arm64 DMG、
+Windows x64 ZIP、Debian/Ubuntu DEB 和 Fedora RPM；四个平台 job 全部成功后才汇总上传到对应的
+GitHub Release（`release.needs` 里带着 `windows`，不存在“Windows 产物还没好就把 Release 发
+出去”的窗口期）。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run
+release.yml` 干跑——Windows 这一路**还没有真实跑过一次**，首次 tag 发布前尤其需要。macOS
+签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`packaging.md` 的发布一节](./packaging.md#发布tag版本约定与ci)。
 
 ## 14. 已知限制和未完成项
 
@@ -1619,8 +1624,10 @@ Windows（清单与验收状态见 [18. Windows 平台适配](#18-windows-平台
 代码层面 Phase 0–5 已落地：GDI 抓屏 + 冻结的目标元数据、多显示器浮层（`capture_window_bridge`）、
 自建快捷键桥（`windows_shortcut_bridge` + `WindowsShortcutService`）、图片剪贴板
 （CF_DIBV5 + CF_DIB）、HKCU Run 自启动、平台文案，窗口可见性完全由 Dart 控制。
-未完成的是**打包与发布**（Phase 9 的 `release.yml` windows job 与 ZIP 完整性实测）
-与用户验收本身；多屏 / 负坐标 / 混合 DPI / Win10 在本机缺设备，逐项状态见 18.17。
+发布链路已经接上：`release.yml` 的 `windows` job 会构建 → `scripts/package_windows_zip.ps1`
+补 app-local CRT 并打 ZIP → 上传 artifact，`release` 会等它。但**这些都还没实跑**——release
+干跑、真实 tag 发布、无 VS 干净机器解压运行（§51.2/§52）三项都待验，与用户验收本身一样不能
+写成“已验证”；多屏 / 负坐标 / 混合 DPI / Win10 在本机缺设备，逐项状态见 18.17。
 历史上 `c7a65ec` 的提交信息写过“新增 Windows 支持”，与当时实际不符。
 
 两个平台共同：

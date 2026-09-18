@@ -414,12 +414,16 @@ Flutter 官方 Windows 分发文档要求除了 exe/DLL/data 之外还要带 Vis
 - `verify.yml` 已有 `windows` job（PR / main push）：`windows-latest`，`flutter analyze` +
   `cargo fmt --check` + `cargo check` + `flutter build windows --release` + bundle 完整性
   （同样缺文件 throw）。它**不跑测试**，也不上传 artifact；
-- `release.yml` 的 `windows` job：**尚未落地**（计划里的 Phase 9）。目标形态是
-  `needs: preflight`、跑构建 → `pwsh scripts/package_windows_zip.ps1` →
+- `release.yml` 的 `windows` job：`needs: preflight`，`windows-latest`，超时 40 分钟。跑
+  `flutter build windows --release` → `pwsh scripts/package_windows_zip.ps1` →
   `actions/upload-artifact@v4`（name `hax-shot-windows-${{ github.ref_name }}`，与
-  `hax-shot-macos-*` 同风格，`retention-days: 30`，`if-no-files-found: error`），最后把
-  `windows` 加进 `release.needs`；`workflow_dispatch` 干跑仍然只产 artifact、不发布。
-  在此之前 Release 资产里只有 DMG / DEB / RPM。
+  `hax-shot-macos-*` 同风格，`retention-days: 30`，`if-no-files-found: error`）。上传前多一步
+  按 `pubspec.yaml` 算出期望的 ZIP 名再核对，版本号不硬编码；`release.needs` 已经带上
+  `windows`，Windows 产物没好之前不会发 Release。`workflow_dispatch` 干跑仍然只产
+  artifact、不发布（一样会打 ZIP 并上传，可以先验打包链路）；
+- **这套配置还没有被真实跑过**：本地只用假 bundle 验过 `package_windows_zip.ps1` 本身
+  （happy path + 三条失败路径），Release 干跑与真实 tag 发布都还没执行，“无 VS 机器解压即用”
+  也还没测（见下面第 5 节）。
 
 ### 5. 干净机器验证（发布前必须做一次）
 
@@ -481,8 +485,9 @@ git push origin v1.5.0
 
 ### 干跑（不发布）
 
-`release.yml` 还支持 `workflow_dispatch`：构建 job（Linux、macOS）全部执行并上传
-Actions artifact，但最后一步发布 Release 只在 tag push 时运行。改打包脚本或工作流
+`release.yml` 还支持 `workflow_dispatch`：构建 job（Linux、macOS、Windows）全部执行并上传
+Actions artifact（Windows 这一路会实打实地跑构建 + `package_windows_zip.ps1`，可以先验打包
+链路），但最后一步发布 Release 只在 tag push 时运行。改打包脚本或工作流
 之后，先在 Actions 页面手动 Run workflow（或 `gh workflow run release.yml`）干跑一次，
 确认绿了再打 tag——不要用真 tag 试错。
 
@@ -493,11 +498,11 @@ tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号。工
 
 | `pubspec.yaml` | Git tag | Release Assets |
 |---|---|---|
-| `1.5.0+1` | `v1.5.0` | `HaxShot-1.5.0-arm64.dmg`、`hax-shot_1.5.0+1_amd64.deb`、`hax-shot-1.5.0-1.x86_64.rpm` |
+| `1.5.0+1` | `v1.5.0` | `HaxShot-1.5.0-arm64.dmg`、`HaxShot-1.5.0-windows-x64.zip`、`hax-shot_1.5.0+1_amd64.deb`、`hax-shot-1.5.0-1.x86_64.rpm` |
 
 其中：
 
-- `1.5.0` 是应用版本，也是 DMG 名字和 RPM 的 Version；
+- `1.5.0` 是应用版本，也是 DMG 名字、Windows ZIP 名字和 RPM 的 Version；
 - `+1` 是 DEB 的完整版本（`1.5.0+1`）和 Fedora RPM 的 Release；
 - RPM 在 Fedora 本机构建时会带 `.fc44`，在 CI（Ubuntu 的 rpmbuild）里没有这个发行版后缀；
 - `v1.5.0` 是 GitHub Release 的 tag 和页面名称。
@@ -536,22 +541,24 @@ git push origin v1.5.0
 
 ### 4. GitHub Actions 做什么
 
-`release.yml` 分成四个 job：
+`release.yml` 分成五个 job：
 
 | job | runner | 作用 |
 |---|---|---|
 | `preflight` | `ubuntu-24.04` | 校验 tag 与 `pubspec.yaml` 版本一致（会消耗 macOS 分钟数之前就失败） |
 | `linux` | `ubuntu-24.04` | 构建 Linux release bundle，再打 `--skip-build` 的 DEB 和 RPM，校验两个包都带上 `libhax_shot_native.so` |
 | `macos` | `macos-14`（arm64） | 校验 runner 架构，签名（可选）→ 公证（可选）→ 打 DMG，校验 app、Rust dylib 都是 arm64 |
-| `release` | `ubuntu-24.04` | 汇总两个平台的产物，创建或更新 GitHub Release |
+| `windows` | `windows-latest` | 构建 Windows release bundle，`package_windows_zip.ps1` 补 app-local CRT 并打 ZIP（缺文件直接 throw），再按 `pubspec.yaml` 核对 ZIP 名 |
+| `release` | `ubuntu-24.04` | 汇总三个平台的产物，创建或更新 GitHub Release |
 
 每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
 
-> Windows 不在上面的表里：它的 `windows` job（构建 + ZIP + `release.needs`）属于计划里的
-> Phase 9，**尚未加进 `release.yml`**，接入方式见上面的「Windows：ZIP 包」第 4 节。
+> `windows` 这一路（构建 → ZIP → 上传）的配置已经就位，但还没有真实跑过一次：首次 tag
+> 发布前先按上面的「干跑（不发布）」手动跑一遍。ZIP 内容清单与 CRT 策略见
+> [Windows：ZIP 包](#windowszip-包)。
 
 Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
-（Linux 与 macOS 两个 job），tag 应该指向已经过检查的 commit。
+（Linux、macOS 与 Windows 三个 job），tag 应该指向已经过检查的 commit。
 
 如果同一个 tag 的 Release 已经存在（例如补传 macOS 产物），`release` job 会用
 `--clobber` 覆盖同名资产，而不会创建第二个 Release。
@@ -587,9 +594,10 @@ Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上�
 在仓库的 **Releases** 页面确认：
 
 - Release tag 与 `pubspec.yaml` 版本一致，且不是 Draft；
-- Assets 里三个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
-  `HaxShot-<版本>-arm64-unsigned.dmg`）、`hax-shot_<版本>_amd64.deb`、
-  `hax-shot-<版本>-<release>.x86_64.rpm`；
+- Assets 里四个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
+  `HaxShot-<版本>-arm64-unsigned.dmg`）、`HaxShot-<版本>-windows-x64.zip`、
+  `hax-shot_<版本>_amd64.deb`、`hax-shot-<版本>-<release>.x86_64.rpm`（少哪一个就先看对应
+  job 是不是失败或被跳过：`windows` 缺席意味着 `release` 根本没有跑）；
 - 如果只有 `-unsigned` DMG，Release 正文顶部应该已经有未签名警告；
 - Release notes 由 `--generate-notes` 生成（会带上本次 tag 之前的 PR/commit 列表）。
 
@@ -608,6 +616,10 @@ sudo dnf install ./hax-shot-1.5.0-1.x86_64.rpm        # 或 sudo apt install ./h
 /usr/share/hax-shot/install-gnome-shortcut.sh
 ```
 
+验证 Windows 产物：解压 `HaxShot-<版本>-windows-x64.zip` 到固定目录，双击 `hax_shot.exe`
+（未签名，SmartScreen 提示属于预期）。这一步在**没装 VS / 没装过 VC++ 运行库**的机器上做
+才算数，见「Windows：ZIP 包」第 5 节。
+
 ### 7. 失败处理
 
 - **版本检查失败**：确认 tag 去掉 `v` 后等于 `pubspec.yaml` 中 `+` 前的版本；
@@ -616,9 +628,12 @@ sudo dnf install ./hax-shot-1.5.0-1.x86_64.rpm        # 或 sudo apt install ./h
 - **macOS 构建失败**：注意 runner 必须是 arm64，项目不支持 Intel Mac，也不做 universal；
 - **签名/公证失败**：先确认证书没过期、`MACOS_SIGN_IDENTITY` 与导入的证书完全一致；
   公证凭据错误会直接在 `notarytool store-credentials` 或 submit 阶段报错；
+- **Windows 打包失败**：本地复现 `pwsh scripts/package_windows_zip.ps1`（先 `flutter build
+  windows --release`）。脚本和 CI 走同一套代码：缺 CRT / 缺 bundle 文件 / ZIP 里多了一层
+  目录都会 throw，`-SkipCrt` 只在本地查 ZIP 内容时用，CI 与发布不能用；
 - **Release 上传失败**：确认工作流有 `contents: write` 权限，或重跑同一个 tag 的 workflow。
 
 需要重新上传同名安装包时，修复后重跑同一个 tag 的 workflow 即可覆盖资产（见第 4 节）。
 
-一句话总结：**main push 只更新代码，`git push origin vX.Y.Z` 才构建 DMG/DEB/RPM 并发布
+一句话总结：**main push 只更新代码，`git push origin vX.Y.Z` 才构建 DMG/DEB/RPM/Windows ZIP 并发布
 GitHub Release。**

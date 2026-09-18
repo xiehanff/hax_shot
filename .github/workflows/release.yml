@@ -265,11 +265,81 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  windows:
+    name: Windows (ZIP)
+    needs: preflight
+    # Runner 是 windows-latest（x64）；Windows 版只发 x64，与 packaging.md 的产物命名一致。
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      # pwsh 只检查整个 step 最后一条命令的退出码，中间命令失败会被吞掉，所以每步都
+      # 显式看 $LASTEXITCODE（verify.yml 的 windows job 同样的坑）。构建由 CMake 调 cargo
+      # （windows/CMakeLists.txt），不额外加 cargo 缓存：现有 Linux/macOS job 也没有。
+      - name: Build Windows release bundle
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          if ($LASTEXITCODE -ne 0) { throw 'windows build failed' }
+
+      # 打包脚本自己就是完整性门禁：拷 app-local VC 运行库、缺任何必需项 throw、盘点插件 DLL、
+      # 复查 ZIP 根下确实是 hax_shot.exe。不要加 -SkipCrt：跳过 CRT 的 ZIP 在没装运行库的
+      # 机器上起不来。脚本只打包、不重新构建（计划 §51–§52）。
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/package_windows_zip.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'package_windows_zip.ps1 failed' }
+
+      # ZIP 名里的版本只来自 pubspec：这里按同一份 pubspec 算出期望文件名再核对一次，
+      # 保证 artifact 和 tag 校验用的是同一个版本号（不硬编码版本）。
+      - name: Verify Windows ZIP
+        shell: pwsh
+        run: |
+          $match = Select-String -Path pubspec.yaml -Pattern '^version:\s*(.+)$' |
+            Select-Object -First 1
+          if (-not $match) { throw 'cannot read version from pubspec.yaml' }
+          $version = $match.Matches.Groups[1].Value.Trim().Split('+')[0]
+          $zip = "build/windows/HaxShot-$version-windows-x64.zip"
+          if (-not (Test-Path $zip)) { throw "expected ZIP not found: $zip" }
+          $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "ZIP: $zip ($size MB)"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hax-shot-windows-${{ github.ref_name }}
+          path: build/windows/HaxShot-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Publish GitHub Release
     # 只在真正的 tag push 时发布；workflow_dispatch 干跑只验证构建产物。
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [preflight, linux, macos]
+    # windows 不能漏：否则 Linux/macOS 好了就把 Release 发出去，Windows 产物还没上传。
+    needs: [preflight, linux, macos, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
