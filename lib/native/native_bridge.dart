@@ -130,8 +130,10 @@ final class NativeBridge {
   /// 下面的日志闭包捕获 `this`，所以真正的 isolate 调用必须走静态的
   /// [_copyPngInWorker]；本方法自己**不能**直接调 `Isolate.run`。
   Future<void> _copyPngToClipboardWithLog(Uint8List pngBytes) {
-    // macOS 的 NSPasteboard 只能在主线程访问；Linux 的 wl-copy 需要等子进程退出，
-    // 所以只有 Linux 放到 worker isolate。
+    // macOS 的 NSPasteboard 只能在主线程访问，必须直接在主 isolate 调；Linux 的
+    // wl-copy 要等子进程退出，Windows 的 `copy_png_impl` 也要阻塞等自己的剪贴板
+    // 专职线程回复（最长是 OpenClipboard 的 5×20ms 重试窗口），这两条都会卡住
+    // platform 线程，所以换成 worker isolate。
     final Future<void> copied;
     if (Platform.isMacOS) {
       _copyPngToClipboardSync(pngBytes);
