@@ -2144,3 +2144,122 @@ hwnd=0x2D04CA class=FLUTTER_RUNNER_WIN32_WINDOW window=(0,0,3840,2160)
 
 本机测不了（**待验**）：副屏（含左侧负坐标副屏）、混合 DPI、跨屏摆浮层、拔屏触发的
 `TARGET_STALE`、`WM_DPICHANGED` 的真实触发，以及 AI 面板路径里的 `exitOverlay` 恢复。
+
+### 18.15 Phase 5：剪贴板 / 自启动 / 保存路径 / 托盘菜单
+
+#### Windows 剪贴板后端（`rust/src/windows.rs`）
+
+- **owner HWND 不是可选项**：`OpenClipboard(NULL)` 之后 `EmptyClipboard` 会把 owner 置成
+  NULL，随后的 `SetClipboardData` 必然失败。这里由 Rust 自己起一个专职线程
+  （`hax-shot-clipboard`），用**系统类 `STATIC`** 建一个 0×0、`WS_POPUP`、`WS_EX_TOOLWINDOW`
+  的隐藏窗口当 owner：线程活着窗口就活着（进程生命周期内不销毁），窗口只负责当 owner，
+  不处理业务消息；`recv_timeout(20ms)` + `PeekMessageW`/`DispatchMessageW` 的消息泵保证
+  创建它的线程一直在处理消息。用系统类是为了免掉 `RegisterClassW` 与模块句柄；
+- **即时数据，不用 delayed rendering**：内存交给系统后与本进程是否存活无关——抓屏子进程
+  复制完立刻硬退出也必须能粘。实测确认退出后仍可读回；
+- **两种格式一起写**：CF_DIBV5（`BITMAPV5HEADER` 124 字节 + `BI_BITFIELDS` + R/G/B/A 掩码 +
+  `LCS_sRGB`）是基线；CF_DIB（`BITMAPINFOHEADER` + `BI_RGB`）是给 GDI 消费者的兼容副本。
+  两者都是 **top-down（负 `biHeight`）**、BGRA、32bpp，和抓屏/PNG 的行顺序一致，不需要翻转。
+  系统另外会自动合成 CF_BITMAP（实测剪贴板格式列表是 17, 8, 2）；
+- **内存契约**：`GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT)`，拷完 `GlobalUnlock`；
+  `SetClipboardData` 成功后所有权归系统（**不** free、**不** write），失败立刻 `GlobalFree`；
+  每次成功 `OpenClipboard` 都 `CloseClipboard`（写入失败也要关）；
+- **重试**：`OpenClipboard` 最多 5 次、每次间隔 20ms（≈80ms），失败串进错误信息：
+  `OpenClipboard failed after 5 attempts (~80 ms): Win32 error 5; another process may be holding
+  the clipboard open`。禁止无限循环；
+- PNG → RGBA 用 `png` crate 解码，调色板/灰度/16 位先 `normalize_to_color8()` 归一化，
+  不假设“只有自己产出的 PNG”。
+
+#### 踩过的坑：`Isolate.run` 闭包会把 `DynamicLibrary` 塞进 isolate 消息
+
+`native_bridge.dart` 的剪贴板日志（`copyPngToClipboard` 里的 `then/onError` 闭包）捕获了
+`this`，而 Dart 把**同一方法帧里的所有闭包放在同一个上下文**里：于是 `Isolate.run` 的闭包
+连带 `NativeBridge` 实例（含 `DynamicLibrary`）一起被编组，发送阶段直接抛
+
+```text
+Invalid argument(s): Illegal argument in isolate message: (object is a DynamicLibrary)
+<- Instance of 'NativeBridge' (from package:hax_shot/native/native_bridge.dart)
+```
+
+**native 侧根本不会被调到**，所以“主 isolate 直接调 DLL”的脚本全绿，UI 点“复制”却必失败。
+
+规则：**`Isolate.run` 只能写在 static 方法里**，且那个方法帧里不能有别的捕获 `this` 的闭包。
+现在的形态是 `copyPngToClipboard`（检查参数）→ `_copyPngToClipboardWithLog`（日志闭包）→
+`_copyPngInWorker`（static，唯一的 `Isolate.run`）。`captureScreen()` / `encodePng()` 没这个问题：
+前者帧里只有 isolate 闭包、闭包体内只碰静态单例；后者帧里只有局部变量
+（`pixels`/`width`/`height`/`expected`），没有任何捕获 `this` 的同级闭包。
+
+判定方法：异常信息里出现 `DynamicLibrary` 就说明闭包上下文带上了实例，改法就是把
+`Isolate.run` 挪进 static 方法。
+
+#### 开机自启动（`lib/features/settings/autostart_service.dart`）
+
+- 显式三平台选择（macOS / Windows / Linux），**没有** `else = Linux`；Windows 走
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下名为 `HaxShot` 的值，
+  数据是带引号的当前 exe 绝对路径；
+- 用 `package:ffi` 直接调 advapi32（`RegCreateKeyExW` / `RegQueryValueExW` /
+  `RegSetValueExW` / `RegDeleteValueW`），**不是** `reg.exe`：注册表 API 自己返回 LSTATUS，
+  失败原因（`LSTATUS 5（拒绝访问）`）能原样写进诊断日志；
+- `HKEY_CURRENT_USER` 必须传**符号扩展**后的 `0xFFFFFFFF80000001`（= -2147483647）；
+  传 `0x80000001` 系统不认这个预定义句柄；
+- `isEnabled()` 是“值 == 当前 exe”，不是“存在同名值”：ZIP 换目录后值还在但指向旧路径，
+  这时返回 false 并写一条 `autostart_stale_value` 警告；`setEnabled(true)` 写完**回读校验**，
+  不一致就抛错不报成功；`setEnabled(false)` 只删 `HaxShot` 这一个值（幂等，值不存在也算成功）；
+- 系统“任务管理器 → 启动”页的禁用状态存在 `StartupApproved`，应用**不去改**它，
+  只在设置页文案里提示用户去任务管理器恢复。
+
+#### 保存路径与文案
+
+- `capture_page.dart`：Windows 不指定 `initialDirectory`（`USERPROFILE\Pictures` 可能被
+  OneDrive 重定向或不存在），非 Windows 保持 `$HOME/Pictures`；
+- `Win` 标签与平台文案：`shortcut_service.dart` 的 `bindingDisplayLabel`、
+  `shortcut_settings_page.dart` 的录制即时 label / `_modifierHint` / `_autostartSubtitle`、
+  `first_run_guide.dart` 的权限说明；只有 macOS 提屏幕录制权限。
+
+#### 托盘菜单必须 `bringAppToFront: true`
+
+`tray_manager` 的 `popUpContextMenu()` 默认 `bringAppToFront = false`，插件于是**不调**
+`SetForegroundWindow(owner)`。`TrackPopupMenu` 的契约是 owner 窗口必须是前台窗口，否则菜单
+虽然弹了出来却收不到键盘/鼠标：**点菜单外面、按 Esc 都不会关**（本机实测：默认值下点任务栏
+菜单永远不消失；传 true 之后立刻正常）。所以 `lib/app.dart` 的 `_popUpTrayMenu()` 在 Windows
+上带 `bringAppToFront: true`（这个参数只对 Windows 生效；Linux 仍然直接 return，AppIndicator
+自己会弹菜单）。该参数被上游标了 `@Deprecated`，用 `// ignore: deprecated_member_use` + 注释
+说明理由。
+
+#### 本机实测（2026-09-19，3840x2160 @150% 单屏）
+
+剪贴板（仓库外脚本直调 DLL，以及真实 `NativeBridge` 路径的临时入口）：
+
+```text
+clipboard formats: 17, 8, 2
+CF_DIBV5: size=3840x-2160 bitCount=32 compression=3 sizeImage=33177600 globalSize=33177724
+          csType=0x73524742 masks R/G/B/A=0x00FF0000/0x0000FF00/0x000000FF/0xFF000000
+CF_DIB  : size=3840x-2160 bitCount=32 compression=0 sizeImage=33177600
+与 PNG 逐点比对：240 个采样点 RGB 全等、alpha 全 255；按相反行方向比有 224/240 不等
+（证明写进去的确实是 top-down）
+写剪贴板的进程退出、再等 4 秒后仍能读回；WinForms Clipboard::GetImage() 也能拿到 3840x2160
+占用路径：OpenClipboard failed after 5 attempts (~80 ms): Win32 error 5（有限重试，不卡死）
+真实 NativeBridge 路径的日志：clipboard_copy_success format=CF_DIBV5+CF_DIB size=3840x2160
+```
+
+自启动（临时入口 + 独立 `reg query` 交叉验证，验完恢复原状）：
+
+```text
+setEnabled(true)  → reg query: HaxShot  REG_SZ  "<Release 目录>\hax_shot.exe"
+外部写陈旧值      → isEnabled() == false（回读校验，不是“存在同名值就算开”）
+中文+空格路径     → REG_SZ 原样写入/读回
+setEnabled(false) → HaxShot 值消失，同键下 HaxShotKeepMe 没被动
+```
+
+托盘（脚本用插件自己的回调消息 `WM_USER+1` + `WM_LBUTTONUP`/`WM_RBUTTONUP` 模拟图标点击，
+等价于 `Shell_NotifyIcon` 的通知；菜单项用 `MN_GETHMENU` + `GetMenuItemRect` 定位后真点）：
+
+```text
+右键 → 菜单窗口（#32768）出现；点菜单外面 → 菜单关闭（修 bringAppToFront 之后）
+点“立即截屏”菜单项 → 日志 menu_capture_trigger → capture_child_started → overlay_ready
+点“退出”菜单项 → 进程退出
+```
+
+本机测不了（**待验**）：多屏/混合 DPI 下的剪贴板与保存对话框、真实鼠标点托盘图标
+（脚本只能模拟插件的回调消息）、睡眠唤醒后的托盘图标与快捷键、Windows 剪贴板历史（Win+V）、
+Paint / 浏览器 / IM 的手动粘贴。
