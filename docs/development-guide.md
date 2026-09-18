@@ -1623,7 +1623,7 @@ Windows（清单与验收状态见 [18. Windows 平台适配](#18-windows-平台
 
 代码层面 Phase 0–5 已落地：GDI 抓屏 + 冻结的目标元数据、多显示器浮层（`capture_window_bridge`）、
 自建快捷键桥（`windows_shortcut_bridge` + `WindowsShortcutService`）、图片剪贴板
-（CF_DIBV5 + CF_DIB）、HKCU Run 自启动、平台文案，窗口可见性完全由 Dart 控制。
+（PNG + CF_DIBV5 + CF_DIB）、HKCU Run 自启动、平台文案，窗口可见性完全由 Dart 控制。
 发布链路已经接上：`release.yml` 的 `windows` job 会构建 → `scripts/package_windows_zip.ps1`
 补 app-local CRT 并打 ZIP → 上传 artifact，`release` 会等它。但**这些都还没实跑**——release
 干跑、真实 tag 发布、无 VS 干净机器解压运行（§51.2/§52）三项都待验，与用户验收本身一样不能
@@ -2188,10 +2188,28 @@ hwnd=0x2D04CA class=FLUTTER_RUNNER_WIN32_WINDOW window=(0,0,3840,2160)
   创建它的线程一直在处理消息。用系统类是为了免掉 `RegisterClassW` 与模块句柄；
 - **即时数据，不用 delayed rendering**：内存交给系统后与本进程是否存活无关——抓屏子进程
   复制完立刻硬退出也必须能粘。实测确认退出后仍可读回；
-- **两种格式一起写**：CF_DIBV5（`BITMAPV5HEADER` 124 字节 + `BI_BITFIELDS` + R/G/B/A 掩码 +
-  `LCS_sRGB`）是基线；CF_DIB（`BITMAPINFOHEADER` + `BI_RGB`）是给 GDI 消费者的兼容副本。
-  两者都是 **top-down（负 `biHeight`）**、BGRA、32bpp，和抓屏/PNG 的行顺序一致，不需要翻转。
-  系统另外会自动合成 CF_BITMAP（实测剪贴板格式列表是 17, 8, 2）；
+- **三种格式一起写，顺序是 PNG → CF_DIBV5 → CF_DIB**：注册格式 `PNG` 直接保存调用方的
+  原始 PNG 字节（alpha 也原样保留）；CF_DIBV5 是 124 字节 `BITMAPV5HEADER` + `BI_RGB`；
+  CF_DIB 是 40 字节 `BITMAPINFOHEADER` + `BI_RGB`。两种 DIB 都是 **top-down（负
+  `biHeight`）**、BGRA、32bpp，和抓屏/PNG 的行顺序一致，不需要翻转。系统另外会自动合成
+  CF_BITMAP；三份应用数据都是即时数据；
+- **不要把 CF_DIBV5 改回 V5 + `BI_BITFIELDS`**：`super_native_extensions 0.8.24` 在 Windows
+  上优先 CF_DIBV5，再给 DIB 前补一个 `bfOffBits=0` 的 14 字节 BMP 文件头并交给 WIC。
+  Windows 11 22631 的变体实验结果如下（同一份 2560×1440 BGRA 像素，仅改头与需要时翻行）：
+
+  | DIB 形态 | top-down | bottom-up |
+  | --- | --- | --- |
+  | V5(124) + BI_BITFIELDS（有/无 alpha mask） | WIC FAIL `0x88982F60` | WIC FAIL `0x88982F60` |
+  | V5(124) + BI_RGB（mask 清零或保留） | WIC OK | WIC OK |
+  | V4(108) + BI_BITFIELDS | WIC FAIL `0x88982F60` | WIC FAIL `0x88982F60` |
+  | V4(108) + BI_RGB | WIC OK | WIC OK |
+  | INFO(40) + BI_RGB | WIC OK | WIC OK |
+  | INFO(40) + 3 个 RGB mask + BI_BITFIELDS | WIC OK | WIC OK |
+  | INFO(40) + 4 个 RGBA mask + BI_ALPHABITFIELDS | WIC FAIL `0x88982F07` | WIC FAIL `0x88982F07` |
+
+  这组数据排除了“负高度本身不兼容”：决定因素是 WIC 对这个 `bfOffBits=0` 合成 BMP 的
+  header/compression 组合。最终 V5 选择规范上不矛盾的 `BI_RGB` + 全零 masks；原始 PNG
+  负责无损 alpha，也让 super_clipboard 直接读 `PNG`，不再触发 DIB→WIC 合成；
 - **内存契约**：`GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT)`，拷完 `GlobalUnlock`；
   `SetClipboardData` 成功后所有权归系统（**不** free、**不** write），失败立刻 `GlobalFree`；
   每次成功 `OpenClipboard` 都 `CloseClipboard`（写入失败也要关）；
@@ -2269,16 +2287,23 @@ Invalid argument(s): Illegal argument in isolate message: (object is a DynamicLi
 剪贴板（仓库外脚本直调 DLL，以及真实 `NativeBridge` 路径的临时入口）：
 
 ```text
-clipboard formats: 17, 8, 2
-CF_DIBV5: size=3840x-2160 bitCount=32 compression=3 sizeImage=33177600 globalSize=33177724
-          csType=0x73524742 masks R/G/B/A=0x00FF0000/0x0000FF00/0x000000FF/0xFF000000
-CF_DIB  : size=3840x-2160 bitCount=32 compression=0 sizeImage=33177600
-与 PNG 逐点比对：240 个采样点 RGB 全等、alpha 全 255；按相反行方向比有 224/240 不等
-（证明写进去的确实是 top-down）
-写剪贴板的进程退出、再等 4 秒后仍能读回；WinForms Clipboard::GetImage() 也能拿到 3840x2160
+clipboard formats: 49448(PNG), 17(CF_DIBV5), 8(CF_DIB), 2(CF_BITMAP，由系统合成)
+CF_DIBV5: size=3840x-2160 bitCount=32 compression=0 globalSize=33177724
+CF_DIB  : size=3840x-2160 bitCount=32 compression=0 globalSize=33177640
+super_clipboard 同形路径（补 bfOffBits=0 的 BMP 头）：CF_DIBV5 WIC OK 3840x2160；CF_DIB WIC OK
+PNG ↔ DIBV5 逐点比对：8/8 RGB 全等；BGRA/RGBA 误读 0/8；上下翻转误读 1/8
+PerMonitorV2 屏幕 ↔ PNG：12/12 RGB 全等；翻转仅 3/12；R/B 互换 0/12
+透明 PNG 探针：DIBV5 四像素 alpha=0,64,128,255，与输入完全一致
+写剪贴板的进程退出、再等 2 秒后仍能读回；此时 CLiper 进程正在运行，格式没有被破坏
+OLE IDataObject：PNG / CF_DIBV5 / CF_DIB 的 QueryGetData + GetData 全部 hr=0；PNG SHA-256 与源文件相同
+.NET Clipboard.GetImage()：OK 3840x2160 Format32bppRgb
 占用路径：OpenClipboard failed after 5 attempts (~80 ms): Win32 error 5（有限重试，不卡死）
-真实 NativeBridge 路径的日志：clipboard_copy_success format=CF_DIBV5+CF_DIB size=3840x2160
+真实 NativeBridge 路径的日志格式标签：clipboard_copy_success format=PNG+CF_DIBV5+CF_DIB
 ```
+
+上面的系统侧证据不等于 CLiper 历史 UI / Paint / 浏览器已经由用户验收；这些仍按 18.17
+保留为“待用户”。注册格式 id（本次是 49448）由 Windows 动态分配，代码只能依赖名称 `PNG`，
+不能把数字写死。
 
 自启动（临时入口 + 独立 `reg query` 交叉验证，验完恢复原状）：
 

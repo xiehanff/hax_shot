@@ -166,7 +166,7 @@ final class NativeBridge {
   /// 剪贴板写入格式的平台标签（只进日志，不影响写入行为）。
   String get _clipboardFormat {
     if (Platform.isMacOS) return 'NSPasteboardTypePNG';
-    if (Platform.isWindows) return 'CF_DIBV5+CF_DIB';
+    if (Platform.isWindows) return 'PNG+CF_DIBV5+CF_DIB';
     return 'image/png';
   }
 

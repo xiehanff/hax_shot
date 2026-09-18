@@ -7,7 +7,7 @@
 //! - 选屏规则 [`resolve_target_monitor`]：`--display` → 光标所在显示器 → 主显示器；
 //! - GDI 抓一帧写成临时 PNG，成功后把实际用的那块屏冻结进 [`CAPTURE_STATE`]，
 //!   浮层摆位只能读 `hax_shot_last_capture_target`（§8.5）；
-//! - PNG → 系统图片剪贴板（CF_DIBV5 + CF_DIB，即时数据，owner 窗口活在专职线程上）。
+//! - PNG → 系统图片剪贴板（PNG + CF_DIBV5 + CF_DIB，即时数据，owner 窗口活在专职线程上）。
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -24,12 +24,11 @@ use windows::Win32::Foundation::{GetLastError, HANDLE, HGLOBAL, HWND, LPARAM, PO
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
     EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, MonitorFromPoint, ReleaseDC,
-    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BITMAPV5HEADER, BI_BITFIELDS, BI_RGB, CAPTUREBLT,
-    CIEXYZTRIPLE, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFOEXW,
-    MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BITMAPV5HEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS,
+    HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
@@ -168,8 +167,10 @@ pub(crate) fn capture_screen_impl() -> Result<PathBuf, (i32, String)> {
 ///   线程创建并持有（0×0、`WS_POPUP`、`WS_EX_TOOLWINDOW`、从不显示），活到进程结束；
 /// - **即时数据**，不用 delayed rendering：内存交出后归系统所有，与本进程是否存活无关，
 ///   抓屏子进程复制完立刻硬退出也照样能粘（§33.3/§33.6）；
-/// - 格式：CF_DIBV5（基线，带 alpha / 色彩空间字段）+ CF_DIB（GDI 消费者的兼容副本），
-///   两者都是 top-down（负 `biHeight`），与抓屏、PNG 的行顺序一致。
+/// - 格式：注册格式 PNG（保留原始编码与 alpha）+ CF_DIBV5 + CF_DIB；两种 DIB 都是
+///   top-down（负 `biHeight`），与抓屏、PNG 的行顺序一致。CF_DIBV5 刻意用 BI_RGB：
+///   WIC 无法解码 super_clipboard 所构造的「bfOffBits=0 BMP 头 + V5 BI_BITFIELDS」；
+/// - 三份都是即时数据，任一消费者不需要依赖本进程继续存活。
 pub(crate) fn copy_png_impl(data: &[u8]) -> Result<(), String> {
     if data.is_empty() {
         return Err("PNG data is empty".to_owned());
@@ -181,6 +182,7 @@ pub(crate) fn copy_png_impl(data: &[u8]) -> Result<(), String> {
     let (reply, reply_rx) = mpsc::channel();
     clipboard_client()?
         .send(ClipboardRequest {
+            png: data.to_vec(),
             dib_v5: payloads.dib_v5,
             dib: payloads.dib,
             reply,
@@ -1169,8 +1171,10 @@ const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
 /// 用了它，系统就忽略 gamma / endpoints 字段，截图的 sRGB 像素不需要额外的色彩管理。
 const LCS_SRGB: u32 = 0x7352_4742;
 
-/// 一次剪贴板写入请求：两种 DIB 都已准备好，交给专职线程写进系统剪贴板。
+/// 一次剪贴板写入请求：PNG 与两种 DIB 都已准备好，交给专职线程写进系统剪贴板。
 struct ClipboardRequest {
+    /// 注册格式 `PNG` 的原始 PNG 字节。
+    png: Vec<u8>,
     /// CF_DIBV5 的完整体（BITMAPV5HEADER + 像素）。
     dib_v5: Vec<u8>,
     /// CF_DIB 的完整体（BITMAPINFOHEADER + 像素）。
@@ -1346,8 +1350,19 @@ fn open_clipboard(owner: HWND) -> Result<(), String> {
     ))
 }
 
-/// 把两种 DIB 依次交给系统；顺序固定为 CF_DIBV5（基线）→ CF_DIB（兼容副本）。
+/// 把三种即时格式依次交给系统；顺序固定为 PNG → CF_DIBV5 → CF_DIB。
 fn write_clipboard_formats(request: &ClipboardRequest) -> Result<(), String> {
+    // 先注册再 EmptyClipboard：注册失败时不要无谓清掉用户原来的剪贴板。
+    // SAFETY: 名称是静态、NUL 结尾的 UTF-16 字符串。
+    let png_format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    if png_format == 0 {
+        // SAFETY: RegisterClipboardFormatW 失败后立刻读取，没有中间 Win32 调用覆盖它。
+        let code = unsafe { GetLastError() }.0;
+        return Err(format!(
+            "RegisterClipboardFormatW(PNG) failed: Win32 error {code}"
+        ));
+    }
+
     // SAFETY: 剪贴板已经由本次调用打开（owner 是本线程的隐藏窗口），
     // EmptyClipboard 之后 owner 才是写入者。
     unsafe { EmptyClipboard() }.map_err(|error| {
@@ -1357,6 +1372,7 @@ fn write_clipboard_formats(request: &ClipboardRequest) -> Result<(), String> {
         )
     })?;
 
+    set_clipboard_bytes(png_format, &request.png, "PNG")?;
     set_clipboard_bytes(CF_DIBV5.0.into(), &request.dib_v5, "CF_DIBV5")?;
     set_clipboard_bytes(CF_DIB.0.into(), &request.dib, "CF_DIB")?;
     Ok(())
@@ -1401,7 +1417,7 @@ fn set_clipboard_bytes(format: u32, bytes: &[u8], label: &str) -> Result<(), Str
         let _ = GlobalUnlock(handle);
     }
 
-    // SAFETY: handle 未被释放、未被别的 DC 选中；format 是正确的预定义剪贴板格式。
+    // SAFETY: handle 未被释放；format 是预定义格式或已成功注册的 PNG 格式。
     match unsafe { SetClipboardData(format, Some(HANDLE(handle.0))) } {
         Ok(_) => Ok(()),
         Err(error) => {
@@ -1432,7 +1448,7 @@ struct RgbaImage {
     height: u32,
 }
 
-/// 两种剪贴板格式的完整字节：CF_DIBV5 与 CF_DIB。
+/// 两种 DIB 剪贴板格式的完整字节：CF_DIBV5 与 CF_DIB。
 struct DibPayloads {
     dib_v5: Vec<u8>,
     dib: Vec<u8>,
@@ -1510,7 +1526,9 @@ fn decode_png(data: &[u8]) -> Result<RgbaImage, String> {
 /// 组装 CF_DIBV5 与 CF_DIB 的完整体。
 ///
 /// 行方向统一 top-down（负 `biHeight`）：PNG 与抓屏都是这个顺序，不需要翻转；
-/// 像素统一 BGRA（32bpp），与 `BITMAPV5HEADER` 里的 R/G/B/A 掩码一致。
+/// 像素统一 BGRA（32bpp）。V5 使用 BI_RGB 且不声明位掩码：Windows 11 的 WIC 在 BMP
+/// 文件头 `bfOffBits=0` 时无法识别 V4/V5 + BI_BITFIELDS（super_clipboard 正是这样补头），
+/// 但能识别 V5 + BI_RGB。透明度由同时写入的原始 PNG 无损承载；HaxShot 截图本身 A=255。
 fn build_dib_payloads(image: &RgbaImage) -> Result<DibPayloads, String> {
     let width = i32::try_from(image.width)
         .map_err(|_| format!("PNG width {} does not fit into a DIB", image.width))?;
@@ -1536,15 +1554,11 @@ fn build_dib_payloads(image: &RgbaImage) -> Result<DibPayloads, String> {
         bV5Height: -height,
         bV5Planes: 1,
         bV5BitCount: 32,
-        // BI_BITFIELDS + 下面的掩码：这是 CF_DIBV5 声明 alpha 通道的方式。
-        bV5Compression: BI_BITFIELDS,
+        // 必须是 BI_RGB：V5 + BI_BITFIELDS 会让 super_clipboard 的 WIC 合成路径失败。
+        // BI_RGB 下 R/G/B/A mask 保持 0，不能留下与 compression 矛盾的字段。
+        bV5Compression: BI_RGB,
         bV5SizeImage: size_image,
-        bV5RedMask: 0x00FF_0000,
-        bV5GreenMask: 0x0000_FF00,
-        bV5BlueMask: 0x0000_00FF,
-        bV5AlphaMask: 0xFF00_0000,
         bV5CSType: LCS_SRGB,
-        bV5Endpoints: CIEXYZTRIPLE::default(),
         ..Default::default()
     };
 

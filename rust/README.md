@@ -24,7 +24,7 @@ Windows: hax_shot_native.dll（和 hax_shot.exe 同目录，由 windows/CMakeLis
 - 目标显示器：`--display <id>` 参数（托盘宿主在触发时写入）→ 光标所在显示器 → 主显示器；
   Windows 侧还额外冻结目标元数据供浮层使用（见下）；
 - 剪贴板：写入图片剪贴板（Linux `wl-copy --type image/png`，macOS `NSPasteboard`，
-  Windows CF_DIBV5 + CF_DIB）；
+  Windows PNG + CF_DIBV5 + CF_DIB）；
 - 快捷键：**不经过 Rust**。macOS 由宿主进程原生侧的 `ShortcutBridge`（Carbon `RegisterEventHotKey`）注册，Windows 由 `windows/runner/windows_shortcut_bridge.cpp`（`RegisterHotKey`）注册，Linux 交给 GNOME 自己维护；三者都由 Dart 侧的 `ShortcutService` 管状态，触发时再启动 `--capture` 子进程；
 - 通过 C ABI 暴露给 Dart FFI，并统一返回可读错误信息。
 
@@ -65,8 +65,10 @@ Swift 侧 `macos/Runner/CaptureDisplay.swift` 通过 `dlopen` 调 `hax_shot_targ
 - 尺寸先校验 `0 < w,h <= 32768`、`stride = w * 4` 与 `stride * h` 不溢出；
   `GetDIBits` 的扫描行数 `!= height` 或系统改写了 `BITMAPINFOHEADER` 都算失败；
 - 不把鼠标指针合成进截图，也不承诺 HDR / 受保护内容 / 独占全屏（见 docs 的 §66 范围）；
-- 剪贴板：`copy_png_impl` 把 PNG 解码后转成 CF_DIBV5 + CF_DIB（都是 top-down / BGRA），
-  交给本模块的**专职线程**（`hax-shot-clipboard`）写入。该线程用系统类 `STATIC` 建一个
+- 剪贴板：`copy_png_impl` 同时写注册格式 PNG（原始字节）与 top-down / BGRA 的
+  CF_DIBV5 + CF_DIB；CF_DIBV5 必须用 `BI_RGB`，不能改回 WIC 无法兼容读取的
+  V5 + `BI_BITFIELDS`。三种格式交给本模块的**专职线程**（`hax-shot-clipboard`）写入。
+  该线程用系统类 `STATIC` 建一个
   0×0 / `WS_POPUP` / `WS_EX_TOOLWINDOW` 的隐藏窗口当 **owner HWND**（`OpenClipboard(NULL)`
   之后 `EmptyClipboard` 会把 owner 置成 NULL，`SetClipboardData` 必然失败），窗口活到进程结束；
   写入是**即时数据**，不搞 delayed rendering，所以抓屏子进程复制完硬退出也照样能粘。
