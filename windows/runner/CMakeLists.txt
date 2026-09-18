@@ -20,6 +20,12 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# Runner 源文件里有中文注释（仓库的原生代码注释也是中文）。MSVC 默认按系统代码页
+# （简体中文 Windows 上是 936/GBK）读源码，UTF-8 中文会报 C4819，而
+# apply_standard_settings 打开了 /WX，会把它当成错误。这里只对 runner 目标声明
+# UTF-8；不放进 apply_standard_settings，避免影响插件目标的编译。
+target_compile_options(${BINARY_NAME} PRIVATE "/utf-8")
+
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")

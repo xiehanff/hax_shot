@@ -27,14 +27,11 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
-  });
-
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
-  flutter_controller_->ForceRedraw();
+  // HaxShot 是托盘应用：窗口的可见性完全由 Dart（window_manager）控制。
+  // 这里不注册 SetNextFrameCallback(Show)，也不调 ForceRedraw() 去逼首帧：
+  // 宿主启动时窗口必须一直隐藏，`--capture` 子进程更要在浮层准备好之前
+  // 保持隐藏，否则用户会先看到一个 1280x720 的默认窗口闪一下。
+  // 注意“不显示”不等于“不创建”：窗口仍在这里创建，Dart 之后要 show 它。
 
   return true;
 }
