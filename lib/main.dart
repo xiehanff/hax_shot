@@ -249,7 +249,11 @@ class _ErrorDetailsView extends StatelessWidget {
 
 Future<void> _writeErrorLog(Object error, StackTrace? stackTrace) async {
   try {
-    final File file = File('/tmp/hax_shot_error.log');
+    // Windows 没有 /tmp：用系统临时目录（macOS = $TMPDIR，Linux = /tmp）。
+    // 这里只是 Flutter 错误的兜底副本，长期日志仍走 DiagnosticLogService。
+    final File file = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}hax_shot_error.log',
+    );
     await file.writeAsString(
       '${DateTime.now().toIso8601String()}\n$error\n'
       '${stackTrace ?? StackTrace.current}\n\n',
