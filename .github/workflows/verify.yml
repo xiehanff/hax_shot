@@ -136,3 +136,87 @@ jobs:
       # HaxShot）记在 docs/development-guide.md 的「窗口圆角」一节。
       - name: Build macOS release bundle
         run: flutter build macos --release
+
+  # Windows 侧的 PR 级门禁：Windows 编得过 + bundle 是完整的。
+  #
+  # 不跑 `flutter test` / `cargo test`（仓库规则：默认不跑测试；计划 §4.1）；保留
+  # `flutter analyze`：Dart 是三个 job 共享的代码，这里不跑就会出现“Linux 绿、
+  # Windows 编不过”的空档。按计划 §49，Windows 适配期**先跑通、不先做减负**，真要
+  # 省 analyze 的成本等 Windows 长期稳定后再说。
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+          targets: x86_64-pc-windows-msvc
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      # pwsh 只检查**整个 step 最后一条命令**的退出码，中间命令失败会被吞掉，所以每步都要
+      # 显式 throw。构建本身由 CMake 调 cargo（windows/CMakeLists.txt），不额外加 cargo 缓存：
+      # 现有 Linux/macOS job 也没有，先保持一致。
+      - name: Run Dart checks
+        shell: pwsh
+        run: |
+          flutter analyze
+          if ($LASTEXITCODE -ne 0) { throw 'flutter analyze failed' }
+
+      - name: Run Rust checks
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
+          cargo check --manifest-path rust/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'cargo check failed' }
+
+      - name: Build Windows release bundle
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          if ($LASTEXITCODE -ne 0) { throw 'windows build failed' }
+
+      # `Test-Path` 打印 False 不会让 job 失败，缺文件必须 throw。这里只查 bundle 本身；
+      # app-local CRT 与 ZIP 完整性（打包脚本、release.yml）属于发布流程，见 docs/packaging.md。
+      - name: Verify bundle completeness
+        shell: pwsh
+        run: |
+          $bundle = 'build/windows/x64/runner/Release'
+          $required = @(
+            'hax_shot.exe',
+            'hax_shot_native.dll',
+            'flutter_windows.dll',
+            'data/app.so',
+            'data/icudtl.dat',
+            'data/flutter_assets'
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path (Join-Path $bundle $item))) { throw "Missing bundle entry: $item" }
+          }
+          # 插件 DLL 不能只手写几个名字：少一个也照样“构建成功”。
+          $pluginDlls = Get-ChildItem $bundle -Filter *.dll |
+            Where-Object { $_.Name -notin @('hax_shot_native.dll', 'flutter_windows.dll') }
+          if ($pluginDlls.Count -lt 5) {
+            throw "Plugin DLLs look incomplete: found $($pluginDlls.Count)"
+          }
+          $pluginDlls | Select-Object -ExpandProperty Name | Sort-Object
+          if (-not (Get-ChildItem (Join-Path $bundle 'data/flutter_assets') -ErrorAction SilentlyContinue)) {
+            throw 'data/flutter_assets is empty'
+          }
+          Write-Host "Bundle OK: $bundle"
