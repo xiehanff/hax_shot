@@ -6,6 +6,9 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import '../features/diagnostics/diagnostic_events.dart';
+import '../features/diagnostics/diagnostic_log.dart';
+
 final class NativeBridge {
   NativeBridge._() : _library = _openLibrary() {
     try {
@@ -99,19 +102,110 @@ final class NativeBridge {
   }
 
   /// Copies PNG bytes to the system image clipboard.
+  ///
+  /// 成功/失败都往诊断日志里记一行（格式 + 尺寸 + 字节数，**不**写图像内容，§33.5）：
+  /// 截图子进程复制完就硬退出，事后只能靠日志判断到底是哪一步没成。
   Future<void> copyPngToClipboard(Uint8List pngBytes) {
     if (pngBytes.isEmpty) {
       throw const NativeBridgeException('PNG 数据为空');
     }
-    // macOS 的 NSPasteboard 只能在主线程访问；Linux 的 wl-copy 需要等子进程退出，
-    // 所以只有 Linux 放到 worker isolate。
-    if (Platform.isMacOS) {
-      _copyPngToClipboardSync(pngBytes);
-      return Future<void>.value();
-    }
+    return _copyPngToClipboardWithLog(pngBytes);
+  }
+
+  /// worker isolate 里的剪贴板写入。
+  ///
+  /// 必须是**静态**方法：同一个方法帧里的闭包共享一个上下文，若那一帧里还有别的闭包
+  /// 捕获了 `this`（例如 [_copyPngToClipboardWithLog] 里的日志闭包），`Isolate.run`
+  /// 的闭包就会把 `NativeBridge` 实例（连同 `DynamicLibrary`）一起塞进 isolate 消息，
+  /// 发送阶段直接抛 `Illegal argument in isolate message: (object is a DynamicLibrary)`——
+  /// native 侧根本不会被调到。放进静态方法后，闭包上下文里只剩下 `pngBytes`。
+  static Future<void> _copyPngInWorker(Uint8List pngBytes) {
     return Isolate.run(
       () => NativeBridge.instance._copyPngToClipboardSync(pngBytes),
     );
+  }
+
+  /// 剪贴板写入 + 诊断日志。
+  ///
+  /// 下面的日志闭包捕获 `this`，所以真正的 isolate 调用必须走静态的
+  /// [_copyPngInWorker]；本方法自己**不能**直接调 `Isolate.run`。
+  Future<void> _copyPngToClipboardWithLog(Uint8List pngBytes) {
+    // macOS 的 NSPasteboard 只能在主线程访问；Linux 的 wl-copy 需要等子进程退出，
+    // 所以只有 Linux 放到 worker isolate。
+    final Future<void> copied;
+    if (Platform.isMacOS) {
+      _copyPngToClipboardSync(pngBytes);
+      copied = Future<void>.value();
+    } else {
+      copied = _copyPngInWorker(pngBytes);
+    }
+
+    final (int width, int height) = _pngSize(pngBytes);
+    return copied.then(
+      (_) => _logClipboard(
+        '',
+        width: width,
+        height: height,
+        bytes: pngBytes.length,
+      ),
+      onError: (Object error) {
+        _logClipboard(
+          '$error',
+          level: LogLevel.error,
+          width: width,
+          height: height,
+          bytes: pngBytes.length,
+        );
+        throw error;
+      },
+    );
+  }
+
+  /// 剪贴板写入格式的平台标签（只进日志，不影响写入行为）。
+  String get _clipboardFormat {
+    if (Platform.isMacOS) return 'NSPasteboardTypePNG';
+    if (Platform.isWindows) return 'CF_DIBV5+CF_DIB';
+    return 'image/png';
+  }
+
+  void _logClipboard(
+    String error, {
+    String level = LogLevel.info,
+    required int width,
+    required int height,
+    required int bytes,
+  }) {
+    final bool failed = error.isNotEmpty;
+    DiagnosticLogService.instance.log(
+      failed
+          ? DiagnosticEvent.clipboardCopyFailed
+          : DiagnosticEvent.clipboardCopySuccess,
+      level: level,
+      errorCode: failed ? DiagnosticErrorCode.clipboardCopyFailed : null,
+      message:
+          'format=$_clipboardFormat size=${width}x$height bytes=$bytes'
+          '${failed ? ' error=$error' : ''}',
+      extra: <String, Object?>{
+        'format': _clipboardFormat,
+        'width': width,
+        'height': height,
+        'bytes': bytes,
+      },
+    );
+  }
+
+  /// PNG IHDR 里的像素尺寸；不是 PNG / 头不完整时返回 (0, 0)。
+  ///
+  /// 只给诊断日志用：拿不到尺寸不能影响复制本身。
+  static (int, int) _pngSize(Uint8List pngBytes) {
+    const List<int> signature = <int>[137, 80, 78, 71];
+    if (pngBytes.length < 24) return (0, 0);
+    for (var index = 0; index < signature.length; index++) {
+      if (pngBytes[index] != signature[index]) return (0, 0);
+    }
+    if (pngBytes[12] != 0x49 || pngBytes[13] != 0x48) return (0, 0);
+    final ByteData view = ByteData.sublistView(pngBytes, 16, 24);
+    return (view.getUint32(0), view.getUint32(4));
   }
 
   /// 用 Rust 把 RGBA8 像素编码成 PNG。

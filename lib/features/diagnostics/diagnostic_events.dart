@@ -72,6 +72,20 @@ abstract final class DiagnosticEvent {
   static const macosWake = 'macos_wake';
   static const macosUnlock = 'macos_unlock';
   static const macosSessionActive = 'macos_session_active';
+
+  // 开机自启动（Windows 走 HKCU Run，见 autostart_service.dart）。
+  // 失败时必须能直接看到注册表 API 的 LSTATUS 与目标值。
+  static const autostartWriteSuccess = 'autostart_write_success';
+  static const autostartRemoveSuccess = 'autostart_remove_success';
+  static const autostartReadFailed = 'autostart_read_failed';
+  static const autostartWriteFailed = 'autostart_write_failed';
+
+  /// Run 值存在但不指向当前 exe（ZIP 换目录之后）：按未启用处理，但要留证据。
+  static const autostartStaleValue = 'autostart_stale_value';
+
+  // 剪贴板写入（写的是截图，不是 AI 输入框的读取路径）。
+  static const clipboardCopySuccess = 'clipboard_copy_success';
+  static const clipboardCopyFailed = 'clipboard_copy_failed';
 }
 
 /// 稳定错误码：日志里 `error_code` 只能是这里的值，自由文本放 `message`。
@@ -92,6 +106,8 @@ abstract final class DiagnosticErrorCode {
   static const trayInitFailed = 'TRAY_INIT_FAILED';
   static const windowInitFailed = 'WINDOW_INIT_FAILED';
   static const welcomeInitFailed = 'WELCOME_INIT_FAILED';
+  static const autostartFailed = 'AUTOSTART_FAILED';
+  static const clipboardCopyFailed = 'CLIPBOARD_COPY_FAILED';
 }
 
 /// 日志级别。

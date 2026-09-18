@@ -6,26 +6,40 @@
 //!   `szDevice` → FNV-1a 32 位 display id（[`fnv1a_display_id`]）；
 //! - 选屏规则 [`resolve_target_monitor`]：`--display` → 光标所在显示器 → 主显示器；
 //! - GDI 抓一帧写成临时 PNG，成功后把实际用的那块屏冻结进 [`CAPTURE_STATE`]，
-//!   浮层摆位只能读 `hax_shot_last_capture_target`（§8.5）。
-//!
-//! 剪贴板属于 Phase 5，这里保持可读的“尚未实现”。
+//!   浮层摆位只能读 `hax_shot_last_capture_target`（§8.5）；
+//! - PNG → 系统图片剪贴板（CF_DIBV5 + CF_DIB，即时数据，owner 窗口活在专职线程上）。
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::io::Cursor;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
+use std::time::Duration;
 
-use windows::core::BOOL;
-use windows::Win32::Foundation::{GetLastError, LPARAM, POINT, RECT};
+use windows::core::{w, BOOL};
+use windows::Win32::Foundation::{GetLastError, HANDLE, HGLOBAL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
     EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, MonitorFromPoint, ReleaseDC,
-    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HBITMAP, HDC,
-    HGDIOBJ, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BITMAPV5HEADER, BI_BITFIELDS, BI_RGB, CAPTUREBLT,
+    CIEXYZTRIPLE, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFOEXW,
+    MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+};
+use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, MONITORINFOF_PRIMARY};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, DispatchMessageW, GetCursorPos, PeekMessageW,
+    MONITORINFOF_PRIMARY, MSG, PM_REMOVE, WS_EX_TOOLWINDOW, WS_POPUP,
+};
 
 use crate::{clear_last_error, set_last_error, unique_temp_path, HaxShotTargetMonitor};
 
@@ -124,9 +138,36 @@ pub(crate) fn capture_screen_impl() -> Result<PathBuf, (i32, String)> {
     Ok(path)
 }
 
-/// Phase 5 才会实现：写系统图片剪贴板（需要有效的 owner HWND，见 §33）。
-pub(crate) fn copy_png_impl(_data: &[u8]) -> Result<(), String> {
-    Err("Windows clipboard backend is not implemented yet".to_owned())
+/// 把 PNG 写进系统图片剪贴板（§33）。
+///
+/// 成立条件（细节见 `docs/development-guide.md` 的 Windows 一节）：
+///
+/// - **必须有有效的 owner HWND**：`OpenClipboard(NULL)` 之后 `EmptyClipboard` 会把
+///   owner 置成 NULL，随后的 `SetClipboardData` 必然失败。owner 窗口由本模块的专职
+///   线程创建并持有（0×0、`WS_POPUP`、`WS_EX_TOOLWINDOW`、从不显示），活到进程结束；
+/// - **即时数据**，不用 delayed rendering：内存交出后归系统所有，与本进程是否存活无关，
+///   抓屏子进程复制完立刻硬退出也照样能粘（§33.3/§33.6）；
+/// - 格式：CF_DIBV5（基线，带 alpha / 色彩空间字段）+ CF_DIB（GDI 消费者的兼容副本），
+///   两者都是 top-down（负 `biHeight`），与抓屏、PNG 的行顺序一致。
+pub(crate) fn copy_png_impl(data: &[u8]) -> Result<(), String> {
+    if data.is_empty() {
+        return Err("PNG data is empty".to_owned());
+    }
+
+    let image = decode_png(data)?;
+    let payloads = build_dib_payloads(&image)?;
+
+    let (reply, reply_rx) = mpsc::channel();
+    clipboard_client()?
+        .send(ClipboardRequest {
+            dib_v5: payloads.dib_v5,
+            dib: payloads.dib,
+            reply,
+        })
+        .map_err(|_| "the Windows clipboard thread has already exited".to_owned())?;
+    reply_rx
+        .recv()
+        .map_err(|_| "the Windows clipboard thread exited while writing the clipboard".to_owned())?
 }
 
 /// 只查询当前拓扑下本次截图会选中的显示器（requested → 光标 → 主屏），不抓屏。
@@ -1007,4 +1048,425 @@ fn capture_flags(frame: &CapturedFrame) -> u32 {
         0
     };
     blank | (u32::from(frame.mean_luma) << MEAN_LUMA_SHIFT)
+}
+
+// --------------------------------------------------------------------- 剪贴板
+
+/// `OpenClipboard` 的重试次数与间隔（§33.5）：剪贴板可能被别的进程短短地占住，
+/// 但绝不允许无限循环。
+const OPEN_ATTEMPTS: u32 = 5;
+const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
+
+/// `BITMAPV5HEADER.bV5CSType`：`LCS_sRGB`（wingdi.h 里的 'sRGB' 四字符码）。
+///
+/// 用了它，系统就忽略 gamma / endpoints 字段，截图的 sRGB 像素不需要额外的色彩管理。
+const LCS_SRGB: u32 = 0x7352_4742;
+
+/// 一次剪贴板写入请求：两种 DIB 都已准备好，交给专职线程写进系统剪贴板。
+struct ClipboardRequest {
+    /// CF_DIBV5 的完整体（BITMAPV5HEADER + 像素）。
+    dib_v5: Vec<u8>,
+    /// CF_DIB 的完整体（BITMAPINFOHEADER + 像素）。
+    dib: Vec<u8>,
+    /// worker 写完之后回一个结果；调用方阻塞等它。
+    reply: Sender<Result<(), String>>,
+}
+
+/// 专职剪贴板线程的请求通道。
+///
+/// 存的是“建线程的结果”：owner 窗口创建失败时把错误缓存下来，不每次重新建线程。
+static CLIPBOARD_CLIENT: OnceLock<Mutex<Option<Result<Sender<ClipboardRequest>, String>>>> =
+    OnceLock::new();
+
+/// 拿专职剪贴板线程的发送端；第一次调用时把线程和它的 owner 窗口建起来。
+fn clipboard_client() -> Result<Sender<ClipboardRequest>, String> {
+    let slot = CLIPBOARD_CLIENT.get_or_init(|| Mutex::new(None));
+    let mut cached = match slot.lock() {
+        Ok(guard) => guard,
+        // 上个调用方 panic 会毒化 Mutex；缓存本身仍然可用，不能让它把剪贴板全废掉。
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(existing) = cached.as_ref() {
+        return existing.clone();
+    }
+    let started = start_clipboard_thread();
+    *cached = Some(started.clone());
+    started
+}
+
+/// 起专职线程：创建 owner 窗口 → 报告就绪 → 串行处理写入请求。
+///
+/// 线程必须活着：`WS_POPUP` 的 owner 窗口由它创建，创建者线程一结束窗口就没了，
+/// 而剪贴板 owner 窗口要活到进程结束（§33.2）。这里用 `recv_timeout` + 消息泵，
+/// 既不忙等，也保证窗口所在线程一直在处理消息。
+fn start_clipboard_thread() -> Result<Sender<ClipboardRequest>, String> {
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<Sender<ClipboardRequest>, String>>();
+    let (request_tx, request_rx) = mpsc::channel::<ClipboardRequest>();
+    let worker_request_tx = request_tx.clone();
+
+    thread::Builder::new()
+        .name("hax-shot-clipboard".to_owned())
+        .spawn(move || {
+            let owner = match create_owner_window() {
+                Ok(owner) => owner,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                    return;
+                }
+            };
+            // 先把发送端交回调用方，再进入请求循环。
+            if ready_tx.send(Ok(worker_request_tx)).is_err() {
+                // 调用方已经走了（例如进程正在退出）：窗口没人用，直接收掉。
+                // SAFETY: owner 是本线程刚创建的窗口，只销毁一次。
+                unsafe {
+                    let _ = DestroyWindow(owner);
+                }
+                return;
+            }
+
+            loop {
+                pump_thread_messages();
+                match request_rx.recv_timeout(OPEN_RETRY_DELAY) {
+                    Ok(request) => {
+                        let result = write_clipboard(owner, &request);
+                        // 回包失败说明调用方已经不等了（进程退出中），继续处理下一个请求。
+                        let _ = request.reply.send(result);
+                    }
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .map_err(|error| format!("failed to spawn the Windows clipboard thread: {error}"))?;
+
+    ready_rx
+        .recv()
+        .map_err(|_| "the Windows clipboard thread exited before reporting readiness".to_owned())?
+}
+
+/// 创建剪贴板 owner 窗口：0×0、`WS_POPUP`、`WS_EX_TOOLWINDOW`、从不显示。
+///
+/// 用系统类 `STATIC`：不需要 `RegisterClassW`，也就不需要模块句柄与自定义 WNDPROC，
+/// 窗口只负责“作为一个合法的 owner HWND 存在”，不处理任何业务消息。
+fn create_owner_window() -> Result<HWND, String> {
+    // SAFETY: 类名与窗口名都是静态宽字符串；这是本线程创建的顶层窗口，
+    // 不显示（没有 WS_VISIBLE）、不进任务栏（WS_EX_TOOLWINDOW）。
+    let window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!("HaxShot clipboard owner"),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .map_err(|error| {
+        format!(
+            "CreateWindowExW(STATIC, WS_POPUP) failed: Win32 error {}",
+            win32_error_code(&error)
+        )
+    })?;
+
+    if window.0.is_null() {
+        return Err("CreateWindowExW(STATIC, WS_POPUP) returned a null window handle".to_owned());
+    }
+    Ok(window)
+}
+
+/// 抽干本线程的消息队列。
+///
+/// owner 窗口不需要处理任何业务消息，但创建窗口的线程必须处理消息，否则系统投递
+/// （例如 `WM_DESTROYCLIPBOARD`）会一直堆在队列里。
+fn pump_thread_messages() {
+    let mut message = MSG::default();
+    // SAFETY: message 是可写栈变量；hwnd=None 表示“本线程任意窗口的任意消息”；
+    // PM_REMOVE 取出即移除，循环不会卡住。
+    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+        // SAFETY: message 由 PeekMessageW 填好，派发给它自己的窗口过程。
+        unsafe {
+            DispatchMessageW(&message);
+        }
+    }
+}
+
+/// 一次剪贴板会话：`OpenClipboard`（有限重试）→ `EmptyClipboard` → 写两种 DIB → 收尾。
+fn write_clipboard(owner: HWND, request: &ClipboardRequest) -> Result<(), String> {
+    open_clipboard(owner)?;
+
+    // 无论写入成功与否，每次成功的 OpenClipboard 都必须 CloseClipboard（§33.2）。
+    let write_result = write_clipboard_formats(request);
+    let close_result = unsafe { CloseClipboard() }.map_err(|error| {
+        format!(
+            "CloseClipboard failed: Win32 error {}",
+            win32_error_code(&error)
+        )
+    });
+
+    match (write_result, close_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
+}
+
+/// 打开剪贴板；被别的进程占着时按 [`OPEN_ATTEMPTS`] / [`OPEN_RETRY_DELAY`] 有限重试。
+fn open_clipboard(owner: HWND) -> Result<(), String> {
+    let mut last_code = 0u32;
+    for attempt in 1..=OPEN_ATTEMPTS {
+        // SAFETY: owner 是本线程创建的有效窗口，且本线程在处理消息（隐藏窗口一直活着）。
+        match unsafe { OpenClipboard(Some(owner)) } {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_code = win32_error_code(&error);
+                if attempt < OPEN_ATTEMPTS {
+                    thread::sleep(OPEN_RETRY_DELAY);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "OpenClipboard failed after {OPEN_ATTEMPTS} attempts (~{} ms): Win32 error {last_code}; \
+         another process may be holding the clipboard open",
+        OPEN_RETRY_DELAY.as_millis() * u128::from(OPEN_ATTEMPTS - 1)
+    ))
+}
+
+/// 把两种 DIB 依次交给系统；顺序固定为 CF_DIBV5（基线）→ CF_DIB（兼容副本）。
+fn write_clipboard_formats(request: &ClipboardRequest) -> Result<(), String> {
+    // SAFETY: 剪贴板已经由本次调用打开（owner 是本线程的隐藏窗口），
+    // EmptyClipboard 之后 owner 才是写入者。
+    unsafe { EmptyClipboard() }.map_err(|error| {
+        format!(
+            "EmptyClipboard failed: Win32 error {}",
+            win32_error_code(&error)
+        )
+    })?;
+
+    set_clipboard_bytes(CF_DIBV5.0.into(), &request.dib_v5, "CF_DIBV5")?;
+    set_clipboard_bytes(CF_DIB.0.into(), &request.dib, "CF_DIB")?;
+    Ok(())
+}
+
+/// 把一块 DIB 交给系统剪贴板。
+///
+/// 内存契约（§33.4）：`GlobalAlloc(GMEM_MOVEABLE)`；`SetClipboardData` 成功后所有权归
+/// 系统，**不** write、**不** `GlobalFree`；失败则立刻自己释放，不漏内存。
+fn set_clipboard_bytes(format: u32, bytes: &[u8], label: &str) -> Result<(), String> {
+    let size = bytes.len();
+    // SAFETY: GMEM_MOVEABLE 是剪贴板要求的分配方式；size 来自已构造好的缓冲区。
+    let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, size) }.map_err(|error| {
+        format!(
+            "GlobalAlloc({size} bytes) for {label} failed: Win32 error {}",
+            win32_error_code(&error)
+        )
+    })?;
+    if handle.0.is_null() {
+        return Err(format!(
+            "GlobalAlloc({size} bytes) for {label} returned a null handle"
+        ));
+    }
+
+    // SAFETY: handle 是刚分配的可移动内存；GlobalLock 失败时文档承诺设置 last error。
+    let locked = unsafe { GlobalLock(handle) };
+    if locked.is_null() {
+        // SAFETY: 失败后立刻读，中间没有别的会覆盖 last error 的调用。
+        let code = unsafe { GetLastError() }.0;
+        free_global(handle);
+        return Err(format!(
+            "GlobalLock for {label} ({size} bytes) failed: Win32 error {code}"
+        ));
+    }
+
+    // SAFETY: locked 指向 size 字节的可写内存（GlobalLock 成功即保证），bytes 有 size 字节。
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), locked.cast::<u8>(), size);
+    }
+    // GlobalUnlock 在锁计数归零时返回失败并把 last error 设成 NO_ERROR，这不是错误。
+    unsafe {
+        let _ = GlobalUnlock(handle);
+    }
+
+    // SAFETY: handle 未被释放、未被别的 DC 选中；format 是正确的预定义剪贴板格式。
+    match unsafe { SetClipboardData(format, Some(HANDLE(handle.0))) } {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let code = win32_error_code(&error);
+            // 内存还在自己手里，必须释放；除了 GlobalFree 没有别的所有权转移。
+            free_global(handle);
+            Err(format!(
+                "SetClipboardData({label}, {size} bytes) failed: Win32 error {code}"
+            ))
+        }
+    }
+}
+
+/// 释放自己持有的全局内存；失败只可能是句柄问题，这里不影响主错误。
+fn free_global(handle: HGLOBAL) {
+    // SAFETY: handle 来自 GlobalAlloc，且这条路径上没有把它交给系统。
+    unsafe {
+        let _ = windows::Win32::Foundation::GlobalFree(Some(handle));
+    }
+}
+
+// ------------------------------------------------------------ PNG → DIB 载荷
+
+/// 已解码的 RGBA8（非预乘）图像。
+struct RgbaImage {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// 两种剪贴板格式的完整字节：CF_DIBV5 与 CF_DIB。
+struct DibPayloads {
+    dib_v5: Vec<u8>,
+    dib: Vec<u8>,
+}
+
+/// 把 PNG 解码成 RGBA8。
+///
+/// 截图链路给的一定是 RGBA8，但这里不假设调用方：调色板 / 灰度 / 16 位先归一化到
+/// 8 位再统一成 RGBA，避免“只支持自己产出的 PNG”这种隐性契约。
+fn decode_png(data: &[u8]) -> Result<RgbaImage, String> {
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| format!("failed to read the PNG header: {error}"))?;
+
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| "the PNG declares an output size that cannot be represented".to_owned())?;
+    let mut buffer = vec![0u8; buffer_size];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|error| format!("failed to decode the PNG: {error}"))?;
+    buffer.truncate(info.buffer_size());
+
+    let width = info.width;
+    let height = info.height;
+    if width == 0 || height == 0 {
+        return Err(format!("the PNG is empty ({width}x{height})"));
+    }
+    let pixel_count = usize::try_from(width)
+        .ok()
+        .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
+        .ok_or_else(|| format!("PNG size {width}x{height} overflows the pixel count"))?;
+
+    let mut pixels = Vec::with_capacity(pixel_count * 4);
+    match info.color_type {
+        png::ColorType::Rgba => pixels = buffer,
+        png::ColorType::Rgb => {
+            for pixel in buffer.chunks_exact(3) {
+                pixels.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            for value in buffer.iter() {
+                pixels.extend_from_slice(&[*value, *value, *value, 255]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for pixel in buffer.chunks_exact(2) {
+                pixels.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+            }
+        }
+        png::ColorType::Indexed => {
+            // normalize_to_color8 会展开调色板图；走到这里说明解码器没按契约做。
+            return Err("palette PNGs should have been expanded to RGB by the decoder".to_owned());
+        }
+    }
+
+    if pixels.len() != pixel_count * 4 {
+        return Err(format!(
+            "decoded {} bytes for a {width}x{height} RGBA image, expected {}",
+            pixels.len(),
+            pixel_count * 4
+        ));
+    }
+
+    Ok(RgbaImage {
+        pixels,
+        width,
+        height,
+    })
+}
+
+/// 组装 CF_DIBV5 与 CF_DIB 的完整体。
+///
+/// 行方向统一 top-down（负 `biHeight`）：PNG 与抓屏都是这个顺序，不需要翻转；
+/// 像素统一 BGRA（32bpp），与 `BITMAPV5HEADER` 里的 R/G/B/A 掩码一致。
+fn build_dib_payloads(image: &RgbaImage) -> Result<DibPayloads, String> {
+    let width = i32::try_from(image.width)
+        .map_err(|_| format!("PNG width {} does not fit into a DIB", image.width))?;
+    let height = i32::try_from(image.height)
+        .map_err(|_| format!("PNG height {} does not fit into a DIB", image.height))?;
+    let stride = image
+        .width
+        .checked_mul(4)
+        .ok_or_else(|| format!("row stride overflow for width {}", image.width))?;
+    let size_image = stride
+        .checked_mul(image.height)
+        .ok_or_else(|| format!("DIB size overflow for {}x{}", image.width, image.height))?;
+
+    let mut bgra = Vec::with_capacity(image.pixels.len());
+    for pixel in image.pixels.chunks_exact(4) {
+        bgra.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+    }
+
+    let dib_v5_header = BITMAPV5HEADER {
+        bV5Size: size_of::<BITMAPV5HEADER>() as u32,
+        bV5Width: width,
+        // 负高度 = top-down：第一行就是图像上边（§33.4）。
+        bV5Height: -height,
+        bV5Planes: 1,
+        bV5BitCount: 32,
+        // BI_BITFIELDS + 下面的掩码：这是 CF_DIBV5 声明 alpha 通道的方式。
+        bV5Compression: BI_BITFIELDS,
+        bV5SizeImage: size_image,
+        bV5RedMask: 0x00FF_0000,
+        bV5GreenMask: 0x0000_FF00,
+        bV5BlueMask: 0x0000_00FF,
+        bV5AlphaMask: 0xFF00_0000,
+        bV5CSType: LCS_SRGB,
+        bV5Endpoints: CIEXYZTRIPLE::default(),
+        ..Default::default()
+    };
+
+    let mut dib_v5 = Vec::with_capacity(size_of::<BITMAPV5HEADER>() + bgra.len());
+    dib_v5.extend_from_slice(struct_bytes(&dib_v5_header));
+    dib_v5.extend_from_slice(&bgra);
+
+    let dib_header = BITMAPINFOHEADER {
+        biSize: size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: width,
+        biHeight: -height,
+        biPlanes: 1,
+        biBitCount: 32,
+        // BI_RGB：32bpp 不用掩码，GDI 消费者（老工具、部分 IM）都认这个组合。
+        biCompression: BI_RGB.0,
+        biSizeImage: size_image,
+        ..Default::default()
+    };
+
+    let mut dib = Vec::with_capacity(size_of::<BITMAPINFOHEADER>() + bgra.len());
+    dib.extend_from_slice(struct_bytes(&dib_header));
+    dib.extend_from_slice(&bgra);
+
+    Ok(DibPayloads { dib_v5, dib })
+}
+
+/// `#[repr(C)]` 的 POD 结构体 → 字节切片。
+fn struct_bytes<T>(value: &T) -> &[u8] {
+    // SAFETY: T 只能是本模块里的 DIB 头结构体：都是 #[repr(C)] 的纯数据（整数 + 内嵌
+    // POD），没有指针，生命周期跟着 value。
+    unsafe { std::slice::from_raw_parts(std::ptr::from_ref(value).cast::<u8>(), size_of::<T>()) }
 }
