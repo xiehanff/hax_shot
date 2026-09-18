@@ -1552,7 +1552,7 @@ pkill -x HaxShot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `flutter build macos --release`。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `flutter build macos --release`，Windows job 负责 `flutter analyze` / `cargo fmt --check` / `cargo check` / `flutter build windows --release` + bundle 完整性检查（缺文件必须 throw，不只是打印 False）。Windows job 不跑任何测试，也不上传 artifact：ZIP 打包与上传是发布流程的事（见 [`packaging.md` 的 Windows 一节](./packaging.md#windowszip-包)）。
 
 macOS job 里的 `flutter test` **不能删**：`hotkey_binding_test`、`screen_capture_permission_test`
 里有只在 macOS 上跑的用例（Carbon 键码、TCC 分支），Linux job 覆盖不到。
@@ -1614,12 +1614,14 @@ macOS：
 - 还没有 macOS 的 CI 构建任务，本地验证使用 `fvm flutter build macos`；
 - 不支持跨显示器框选：一次截图只覆盖目标显示器，选区不能跨越两块屏。
 
-Windows（进行中，清单见 [18. Windows 平台适配](#18-windows-平台适配进行中)）：
+Windows（清单与验收状态见 [18. Windows 平台适配](#18-windows-平台适配进行中)）：
 
-`flutter build windows` 能出 `hax_shot.exe`，抓屏（GDI）、目标显示器元数据与多显示器浮层
-（`capture_window_bridge`）已经落地，窗口完全由 Dart 控制可见性，托盘左右键走本地
-`packages/tray_manager`。仍未实现：剪贴板、全局快捷键、自启动。历史上 `c7a65ec`
-的提交信息写过“新增 Windows 支持”，与当时实际不符。
+代码层面 Phase 0–5 已落地：GDI 抓屏 + 冻结的目标元数据、多显示器浮层（`capture_window_bridge`）、
+自建快捷键桥（`windows_shortcut_bridge` + `WindowsShortcutService`）、图片剪贴板
+（CF_DIBV5 + CF_DIB）、HKCU Run 自启动、平台文案，窗口可见性完全由 Dart 控制。
+未完成的是**打包与发布**（Phase 9 的 `release.yml` windows job 与 ZIP 完整性实测）
+与用户验收本身；多屏 / 负坐标 / 混合 DPI / Win10 在本机缺设备，逐项状态见 18.17。
+历史上 `c7a65ec` 的提交信息写过“新增 Windows 支持”，与当时实际不符。
 
 两个平台共同：
 
@@ -2263,3 +2265,101 @@ setEnabled(false) → HaxShot 值消失，同键下 HaxShotKeepMe 没被动
 本机测不了（**待验**）：多屏/混合 DPI 下的剪贴板与保存对话框、真实鼠标点托盘图标
 （脚本只能模拟插件的回调消息）、睡眠唤醒后的托盘图标与快捷键、Windows 剪贴板历史（Win+V）、
 Paint / 浏览器 / IM 的手动粘贴。
+
+### 18.16 Phase 6：平台分支审查结论（§38–§40）
+
+审查方式：在 `lib/` 下逐条跑 §39 的七条命令（`Platform.isMacOS` / `isLinux` / `isWindows`、
+`gsettings`、`GNOME`、`HOME`、`/tmp/`），每条命中回答两个问题——“Windows 会误入这个分支吗”、
+“不走的平台会因此看到错误文案或错误行为吗”。
+
+结论：**没有“else = Linux / else = macOS”式的服务分发**，所有服务都显式列三个平台并以
+`UnsupportedError` 收尾（`shortcut_service.dart`、`autostart_service.dart`）。逐条结论：
+
+| 命中 | 结论 |
+| --- | --- |
+| `shortcut_service.dart:73-77`、`autostart_service.dart:19-24` | 已按 §26/§32 改成显式三平台；本轮无改动 |
+| `native_bridge.dart:47/138/168-169/399-407` | DLL 候选路径、剪贴板格式标签都有 Windows 分支，无需动 |
+| `single_instance_guard.dart:39-52`、`diagnostic_log.dart:63-78`、`capture_request_channel.dart:38-53` | 三处都是 macOS / Windows / Linux 三分支（Windows 用 `%LOCALAPPDATA%\hax_shot`），无需动；`%LOCALAPPDATA%` 缺失时回退 `HOME`/cwd 的行为记为已知限制（§56.3） |
+| `main.dart:119-128` | `captureMode && Platform.isMacOS`、`backgroundColor` 的二分是**有意**的：Windows 浮层由 `capture_window_bridge` 摆位，不走 macOS 的 `.screenSaver` 分支，也不需要隐藏标题栏的替代方案 |
+| `app.dart:550-556`、`app.dart:769` | `_recoverShortcut`：Windows 只做 resumed 后重注册一次（那条梯度是给 Carbon 实测行为写的）；`_popUpTrayMenu`：Linux 的 AppIndicator 自己弹菜单，重复调用会弹两次，所以保持 `return`；Windows 已加 `bringAppToFront: true`（§6.7） |
+| `app.dart:155-165`、`window_visibility.dart:17`、`capture_overlay_window.dart:120/131/158` | §14.5 / §14.7 / §15 的落点，Windows 分支都在，无需动 |
+| `first_run_guide.dart:32-38`、`shortcut_settings_page.dart:123-155/537`、`shortcut_service.dart:104-109` | 平台文案：Windows 显示 `Win`、HKCU Run 说明，没有 GNOME/macOS 说法（§36），无需动 |
+| `screen_capture_permission.dart:26`、`capture_permission_flow.dart` | `if (!Platform.isMacOS) return;` + `isMacOS()` 显式传参：Windows 不会掉进 macOS 授权引导，查询失败也只进平台无关的失败面板 |
+| `hard_exit.dart` | Windows 上 `Process.killPid(..., sigkill)` 忽略信号、直接终止进程，按 §39 不重写 |
+| `app_lifecycle_bridge.dart` | 只注册接收 handler、从不 `invokeMethod`（事件由 macOS 原生侧发），Windows 上是空实现，安全 |
+| `rounded_window.dart:27` | Win/Linux 共享 `ClipRRect`、macOS 交给系统裁圆角，是有意设计 |
+| `hotkey_binding.dart` | 绑定串三平台共用；`windowsVirtualKeyCode` 是 Windows 唯一入口，没有把 Flutter `keyId`、USB HID usage 或 Carbon 键码当 VK（§25） |
+| `gnome_shortcut_service.dart`、XDG 自启动里的 `gsettings` / `XDG_*` | 都封在 Linux 服务内部，Windows 不会执行到；`lib/` 里已没有 `/tmp/` 字面量（`main.dart` 用 `Directory.systemTemp`） |
+
+**本轮唯一的代码改动**是 `lib/native/native_bridge.dart` 里 `_copyPngToClipboardWithLog` 的注释：
+原文写“只有 Linux 放到 worker isolate”，而代码是“macOS 同步、其余平台进 worker isolate”，
+Windows 正好落在 worker 里——这也是正确行为（`copy_png_impl` 阻塞等自己的剪贴板专职线程，
+最长是 `OpenClipboard` 的 5×20ms 重试窗口，放主 isolate 会卡住 platform 线程）。只改了注释，
+没有改行为。
+
+按 §40 **不新增** `DesktopPlatform` 之类的抽象：现在要合并的只剩“文档/注释里的平台描述”，
+不值得为此加一层。
+
+### 18.17 Phase 7：用户验收矩阵状态（§41–§47）
+
+状态只有四种：`已验证`（用户亲测 + 现象）、`待用户`（代码已就绪，等用户跑）、`缺设备`、
+`已知不支持`。**Agent 不替用户勾“已验证”**；截至 18.15 的本机证据都来自脚本直调 DLL /
+模拟托盘消息，不能当成端到端验收。
+
+三维前提（本机实物条件见 18.1）：单显示器 `\.\DISPLAY1`（0,0 起）、3840x2160 @150%、
+Windows 11 x64。因此“副屏 / 负坐标 / 混合 DPI / 三屏 / Win10”本机一律缺设备。
+
+| # | 项 | 状态 |
+| --- | --- | --- |
+| 1 | Win11 单屏启动（托盘常驻、不闪窗、不占任务栏） | 待用户 |
+| 2 | Win10 x64 启动 | 缺设备（本机只有 Win11） |
+| 3 | host + capture 两进程（PID 不同、锁与 ACK 可追） | 待用户 |
+| 4 | 重复 capture（第二次不显示窗口） | 待用户 |
+| 5 | 含空格 / 中文路径启动 | 待用户 |
+| 6 | 退出 host（托盘消失、锁释放、快捷键失效） | 待用户 |
+| 7 | 单屏截图（尺寸 / 方向 / 颜色） | 待用户 |
+| 8 | 双屏（鼠标在主 / 副） | 缺设备 |
+| 9 | 左侧副屏（负坐标，不偏移不 clamp） | 缺设备 |
+| 10 | 混合 DPI 副屏 | 缺设备 |
+| 11 | 三屏 | 缺设备 |
+| 12 | 物理客户区契约（§13.5 三项一致） | 待用户 |
+| 13 | 常规浏览器 / 桌面非黑图 | 待用户 |
+| 14 | HDR / 独占全屏 / 受保护内容 | 已知不支持（§66） |
+| 15 | 选区 / 矩形 / 箭头 / 文字（控制点不入导出） | 待用户 |
+| 16 | Esc（退出且锁释放） | 待用户 |
+| 17 | 保存 PNG（尺寸 = 选区物理像素） | 待用户 |
+| 18 | 复制到剪贴板（Paint 可粘） | 待用户 |
+| 19 | 浏览器 / IM 至少一个可粘 | 待用户 |
+| 20 | capture 退出后仍可粘贴（硬门槛） | 待用户 |
+| 21 | AI 面板（可缩放、可关闭、转后能再截） | 待用户 |
+| 22 | 默认快捷键 `Alt+Shift+Z` | 待用户 |
+| 23 | 改绑 / 冲突 / 回滚（UI 不误报成功） | 待用户 |
+| 24 | 删除后重启仍禁用 | 待用户 |
+| 25 | 自启动开关（可开可关、不双实例） | 待用户 |
+| 26 | 平台文案（无 GNOME / macOS 说法） | 待用户 |
+| 27 | 日志可查（快捷键失败 code + capture 链） | 待用户 |
+| 28 | 睡眠 / 唤醒后快捷键可用或可恢复 | 待用户 |
+
+§46 的负坐标项按上表第 9 项记缺设备；§47 的 DPI 必测项里，“手头这一组（单屏 150%）”
+已具备但整体矩阵仍是待用户，“主屏 + 外接 100%（或任何混合组合）”“窗口跨屏后摆浮层”
+均缺设备——**不得**因此写“DPI 全覆盖”。
+
+用户自查日志（日志是 UTF-8，Windows PowerShell 里不带 `-Encoding UTF8` 会把中文显示成乱码）：
+
+```powershell
+$log = "$env:LOCALAPPDATA\hax_shot\logs\hax_shot.log"
+Get-Content $log -Tail 50 -Encoding UTF8
+Get-Content $log -Encoding UTF8 |
+  Select-String -Pattern 'shortcut_trigger|spawn_success|child_started|lock_busy|capture_ready|overlay_ready|failed'
+```
+
+`Select-String -Encoding` 是 PowerShell 7 才有的参数；用 Windows PowerShell 5.1 时按上面的
+管道写法先读成字符串再匹配（事件名是 ASCII，中文只在 `message` 字段里）。
+
+本轮按 §56.3 记录、**不修**的两个限制：
+
+- `diagnostic_log.dart` 的注释说“阻塞式独占锁”，实际用的是 `FileLock.exclusive`（非阻塞）：
+  极端情况下会抢锁失败并丢掉一条事件，“日志一定完整”不是无条件承诺；
+- `%LOCALAPPDATA%` 缺失时日志 / 锁 / ACK 三处都会退到 `HOME`/当前目录，非标准环境会带出
+  工作目录依赖（`single_instance_guard.dart`、`capture_request_channel.dart`、
+  `diagnostic_log.dart` 一致）。

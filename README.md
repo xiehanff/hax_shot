@@ -4,7 +4,8 @@
 剪贴板，或者丢给 AI 提取文字/翻译/解释。
 
 - **macOS**：Apple Silicon（arm64），菜单栏应用，没有 Dock 图标；
-- **Linux**：Fedora GNOME + Wayland，只保证主显示器。
+- **Linux**：Fedora GNOME + Wayland，只保证主显示器；
+- **Windows**：Windows 11 x64，未签名的 ZIP 包（解压即用）；Win10 / 多显示器 / 混合 DPI 尚未验证。
 
 ## 下载安装
 
@@ -16,6 +17,10 @@
 | macOS（内部测试） | `HaxShot-<版本>-arm64-unsigned.dmg` | 未签名/未公证，只能自己机器上右键“打开”，别人机器会被 Gatekeeper 拦 |
 | Debian / Ubuntu | `hax-shot_<版本>_amd64.deb` | `sudo apt install ./hax-shot_<版本>_amd64.deb` |
 | Fedora | `hax-shot-<版本>-1.x86_64.rpm` | `sudo dnf install ./hax-shot-<版本>-1.x86_64.rpm` |
+| Windows | `HaxShot-<版本>-windows-x64.zip` | 解压到一个固定目录，双击 `hax_shot.exe`（没有安装器） |
+
+> Windows ZIP 从包含 Windows 适配的版本开始随 Release 发布，更早的版本里没有这个资产。
+> 具体步骤见下面的 [Windows（ZIP 包）](#windowszip-包)。
 
 ## 第一次使用
 
@@ -31,9 +36,59 @@
 - **Linux**：**Alt+Shift+Z**（macOS 的 ⌥ 在 Linux 上就是 Alt），需要执行一次
   `/usr/share/hax-shot/install-gnome-shortcut.sh` 装进 GNOME 自定义快捷键——
   从旧版本升级上来的话重跑一次，把旧的 Alt+Z 换成新默认值。
+- **Windows**：**Alt+Shift+Z**，启动后自动注册（不用手动装任何东西）。
 
 菜单栏 / 托盘图标可能被 Bartender 这类工具收进隐藏区，所以默认就留了一个不依赖图标的入口；
 可以在 **设置** 里改快捷键，也可以开关开机自启动。
+
+## Windows（ZIP 包）
+
+Windows 版只有一个解压即用的 ZIP，**没有安装器**（不会出现 Setup EXE）：
+
+1. 把 `HaxShot-<版本>-windows-x64.zip` 解压到一个固定目录（例如 `C:\Program Files\HaxShot`
+   或 `%LOCALAPPDATA%\HaxShot`），解压完应该直接看到 `hax_shot.exe`。以后升级要覆盖同一个
+   目录，所以不要解压到临时目录里；
+2. 双击 `hax_shot.exe`：不会出现主窗口，只在 **托盘** 出现图标（不占任务栏）。Win11 默认把
+   新图标收进「显示隐藏的图标」折叠区，需要的话把它拖出来固定住；
+3. 托盘图标 **左键或右键** 都能弹出菜单：立即截屏 / 设置 / 退出；
+4. 默认快捷键 **Alt+Shift+Z**，首次启动自动注册；也可以在托盘菜单 →「设置」里改，
+   或者在那里开关开机自启动。
+
+**未签名**：ZIP 里的 exe / dll 没有代码签名，首次运行 Windows 会弹 SmartScreen
+（“Windows 已保护你的电脑”）——点「更多信息」→「仍要运行」就能启动。这是预期行为，不要把
+系统的安全防护关掉来装它。ZIP 里已经带上 VC++ 运行库，不需要额外安装（无 VS 的干净机器
+上的解压运行还没实测过）。
+
+### 日志在哪里
+
+日志是 JSON Lines，路径固定：`%LOCALAPPDATA%\hax_shot\logs\hax_shot.log`。
+
+```powershell
+$log = "$env:LOCALAPPDATA\hax_shot\logs\hax_shot.log"
+
+# 最后 50 条（日志是 UTF-8，不加 -Encoding UTF8 时中文会显示成乱码）
+Get-Content $log -Tail 50 -Encoding UTF8
+
+# 只看截图 / 快捷键链路（事件名是 ASCII，中文只在 message 字段里）
+Get-Content $log -Encoding UTF8 |
+  Select-String -Pattern 'shortcut_trigger|spawn_success|child_started|lock_busy|capture_ready|overlay_ready|failed'
+```
+
+`Select-String -Encoding` 是 PowerShell 7 才有的参数；Windows PowerShell 5.1 用上面的管道写法。
+
+### 升级与卸载
+
+- **升级**：先从托盘退出旧版本（确认任务管理器里没有 `hax_shot.exe` 残留），再把新 ZIP 解压
+  覆盖同一个目录。目录换了位置就要到设置里重新打开一次开机自启动；
+- **卸载**：托盘退出 → 设置里关掉「开机自启动」→ 删掉解压出来的目录。自启动只写当前用户的
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，没有系统服务、计划任务或驱动要清理。
+
+### Windows 目前不保证的部分
+
+- 没验证过的：Windows 10、多显示器 / 副屏在左侧（负坐标）/ 混合 DPI、三屏；
+- 不支持：HDR、独占全屏、DRM 受保护内容；
+- 截图里不包含鼠标指针；
+- 非 US 键盘布局下，符号键（`;` `[` 这类）的快捷键按 US 布局解释；字母、数字、功能键不受影响。
 
 ## 怎么用
 
@@ -60,7 +115,8 @@
    `tccutil reset ScreenCapture com.github.xiehanff.haxShot`，然后重新授权一次；
 2. **已经有截图在等着**：屏幕上有没关掉的框选浮层时，再按快捷键不会叠第二层，先 `Esc` 关掉。
 
-还不行就看日志，一条条往下找停在哪一层（路径：`~/Library/Application Support/com.github.xiehanff.haxShot/logs/hax_shot.log`）：
+还不行就看日志，一条条往下找停在哪一层（Windows 的日志路径与命令见
+[Windows（ZIP 包）](#windowszip-包)）：
 
 ```bash
 LOG="$HOME/Library/Application Support/com.github.xiehanff.haxShot/logs/hax_shot.log"
@@ -89,6 +145,8 @@ Carbon 的热键不跨进程独占，别的软件占了同一个组合时可能�
   偏好设置一起清掉，用仓库里的 `scripts/uninstall_macos_app.sh`；
 - **Linux**：`sudo dnf remove hax-shot` 或 `sudo apt remove hax-shot`，再删掉 GNOME 里的自定义
   快捷键（设置 → 键盘 → 自定义快捷键）。
+- **Windows**：托盘退出 → 设置里关掉「开机自启动」→ 删掉解压出来的目录（见
+  [Windows（ZIP 包）](#windowszip-包)）。
 
 ## 许可证
 

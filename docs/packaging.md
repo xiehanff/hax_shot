@@ -1,15 +1,16 @@
 # 打包与分发
 
-一份文档覆盖三件事：**Linux 包（DEB/RPM）**、**macOS 包（DMG + 签名/公证）**、**CI 发布流程**。
-改打包链路前先看这里，不要新建文档。
+一份文档覆盖四件事：**Linux 包（DEB/RPM）**、**macOS 包（DMG + 签名/公证）**、
+**Windows ZIP**、**CI 发布流程**。改打包链路前先看这里，不要新建文档。
 
 产物命名（三平台一起看，tag 必须和 `pubspec.yaml` 对得上）：
 
 ```text
 pubspec 1.5.0+1  →  tag v1.5.0
-  macOS  HaxShot-1.5.0-arm64.dmg（没签名/公证时必须叫 HaxShot-1.5.0-arm64-unsigned.dmg）
-  DEB    hax-shot_1.5.0+1_amd64.deb
-  RPM    hax-shot-1.5.0-1.x86_64.rpm
+  macOS   HaxShot-1.5.0-arm64.dmg（没签名/公证时必须叫 HaxShot-1.5.0-arm64-unsigned.dmg）
+  Windows HaxShot-1.5.0-windows-x64.zip
+  DEB     hax-shot_1.5.0+1_amd64.deb
+  RPM     hax-shot-1.5.0-1.x86_64.rpm
 ```
 
 Linux 当前提供 **Fedora x86_64 RPM** 和 **Debian/Ubuntu amd64 DEB**。这是因为应用目标是 GNOME + Wayland，且截图链路依赖运行中的 Mutter ScreenCast、PipeWire、GStreamer 插件和 `wl-copy`；这些组件不适合被塞进一个“完全自包含”的 AppImage。
@@ -343,6 +344,101 @@ Gatekeeper 接受 app（spctl）
 DMG 已公证并 stapled
 ```
 
+## Windows：ZIP 包
+
+Windows 只发 ZIP（解压即用）：**没有安装器**（Setup EXE / MSIX 都不在计划内），也**不签名**，
+产物名 `HaxShot-<版本>-windows-x64.zip`（版本取 `pubspec.yaml` 里 `+` 前的那段）。
+
+### 1. 本地打包
+
+前提：已经跑过 `flutter build windows --release`（脚本**只打包，不替你构建**），并且装了 VS 的
+「使用 C++ 的桌面开发」工作负载（要从 `VC\Redist` 取 VC 运行库）：
+
+```powershell
+flutter build windows --release
+pwsh scripts/package_windows_zip.ps1
+```
+
+脚本按顺序做五件事（对应计划 §51–§52）：
+
+1. 拷 app-local VC 运行库：优先用 `$env:VCToolsRedistDir`，否则用 vswhere 找 VS 安装目录下的
+   `VC\Redist\MSVC\<工具集>\x64\Microsoft.VC*.CRT`，把 `msvcp140.dll` / `vcruntime140.dll` /
+   `vcruntime140_1.dll` 三个 x64 文件拷进 Release 目录；
+2. 校验必需项（exe / Rust DLL / flutter_windows.dll / `data\app.so` / `data\icudtl.dat` /
+   `data\flutter_assets` / 三个 CRT），**缺任何一个直接 throw**——`Test-Path` 打印 False 不会
+   让 CI 失败，所以不能只检查不抛；
+3. 盘点插件 DLL：少于 5 个就 throw（防“只打了个 exe”），并要求 `data\flutter_assets` 非空；
+4. `Compress-Archive` 打包到 `build\windows\HaxShot-<版本>-windows-x64.zip`；ZIP 里是 Release
+   目录的**内容**，解压后第一层直接是 `hax_shot.exe`，不套一层目录；
+5. 复查 ZIP 根下确实有 `hax_shot.exe` / `hax_shot_native.dll`。
+
+`-SkipCrt` 只是“本地想看 ZIP 里有什么”的调试开关，CI 与发布禁止使用（跳过之后 ZIP 在没装
+VC 运行库的机器上起不来）。
+
+### 2. ZIP 内容清单
+
+下面是本机 2026-09-19 的 `flutter build windows --release` 实际产物（**以实际产物为准**，
+不是手写的六项）：
+
+```text
+hax_shot.exe
+hax_shot_native.dll                     ← Rust（windows/CMakeLists.txt 从 rust/target 装过来）
+flutter_windows.dll
+desktop_drop_plugin.dll
+file_selector_windows_plugin.dll
+hotkey_manager_windows_plugin.dll
+irondash_engine_context_plugin.dll
+screen_retriever_windows_plugin.dll
+super_native_extensions.dll
+super_native_extensions_plugin.dll
+tray_manager_plugin.dll
+url_launcher_windows_plugin.dll
+window_manager_plugin.dll
+data\app.so                             ← AOT
+data\icudtl.dat
+data\flutter_assets\…                   ← 整个目录
+msvcp140.dll / vcruntime140.dll / vcruntime140_1.dll   ← 打包脚本补进 bundle
+```
+
+### 3. VC 运行库策略：app-local
+
+Flutter 官方 Windows 分发文档要求除了 exe/DLL/data 之外还要带 Visual C++ 运行库，所以三个
+`x64` CRT 直接放进 ZIP（而不是要求用户先装「VC++ 可再发行组件」）。
+
+- 只发 x64（Windows 版只支持 x64）；
+- 少任何一个都 throw，不静默跳过；
+- 开发机 / CI 装了 VS **不能**证明干净用户机能跑，必须在无 VS 环境实测一次（见下面第 5 节）。
+
+### 4. CI job 与 artifact 命名
+
+- `verify.yml` 已有 `windows` job（PR / main push）：`windows-latest`，`flutter analyze` +
+  `cargo fmt --check` + `cargo check` + `flutter build windows --release` + bundle 完整性
+  （同样缺文件 throw）。它**不跑测试**，也不上传 artifact；
+- `release.yml` 的 `windows` job：**尚未落地**（计划里的 Phase 9）。目标形态是
+  `needs: preflight`、跑构建 → `pwsh scripts/package_windows_zip.ps1` →
+  `actions/upload-artifact@v4`（name `hax-shot-windows-${{ github.ref_name }}`，与
+  `hax-shot-macos-*` 同风格，`retention-days: 30`，`if-no-files-found: error`），最后把
+  `windows` 加进 `release.needs`；`workflow_dispatch` 干跑仍然只产 artifact、不发布。
+  在此之前 Release 资产里只有 DMG / DEB / RPM。
+
+### 5. 干净机器验证（发布前必须做一次）
+
+在一台**没有装 VS、也没装过 VC++ 运行库**的 Windows 上：
+
+1. 解压 `HaxShot-<版本>-windows-x64.zip` 到任意目录；
+2. 双击 `hax_shot.exe`：托盘出现图标，不报“找不到 xxx.dll”；
+3. 按 `Alt+Shift+Z` 截一次屏并复制到剪贴板。
+
+**没做这一步之前**，README / Release 说明里都不能写“解压即用已验证”。
+
+### 6. 升级 / 卸载 / 自启动迁移
+
+- 升级：先退出旧 host 和任何 capture 子进程，再用新 ZIP 覆盖同一目录；
+- 自启动：只写当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，
+  换目录后需要到设置里重新打开一次；系统“启动”页里的禁用开关存在 `StartupApproved`，
+  应用不去改它，被禁用了只能到任务管理器恢复；
+- 卸载：退出 → 关自启动 → 删目录；没有系统服务 / 计划任务 / 驱动需要清理。
+
 ## 发布：tag、版本约定与 CI
 
 HaxShot 的发布目标是让“代码合并”和“发布安装包”分开：普通 `main` 分支 push 只更新源码、
@@ -450,6 +546,9 @@ git push origin v1.5.0
 | `release` | `ubuntu-24.04` | 汇总两个平台的产物，创建或更新 GitHub Release |
 
 每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
+
+> Windows 不在上面的表里：它的 `windows` job（构建 + ZIP + `release.needs`）属于计划里的
+> Phase 9，**尚未加进 `release.yml`**，接入方式见上面的「Windows：ZIP 包」第 4 节。
 
 Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
 （Linux 与 macOS 两个 job），tag 应该指向已经过检查的 commit。
