@@ -51,9 +51,6 @@ fn write_bytes_to_buffer(bytes: &[u8], buffer: *mut u8, capacity: usize) -> usiz
 }
 
 /// 三平台共用的临时 PNG 路径：`<系统临时目录>/hax-shot-<pid>-<纳秒>.png`。
-//
-// Windows 的 GDI 抓屏在下一步才会用上它；这里的 allow 随那一步一起移除。
-#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn unique_temp_path() -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -1,28 +1,33 @@
-//! Windows 后端：显示器枚举 / 选屏 + 目标元数据 ABI。
+//! Windows 后端：GDI 抓屏 + 显示器枚举 / 选屏 + 冻结的目标元数据。
 //!
-//! 这件事只在这里实现一次，C++ / Dart 只消费：
+//! 三件事都**只在这里实现一次**，C++ / Dart 只消费：
 //!
 //! - `EnumDisplayMonitors` + `GetMonitorInfoW(MONITORINFOEXW)` 枚举显示器，
 //!   `szDevice` → FNV-1a 32 位 display id（[`fnv1a_display_id`]）；
 //! - 选屏规则 [`resolve_target_monitor`]：`--display` → 光标所在显示器 → 主显示器；
-//! - `hax_shot_target_monitor` / `hax_shot_last_capture_target` 两个元数据导出。
+//! - GDI 抓一帧写成临时 PNG，成功后把实际用的那块屏冻结进 [`CAPTURE_STATE`]，
+//!   浮层摆位只能读 `hax_shot_last_capture_target`（§8.5）。
 //!
-//! GDI 抓屏与冻结语义在下一步实现；剪贴板属于 Phase 5，这里保持可读的“尚未实现”。
+//! 剪贴板属于 Phase 5，这里保持可读的“尚未实现”。
 
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::mem::size_of;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows::core::BOOL;
 use windows::Win32::Foundation::{GetLastError, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, HDC, HMONITOR, MONITORINFOEXW,
-    MONITOR_DEFAULTTONEAREST,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, MonitorFromPoint, ReleaseDC,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HBITMAP, HDC,
+    HGDIOBJ, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, MONITORINFOF_PRIMARY};
 
-use crate::{clear_last_error, set_last_error, HaxShotTargetMonitor};
+use crate::{clear_last_error, set_last_error, unique_temp_path, HaxShotTargetMonitor};
 
 /// ABI 错误码，与 `HaxShotTargetMonitor.error_code` / `hax_shot_*` 返回值同一套（§8.4）。
 const OK: i32 = 0;
@@ -34,8 +39,13 @@ const ENUM_FAILED: i32 = 2;
 const DEVICE_NAME_FAILED: i32 = 3;
 /// 两块屏的 display id 相同（或 hash 落到保留值 0，无法寻址）。
 const HASH_COLLISION: i32 = 4;
+/// 冻结的目标已消失 / rect 变了。
+const TARGET_STALE: i32 = 5;
 /// `out` 指针为空。
 const INVALID_ARGUMENT: i32 = 6;
+
+/// 单屏物理尺寸上限（§9.3）：超过直接失败，不静默截断。
+const MAX_DIMENSION: i32 = 32768;
 
 /// 没有 macOS 的屏幕录制授权流程，抓屏始终被系统允许。
 pub(crate) fn screen_capture_authorized_impl() -> u32 {
@@ -64,23 +74,54 @@ pub(crate) fn cursor_display_impl() -> u32 {
         .map_or(0, |monitor| monitor.display_id)
 }
 
-/// 本步骤只完成选屏：真正的 GDI 抓屏在下一步实现，先返回可读失败，
-/// 让整条链路可以跑到底但不伪造成功。
+/// 抓一帧目标显示器并写成临时 PNG；成功后冻结目标元数据。
+///
+/// 失败按 §9.7 的策略带着操作名与真实 native code 返回，绝不返回“看着像成功”的图。
 pub(crate) fn capture_screen_impl() -> Result<PathBuf, (i32, String)> {
     let requested = requested_display_id();
     let (monitor, source) = resolve_target_monitor(requested)?;
-    Err((
-        -1,
-        format!(
-            "backend=gdi requested={requested} source={} display_id={} rect={} size={}x{} dpi={}: GDI capture is not implemented yet",
-            source.label(),
-            monitor.display_id,
-            monitor.rect_label(),
-            monitor.width(),
-            monitor.height(),
-            monitor.dpi
-        ),
-    ))
+    let size = frame_size(monitor.width(), monitor.height()).map_err(|(code, message)| {
+        (
+            code,
+            format!(
+                "backend=gdi requested={requested} source={} display_id={} rect={} {message}",
+                source.label(),
+                monitor.display_id,
+                monitor.rect_label()
+            ),
+        )
+    })?;
+
+    let frame = capture_frame(&monitor, &size).map_err(|(code, message)| {
+        (
+            code,
+            format!(
+                "backend=gdi requested={requested} source={} display_id={} rect={} size={}x{} stride={} dpi={} {message}",
+                source.label(),
+                monitor.display_id,
+                monitor.rect_label(),
+                size.width,
+                size.height,
+                size.stride,
+                monitor.dpi
+            ),
+        )
+    })?;
+
+    let path = unique_temp_path();
+    write_png(&path, &frame.pixels, size.width, size.height).map_err(|error| {
+        (
+            -1,
+            format!(
+                "backend=gdi requested={requested} display_id={} rect={} {error}",
+                monitor.display_id,
+                monitor.rect_label()
+            ),
+        )
+    })?;
+
+    freeze_target(&monitor, &frame);
+    Ok(path)
 }
 
 /// Phase 5 才会实现：写系统图片剪贴板（需要有效的 owner HWND，见 §33）。
@@ -97,11 +138,12 @@ pub(crate) fn target_monitor_impl(requested: u32, out: *mut HaxShotTargetMonitor
 
     match resolve_target_monitor(requested) {
         Ok((monitor, _source)) => {
-            // 只查询，没有本次抓屏：generation 先恒为 0（冻结槽随抓屏实现）。
+            // 只查询，没有本次抓屏：generation 用当前进度（= 最近一次成功抓屏的代际号），
+            // 诊断位保持 0。
             clear_last_error();
             // SAFETY: out 非空（上面已判断），调用方按 ABI 分配了完整结构体。
             unsafe {
-                std::ptr::write(out, monitor.metadata(0, 0));
+                std::ptr::write(out, monitor.metadata(current_generation(), 0));
             }
             OK
         }
@@ -120,20 +162,94 @@ pub(crate) fn target_monitor_impl(requested: u32, out: *mut HaxShotTargetMonitor
 
 /// 读本进程最近一次成功抓屏冻结的目标元数据（浮层摆位必须用它，§8.5）。
 ///
-/// 冻结槽随 GDI 抓屏一起落地；在此之前这里只会返回 `NO_TARGET`。
+/// 目标消失 / rect 变化时按 §8.9 返回 `TARGET_STALE`：本次截图取消，不拿旧图套新屏。
 pub(crate) fn last_capture_target_impl(out: *mut HaxShotTargetMonitor) -> i32 {
     if out.is_null() {
         set_last_error("hax_shot_last_capture_target: out 指针为空".to_owned());
         return INVALID_ARGUMENT;
     }
 
-    // 冻结槽随 GDI 抓屏一起实现：在它落地之前，语义与 Phase 1 一样是“没有目标”。
-    set_last_error("hax_shot_last_capture_target: 本进程还没有成功抓屏过".to_owned());
-    // SAFETY: out 非空，调用方按 ABI 分配了完整结构体。
-    unsafe {
-        std::ptr::write(out, invalid_metadata(NO_TARGET));
+    let Some(frozen) = lock_capture_state().target.clone() else {
+        set_last_error("hax_shot_last_capture_target: 本进程还没有成功抓屏过".to_owned());
+        // SAFETY: out 非空，调用方按 ABI 分配了完整结构体。
+        unsafe {
+            std::ptr::write(out, invalid_metadata(NO_TARGET));
+        }
+        return NO_TARGET;
+    };
+
+    // 只读比对“这块屏还在不在、rect 有没有变”：不重新解析 fallback，也不换目标。
+    let current = match enumerate_monitors() {
+        Ok(monitors) => monitors
+            .into_iter()
+            .find(|monitor| monitor.display_id == frozen.display_id),
+        Err((code, message)) => {
+            set_last_error(format!(
+                "hax_shot_last_capture_target: 无法校验冻结的目标显示器：{message}"
+            ));
+            // SAFETY: out 非空。
+            unsafe {
+                std::ptr::write(out, invalid_metadata(code));
+            }
+            return code;
+        }
+    };
+
+    let stale_reason = match &current {
+        None => Some(format!(
+            "display_id={}（{}）已经不在当前显示器拓扑里",
+            frozen.display_id, frozen.device_name
+        )),
+        Some(monitor)
+            if monitor.rect.left != frozen.left
+                || monitor.rect.top != frozen.top
+                || monitor.rect.right != frozen.right
+                || monitor.rect.bottom != frozen.bottom =>
+        {
+            Some(format!(
+                "display_id={} 的 rect 从 ({},{},{},{}) 变成 {}",
+                frozen.display_id,
+                frozen.left,
+                frozen.top,
+                frozen.right,
+                frozen.bottom,
+                monitor.rect_label()
+            ))
+        }
+        Some(_) => None,
+    };
+
+    if let Some(reason) = stale_reason {
+        set_last_error(format!("冻结的抓屏目标已过期：{reason}"));
+        // SAFETY: out 非空。
+        unsafe {
+            std::ptr::write(out, invalid_metadata(TARGET_STALE));
+        }
+        return TARGET_STALE;
     }
-    NO_TARGET
+
+    clear_last_error();
+    // SAFETY: out 非空。
+    unsafe {
+        std::ptr::write(
+            out,
+            HaxShotTargetMonitor {
+                valid: 1,
+                error_code: 0,
+                display_id: frozen.display_id,
+                reserved: frozen.reserved,
+                left: frozen.left,
+                top: frozen.top,
+                right: frozen.right,
+                bottom: frozen.bottom,
+                width: frozen.right - frozen.left,
+                height: frozen.bottom - frozen.top,
+                dpi: frozen.dpi,
+                generation: frozen.generation,
+            },
+        );
+    }
+    OK
 }
 
 // ---------------------------------------------------------------- 显示器枚举
@@ -446,4 +562,449 @@ fn cursor_monitor_handle() -> Option<HMONITOR> {
 /// 读取托盘宿主传进来的 `--display <id>`；缺失 / 非法一律当作 0（未指定）。
 fn requested_display_id() -> u32 {
     crate::display_id_from_arguments(std::env::args().skip(1))
+}
+
+// --------------------------------------------------------------- GDI 抓屏
+
+/// 已经校验过的抓屏尺寸（32bpp，stride = width * 4，天然 DWORD 对齐）。
+struct FrameSize {
+    width: i32,
+    height: i32,
+    stride: usize,
+    buffer_len: usize,
+}
+
+/// 任何 Win32 调用之前先校验尺寸与溢出（§9.3）；不合法就失败，不静默截断。
+fn frame_size(width: i32, height: i32) -> Result<FrameSize, (i32, String)> {
+    if width <= 0 || height <= 0 {
+        return Err((
+            -1,
+            format!("monitor size {width}x{height} is not a usable capture size"),
+        ));
+    }
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err((
+            -1,
+            format!("monitor size {width}x{height} exceeds the {MAX_DIMENSION} pixel limit"),
+        ));
+    }
+
+    let width_usize = usize::try_from(width)
+        .map_err(|_| (-1, format!("width {width} does not fit into usize")))?;
+    let height_usize = usize::try_from(height)
+        .map_err(|_| (-1, format!("height {height} does not fit into usize")))?;
+    let stride = width_usize
+        .checked_mul(4)
+        .ok_or_else(|| (-1, format!("stride overflow for width {width}")))?;
+    let buffer_len = stride
+        .checked_mul(height_usize)
+        .ok_or_else(|| (-1, format!("buffer size overflow for {width}x{height}")))?;
+
+    Ok(FrameSize {
+        width,
+        height,
+        stride,
+        buffer_len,
+    })
+}
+
+/// 一帧 RGBA8 像素 + 全黑诊断的采样结果。
+struct CapturedFrame {
+    pixels: Vec<u8>,
+    suspected_blank: bool,
+    mean_luma: u8,
+}
+
+/// `GetDC(NULL)` 的 RAII：任何退出路径都会 `ReleaseDC`。
+struct ScreenDc(HDC);
+
+impl ScreenDc {
+    fn acquire() -> Result<Self, (i32, String)> {
+        // SAFETY: GetDC(NULL) 取整个虚拟屏幕的 DC，没有前置条件；失败返回空句柄。
+        let dc = unsafe { GetDC(None) };
+        if dc.0.is_null() {
+            // GetDC 的文档只承诺失败返回 NULL，**没有**承诺设置 last error，
+            // 所以这里记操作名与自有错误码，不声称是系统错误（§9.7）。
+            return Err((-1, "GetDC(NULL) returned a null device context".to_owned()));
+        }
+        Ok(Self(dc))
+    }
+}
+
+impl Drop for ScreenDc {
+    fn drop(&mut self) {
+        // SAFETY: 句柄来自 GetDC(NULL)，只在这里释放一次；返回值只说明是否释放成功。
+        unsafe { ReleaseDC(None, self.0) };
+    }
+}
+
+/// `CreateCompatibleDC` 的 RAII。
+struct MemoryDc(HDC);
+
+impl MemoryDc {
+    fn create(source: HDC) -> Result<Self, (i32, String)> {
+        // SAFETY: source 是有效的 screen DC；失败返回空句柄。
+        let dc = unsafe { CreateCompatibleDC(Some(source)) };
+        if dc.0.is_null() {
+            return Err((
+                -1,
+                "CreateCompatibleDC returned a null device context".to_owned(),
+            ));
+        }
+        Ok(Self(dc))
+    }
+}
+
+impl Drop for MemoryDc {
+    fn drop(&mut self) {
+        // SAFETY: 句柄由 CreateCompatibleDC 创建，只在这里删除一次。
+        unsafe {
+            let _ = DeleteDC(self.0);
+        }
+    }
+}
+
+/// 兼容位图 + “当前被选进哪个 DC”的状态。
+///
+/// Drop 顺序（位图 → memory DC → screen DC）保证失败路径也不漏资源：先按记录的旧
+/// 对象选回（`GetDIBits` 要求位图不被任何 DC 选中），再 `DeleteObject`。
+struct Bitmap {
+    handle: HBITMAP,
+    selected_in: Option<(HDC, HGDIOBJ)>,
+}
+
+impl Bitmap {
+    fn create(source: HDC, size: &FrameSize) -> Result<Self, (i32, String)> {
+        // 必须用**源 DC**（screen DC）创建：用刚建的 memory DC 会得到 1x1 单色位图。
+        // SAFETY: source 有效；宽高已由 frame_size 校验为正且不超过上限。
+        let bitmap = unsafe { CreateCompatibleBitmap(source, size.width, size.height) };
+        if bitmap.0.is_null() {
+            return Err((
+                -1,
+                format!(
+                    "CreateCompatibleBitmap({}x{}) returned a null bitmap",
+                    size.width, size.height
+                ),
+            ));
+        }
+        Ok(Self {
+            handle: bitmap,
+            selected_in: None,
+        })
+    }
+
+    fn select_into(&mut self, dc: HDC) -> Result<(), (i32, String)> {
+        // SAFETY: dc 与 handle 都有效；失败返回 NULL 或 HGDI_ERROR。
+        let previous = unsafe { SelectObject(dc, self.handle.into()) };
+        if previous.0.is_null() || previous.0 as isize == -1 {
+            return Err((
+                -1,
+                "SelectObject failed to select the capture bitmap".to_owned(),
+            ));
+        }
+        self.selected_in = Some((dc, previous));
+        Ok(())
+    }
+
+    /// 把位图从 DC 里选回旧对象；`GetDIBits` 之前必须调用（§9.1 的硬约束）。
+    fn unselect(&mut self) {
+        if let Some((dc, previous)) = self.selected_in.take() {
+            // SAFETY: dc / previous 都是 SelectObject 之前的有效句柄。
+            unsafe {
+                SelectObject(dc, previous);
+            }
+        }
+    }
+}
+
+impl Drop for Bitmap {
+    fn drop(&mut self) {
+        self.unselect();
+        // SAFETY: handle 由 CreateCompatibleBitmap 创建、已经从 DC 里选回，只删一次。
+        unsafe {
+            let _ = DeleteObject(self.handle.into());
+        }
+    }
+}
+
+/// 抓一帧：`GetDC(NULL)` → 兼容位图 → `BitBlt` → `GetDIBits` → BGRA→RGBA（A=255）。
+fn capture_frame(monitor: &MonitorEntry, size: &FrameSize) -> Result<CapturedFrame, (i32, String)> {
+    let screen_dc = ScreenDc::acquire()?;
+    let memory_dc = MemoryDc::create(screen_dc.0)?;
+    let mut bitmap = Bitmap::create(screen_dc.0, size)?;
+    bitmap.select_into(memory_dc.0)?;
+
+    // SRCCOPY|CAPTUREBLT：尽量把 layered window 也算进去，但**不是**对硬件 overlay /
+    // 鼠标指针 / 色彩管理的承诺（§9.6）；本版不合成鼠标。
+    let blitted = unsafe {
+        BitBlt(
+            memory_dc.0,
+            0,
+            0,
+            size.width,
+            size.height,
+            Some(screen_dc.0),
+            monitor.rect.left,
+            monitor.rect.top,
+            SRCCOPY | CAPTUREBLT,
+        )
+    };
+    if let Err(error) = blitted {
+        return Err((
+            -1,
+            format!(
+                "BitBlt failed at ({},{},{},{}): Win32 error {}",
+                monitor.rect.left,
+                monitor.rect.top,
+                size.width,
+                size.height,
+                win32_error_code(&error)
+            ),
+        ));
+    }
+
+    // ★ GetDIBits 要求位图不被任何 DC 选中：先选回旧对象（Drop 里还会兜一次，幂等）。
+    bitmap.unselect();
+
+    let mut info = BITMAPINFO::default();
+    info.bmiHeader = BITMAPINFOHEADER {
+        biSize: size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: size.width,
+        // top-down：负高度，Flutter 侧不需要再翻转（§9.4）。
+        biHeight: -size.height,
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: BI_RGB.0,
+        ..Default::default()
+    };
+
+    let mut raw = vec![0u8; size.buffer_len];
+    // SAFETY: raw 至少有 stride * height 字节；位图已经选回；info 已按 GetDIBits 契约填好。
+    // height 已校验为正数，转 u32 不会丢信息。
+    let lines = unsafe {
+        GetDIBits(
+            screen_dc.0,
+            bitmap.handle,
+            0,
+            size.height as u32,
+            Some(raw.as_mut_ptr().cast::<c_void>()),
+            &mut info,
+            DIB_RGB_COLORS,
+        )
+    };
+    if lines != size.height {
+        // GetDIBits 的返回值只能说明“拷了多少行”，不是系统错误码，所以不声称是错误码。
+        return Err((
+            -1,
+            format!(
+                "GetDIBits copied {lines} scan lines, expected {} (bitmap {}x{})",
+                size.height, size.width, size.height
+            ),
+        ));
+    }
+
+    // 确认系统没有默默改掉我们自己填的字段；不一致就失败，不按“大概能看”凑合（§9.5）。
+    let header = &info.bmiHeader;
+    if header.biSize != size_of::<BITMAPINFOHEADER>() as u32
+        || header.biWidth != size.width
+        || header.biHeight != -size.height
+        || header.biBitCount != 32
+        || header.biCompression != BI_RGB.0
+    {
+        return Err((
+            -1,
+            format!(
+                "GetDIBits rewrote BITMAPINFOHEADER to {}x{} {}bpp compression {} (expected top-down {}x{} 32bpp BI_RGB)",
+                header.biWidth,
+                header.biHeight,
+                header.biBitCount,
+                header.biCompression,
+                size.width,
+                size.height
+            ),
+        ));
+    }
+
+    // DIB 是 BGRA（普通 GDI 截图里 alpha 不可靠）：转成 RGBA，alpha 统一写 255，
+    // 绝不把未初始化的 alpha 写进 PNG（§9.4）。
+    let mut pixels = vec![0u8; size.buffer_len];
+    for (source, destination) in raw.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
+        destination[0] = source[2];
+        destination[1] = source[1];
+        destination[2] = source[0];
+        destination[3] = 255;
+    }
+
+    let sample = sample_luma(&pixels);
+    Ok(CapturedFrame {
+        pixels,
+        suspected_blank: sample.suspected_blank,
+        mean_luma: sample.mean_luma,
+    })
+}
+
+/// `windows_core::Error` 里的真实 Win32 错误码（`BitBlt` 这类 API 通过它回传）。
+fn win32_error_code(error: &windows::core::Error) -> u32 {
+    let code = error.code().0 as u32;
+    // HRESULT_FROM_WIN32: 0x8007xxxx，低 16 位才是原始 Win32 错误码。
+    if code & 0xFFFF_0000 == 0x8007_0000 {
+        code & 0xFFFF
+    } else {
+        code
+    }
+}
+
+/// 全黑诊断的一次采样结果。
+struct LumaSample {
+    mean_luma: u8,
+    suspected_blank: bool,
+}
+
+/// 步长采样平均亮度，只用来给日志一个 `suspected_blank` 告警（§9.8）。
+///
+/// 黑桌面 / 全黑壁纸都是合法画面，**不允许**据此把截图判为失败或自动重截。
+fn sample_luma(pixels: &[u8]) -> LumaSample {
+    /// 采样上限：一张 4K 截图最多看这么多像素，开销可忽略。
+    const MAX_SAMPLES: usize = 4096;
+
+    let pixel_count = pixels.len() / 4;
+    if pixel_count == 0 {
+        return LumaSample {
+            mean_luma: 0,
+            suspected_blank: false,
+        };
+    }
+
+    let step = (pixel_count / MAX_SAMPLES).max(1);
+    let mut total: u64 = 0;
+    let mut samples: u64 = 0;
+    let mut brightest: u8 = 0;
+    for index in (0..pixel_count).step_by(step) {
+        let offset = index * 4;
+        let luma = (299 * u32::from(pixels[offset])
+            + 587 * u32::from(pixels[offset + 1])
+            + 114 * u32::from(pixels[offset + 2]))
+            / 1000;
+        let luma = luma as u8;
+        total += u64::from(luma);
+        samples += 1;
+        brightest = brightest.max(luma);
+    }
+
+    let mean_luma = (total / samples.max(1)) as u8;
+    // 只有“整体接近纯黑且几乎没有亮点”才算疑似：抓受保护内容 / 显卡 overlay 失败时
+    // 是这种形态，而深色桌面往往还留着任务栏或窗口的亮部。
+    LumaSample {
+        mean_luma,
+        suspected_blank: mean_luma <= 2 && brightest <= 16,
+    }
+}
+
+/// 用 `png` crate 把 RGBA8 写进临时文件；失败删掉半成品，不留 0 字节或半截 PNG（§9.9）。
+fn write_png(path: &Path, pixels: &[u8], width: i32, height: i32) -> Result<(), String> {
+    let result = write_png_inner(path, pixels, width, height);
+    if result.is_err() {
+        // 删除失败不能掩盖主错误：这里刻意忽略删除本身的错误。
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+fn write_png_inner(path: &Path, pixels: &[u8], width: i32, height: i32) -> Result<(), String> {
+    let file = std::fs::File::create(path)
+        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    let mut encoder = png::Encoder::new(file, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    // 与 lib.rs 的 encode_png 一致：Fast（fdeflate）在截图这种低频动作上最划算。
+    encoder.set_compression(png::Compression::Fast);
+
+    let mut writer = encoder
+        .write_header()
+        .map_err(|error| format!("failed to write PNG header to {}: {error}", path.display()))?;
+    writer
+        .write_image_data(pixels)
+        .map_err(|error| format!("failed to write PNG data to {}: {error}", path.display()))?;
+    writer
+        .finish()
+        .map_err(|error| format!("failed to finish PNG at {}: {error}", path.display()))?;
+    Ok(())
+}
+
+// --------------------------------------------------------- 冻结的目标元数据
+
+/// `reserved` 的位域：bit 0 = 疑似全黑，bit 8..=15 = 采样平均亮度（0..255）。
+const SUSPECTED_BLANK_FLAG: u32 = 1 << 0;
+const MEAN_LUMA_SHIFT: u32 = 8;
+
+/// 抓屏成功那一刻冻结的目标显示器（§8.5：一次解析、两处消费）。
+#[derive(Clone)]
+struct FrozenTarget {
+    display_id: u32,
+    device_name: String,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    dpi: u32,
+    generation: u64,
+    reserved: u32,
+}
+
+/// 抓屏代际号 + 最近一次成功抓屏的目标。
+///
+/// 抓屏跑在 worker isolate 的线程上，读元数据（日志、Phase 3 的浮层摆位）在别的
+/// 线程，所以必须是 `Mutex`：不能用 `Cell` / `Rc` 这类单线程容器（§8.6）。
+struct CaptureState {
+    generation: u64,
+    target: Option<FrozenTarget>,
+}
+
+static CAPTURE_STATE: OnceLock<Mutex<CaptureState>> = OnceLock::new();
+
+fn lock_capture_state() -> MutexGuard<'static, CaptureState> {
+    let state = CAPTURE_STATE.get_or_init(|| {
+        Mutex::new(CaptureState {
+            generation: 0,
+            target: None,
+        })
+    });
+    match state.lock() {
+        Ok(guard) => guard,
+        // 抓屏线程 panic 会毒化 Mutex；元数据本身仍然可用，不能因此让整个进程读不到目标。
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 当前抓屏代际号（最近一次成功抓屏的号；还没成功过就是 0）。
+fn current_generation() -> u64 {
+    lock_capture_state().generation
+}
+
+/// 冻结本次成功抓屏的目标；`generation` 每成功一次 +1（溢出不处理，实际不可能）。
+fn freeze_target(monitor: &MonitorEntry, frame: &CapturedFrame) -> u64 {
+    let mut state = lock_capture_state();
+    state.generation = state.generation.wrapping_add(1);
+    state.target = Some(FrozenTarget {
+        display_id: monitor.display_id,
+        device_name: monitor.device_name.clone(),
+        left: monitor.rect.left,
+        top: monitor.rect.top,
+        right: monitor.rect.right,
+        bottom: monitor.rect.bottom,
+        dpi: monitor.dpi,
+        generation: state.generation,
+        reserved: capture_flags(frame),
+    });
+    state.generation
+}
+
+/// `reserved` 的诊断位：疑似全黑 + 采样平均亮度。
+fn capture_flags(frame: &CapturedFrame) -> u32 {
+    let blank = if frame.suspected_blank {
+        SUSPECTED_BLANK_FLAG
+    } else {
+        0
+    };
+    blank | (u32::from(frame.mean_luma) << MEAN_LUMA_SHIFT)
 }

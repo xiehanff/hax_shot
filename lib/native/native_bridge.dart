@@ -39,6 +39,18 @@ final class NativeBridge {
       _encodePng = _library.lookupFunction<_EncodePngNative, _EncodePngDart>(
         'hax_shot_encode_png',
       );
+      // Windows 专用导出（macOS / Linux 的 DLL 里没有这两个符号，不能无条件 lookup）。
+      // 顺手把“DLL 是旧版本”这种问题在这一步暴露出来：缺符号的报错会带上已加载的路径。
+      if (Platform.isWindows) {
+        _targetMonitor = _library
+            .lookupFunction<_TargetMonitorNative, _TargetMonitorDart>(
+              'hax_shot_target_monitor',
+            );
+        _lastCaptureTarget = _library
+            .lookupFunction<_LastCaptureTargetNative, _LastCaptureTargetDart>(
+              'hax_shot_last_capture_target',
+            );
+      }
     } on ArgumentError catch (error) {
       // 走到这里说明库本体已经加载成功，缺的是导出表里的符号：多半是拷了旧版本的
       // DLL，或者 DLL 的依赖没解析全。把加载成功的路径与原始错误一起带上，
@@ -72,11 +84,16 @@ final class NativeBridge {
   late final _PngBufferSizeDart _pngBufferSize;
   late final _EncodePngDart _encodePng;
 
+  /// Windows 专用导出（见构造函数；其它平台为 null）。
+  _TargetMonitorDart? _targetMonitor;
+  _LastCaptureTargetDart? _lastCaptureTarget;
+
   /// Captures the target display and returns the temporary PNG path.
   ///
   /// Runs the blocking capture call on a worker isolate. Which display is
-  /// captured is decided by `--display` (see rust/src/macos.rs) so it matches
-  /// the display the Runner puts the selection overlay on.
+  /// captured is decided by `--display` (rust/src/macos.rs on macOS,
+  /// rust/src/windows.rs on Windows) so it matches the display the Runner puts
+  /// the selection overlay on.
   Future<String> captureScreen() {
     return Isolate.run(() => NativeBridge.instance._captureScreenSync());
   }
@@ -170,8 +187,59 @@ final class NativeBridge {
   /// The tray host reads this once, right when the user asks for a screenshot,
   /// and forwards it to the `--capture` process so the selection overlay and the
   /// native capture target the same display. Returns 0 when the platform cannot
-  /// report it, which means "use the primary display".
+  /// report it (the capture process then falls back to the pointer / main
+  /// display, see rust/src/windows.rs).
   int cursorDisplay() => _cursorDisplay();
+
+  /// 查询当前拓扑下本次截图会选中的显示器（`--display` → 光标 → 主屏）。
+  ///
+  /// 诊断 / 预检用；**摆浮层不能用它**——必须用 [lastCaptureTarget] 返回的冻结结果，
+  /// 否则用户在抓屏与摆窗之间换屏时会“抓 A 摆 B”（rust/src/windows.rs 的 §8.5）。
+  ///
+  /// 只在 Windows 可用；其它平台、或原生报“拿不到目标”（NO_TARGET）时返回 null。
+  CaptureTargetMonitor? targetMonitor({int requested = 0}) {
+    final lookup = _targetMonitor;
+    if (lookup == null) return null;
+    if (requested < 0 || requested > 0xFFFFFFFF) {
+      throw const NativeBridgeException('requested 超出 u32 范围');
+    }
+    return _readTargetMonitor(
+      'hax_shot_target_monitor',
+      (pointer) => lookup(requested, pointer),
+    );
+  }
+
+  /// 读本进程最近一次成功抓屏**冻结**的目标显示器。
+  ///
+  /// 返回 null 表示：不是 Windows、还没有成功抓屏过（NO_TARGET），或者冻结的目标已经
+  /// 过期（TARGET_STALE：显示器被拔掉 / rect 变了）。后两种情况下都不该再拿旧图摆浮层。
+  CaptureTargetMonitor? lastCaptureTarget() {
+    final lookup = _lastCaptureTarget;
+    if (lookup == null) return null;
+    return _readTargetMonitor('hax_shot_last_capture_target', lookup);
+  }
+
+  CaptureTargetMonitor? _readTargetMonitor(
+    String symbol,
+    int Function(Pointer<_NativeTargetMonitor> out) read,
+  ) {
+    final pointer = calloc<_NativeTargetMonitor>();
+    try {
+      final code = read(pointer);
+      // 1 = NO_TARGET、5 = TARGET_STALE：都是“现在没有可用目标”的正常状态。
+      if (code == _targetMonitorNoTarget || code == _targetMonitorStale) {
+        return null;
+      }
+      if (code != _targetMonitorOk) {
+        throw NativeBridgeException(
+          '$symbol 失败（native code $code）：${_readLastError()}',
+        );
+      }
+      return CaptureTargetMonitor._fromNative(symbol, pointer);
+    } finally {
+      calloc.free(pointer);
+    }
+  }
 
   String _captureScreenSync() {
     final buffer = calloc<Uint8>(_textBufferCapacity);
@@ -331,6 +399,153 @@ typedef _EncodePngDart =
 typedef _LastErrorNative =
     IntPtr Function(Pointer<Uint8> buffer, IntPtr capacity);
 typedef _LastErrorDart = int Function(Pointer<Uint8> buffer, int capacity);
+
+typedef _TargetMonitorNative =
+    Int32 Function(Uint32 requested, Pointer<_NativeTargetMonitor> out);
+typedef _TargetMonitorDart =
+    int Function(int requested, Pointer<_NativeTargetMonitor> out);
+
+typedef _LastCaptureTargetNative =
+    Int32 Function(Pointer<_NativeTargetMonitor> out);
+typedef _LastCaptureTargetDart =
+    int Function(Pointer<_NativeTargetMonitor> out);
+
+/// rust/src/windows.rs 的 ABI 错误码（`error_code` 与返回值同一套）。
+const int _targetMonitorOk = 0;
+const int _targetMonitorNoTarget = 1;
+const int _targetMonitorStale = 5;
+
+/// `rust/src/lib.rs` 的 `#[repr(C)] HaxShotTargetMonitor` 的 Dart 布局。
+///
+/// 字段顺序/对齐必须与 Rust 一致（`u64` 会自己对齐到 8 字节，和 `repr(C)` 相同）。
+/// 只读：写入只发生在原生层。
+final class _NativeTargetMonitor extends Struct {
+  @Uint32()
+  external int valid;
+  @Uint32()
+  external int errorCode;
+  @Uint32()
+  external int displayId;
+  @Uint32()
+  external int reserved;
+  @Int32()
+  external int left;
+  @Int32()
+  external int top;
+  @Int32()
+  external int right;
+  @Int32()
+  external int bottom;
+  @Int32()
+  external int width;
+  @Int32()
+  external int height;
+  @Uint32()
+  external int dpi;
+  @Uint64()
+  external int generation;
+}
+
+/// 一次抓屏目标显示器的元数据（Windows）。
+///
+/// 由 Rust 计算：`display_id` 是 `MONITORINFOEXW.szDevice` 的 FNV-1a 32 位，rect 是
+/// 物理像素（允许为负）。C++ / Dart 只消费，**不要**自己枚举显示器或重算 hash。
+final class CaptureTargetMonitor {
+  const CaptureTargetMonitor({
+    required this.displayId,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+    required this.width,
+    required this.height,
+    required this.dpi,
+    required this.generation,
+    required this.reserved,
+  });
+
+  final int displayId;
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+  final int width;
+  final int height;
+
+  /// `GetDpiForMonitor` 的有效 DPI；原生拿不到时是 0。
+  final int dpi;
+
+  /// 本次抓屏的代际号（原生侧每成功一次 +1）。
+  final int generation;
+
+  /// 原生诊断位（不参与摆位）。
+  final int reserved;
+
+  /// 本次抓屏疑似全黑（`reserved` bit 0）：只是告警，不是失败。
+  bool get suspectedBlank => reserved & _suspectedBlankFlag != 0;
+
+  /// 采样平均亮度（`reserved` bit 8..15，0..255）。
+  int get meanLuma => (reserved >> _meanLumaShift) & 0xFF;
+
+  /// `reserved` 的位域定义，与 rust/src/windows.rs 一致。
+  static const _suspectedBlankFlag = 1 << 0;
+  static const _meanLumaShift = 8;
+
+  /// 把原生结构体读成 Dart 值对象，并做范围 / 自洽校验。
+  ///
+  /// 校验失败说明 DLL 与 Dart 侧对不上（旧 DLL 或改错了字段），宁可报错也不要拿一个
+  /// 看着合理的数字去摆浮层。
+  static CaptureTargetMonitor _fromNative(
+    String symbol,
+    Pointer<_NativeTargetMonitor> pointer,
+  ) {
+    final monitor = pointer.ref;
+    final displayId = monitor.displayId;
+    final width = monitor.width;
+    final height = monitor.height;
+    if (monitor.valid != 1) {
+      throw NativeBridgeException('$symbol 返回的结构体 valid=${monitor.valid}');
+    }
+    if (monitor.errorCode != _targetMonitorOk) {
+      throw NativeBridgeException(
+        '$symbol 报 success 但 error_code=${monitor.errorCode}',
+      );
+    }
+    if (displayId == 0) {
+      throw NativeBridgeException('$symbol 返回了保留值 display_id=0');
+    }
+    if (width <= 0 || height <= 0) {
+      throw NativeBridgeException('$symbol 返回的尺寸非法：${width}x$height');
+    }
+    if (monitor.right - monitor.left != width ||
+        monitor.bottom - monitor.top != height) {
+      throw NativeBridgeException(
+        '$symbol 返回的 rect 与尺寸不一致：'
+        '(${monitor.left},${monitor.top},${monitor.right},${monitor.bottom}) '
+        'vs ${width}x$height',
+      );
+    }
+    return CaptureTargetMonitor(
+      displayId: displayId,
+      left: monitor.left,
+      top: monitor.top,
+      right: monitor.right,
+      bottom: monitor.bottom,
+      width: width,
+      height: height,
+      dpi: monitor.dpi,
+      generation: monitor.generation,
+      reserved: monitor.reserved,
+    );
+  }
+
+  /// 日志用的一行摘要（字段顺序与 docs/development-guide.md 的示例一致）。
+  @override
+  String toString() {
+    return 'display_id=$displayId rect=($left,$top,$right,$bottom) '
+        'size=${width}x$height dpi=$dpi generation=$generation';
+  }
+}
 
 final class NativeBridgeException implements Exception {
   const NativeBridgeException(this.message);

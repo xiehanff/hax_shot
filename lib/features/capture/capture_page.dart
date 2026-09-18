@@ -125,10 +125,12 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
 
       // 捕获窗口此时仍隐藏；原生抓屏若永久不返回，用户只会看到“快捷键没反应”，
       // 进程却一直占着捕获锁。超时后由下面的分支硬退出，释放进程内全部资源。
+      final captureWatch = Stopwatch()..start();
       final path = await NativeBridge.instance.captureScreen().timeout(
         _captureTimeout,
         onTimeout: () => throw TimeoutException('抓屏超过 5 秒仍未完成'),
       );
+      captureWatch.stop();
       final file = File(path);
       final bytes = await file.readAsBytes();
       final codec = await ui.instantiateImageCodec(bytes);
@@ -146,6 +148,8 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       }
       setState(() => _image = frame.image);
       _flow.markCaptureSucceeded();
+      // 先记冻结的目标（Windows），再回 ACK：日志里能直接对上“抓的是哪块屏”。
+      _logCaptureTarget(captureWatch.elapsedMilliseconds);
       // 抓到画面：宿主靠这条 ACK 区分「子进程起来了但抓屏失败」和「真的可以选了」。
       _ackRequest(
         CaptureRequestChannel.stateCaptureReady,
@@ -187,6 +191,39 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       );
       _flow.enterFailure(error);
       await _flow.revealWindow();
+    }
+  }
+
+  /// 把原生**冻结**的目标显示器元数据写进诊断日志（Windows；其它平台没有这套 ABI）。
+  ///
+  /// 只读日志用途：读元数据失败不能反过来把已经成功的抓屏变成失败，所以这里自己
+  /// 兜住所有错误。摆浮层用的一定是同一份冻结数据（§8.5），不会出现“抓 A 摆 B”。
+  ///
+  /// [elapsedMilliseconds] 是 `captureScreen()` 这个 FFI 调用的墙钟耗时（含 worker
+  /// isolate 的往返）；原生侧没有日志出口，所以耗时在调用边界上量。
+  void _logCaptureTarget(int elapsedMilliseconds) {
+    try {
+      final target = NativeBridge.instance.lastCaptureTarget();
+      if (target == null) return;
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.captureTargetResolved,
+        requestId: widget.requestId,
+        message: 'backend=gdi $target capture_call_ms=$elapsedMilliseconds',
+      );
+      if (target.suspectedBlank) {
+        // 全黑只是告警：黑桌面是合法画面，不回退、不重截、不写截图内容（§9.8）。
+        DiagnosticLogService.instance.log(
+          DiagnosticEvent.captureSuspectedBlank,
+          level: LogLevel.warning,
+          requestId: widget.requestId,
+          message:
+              '疑似全黑（仅告警）：mean_luma=${target.meanLuma} '
+              'size=${target.width}x${target.height} '
+              'display_id=${target.displayId}',
+        );
+      }
+    } on Object catch (error) {
+      debugPrint('读取冻结的抓屏目标失败：$error');
     }
   }
 

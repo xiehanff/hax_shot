@@ -50,6 +50,10 @@ abstract final class DiagnosticEvent {
   static const captureReady = 'capture_ready';
   static const captureFinished = 'capture_finished';
 
+  // 目标显示器元数据（Windows，见 rust/src/windows.rs）。
+  static const captureTargetResolved = 'capture_target_resolved';
+  static const captureSuspectedBlank = 'capture_suspected_blank';
+
   static const welcomeInitFailed = 'welcome_init_failed';
 
   static const appResumed = 'app_resumed';
