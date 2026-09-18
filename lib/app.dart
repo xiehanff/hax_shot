@@ -760,9 +760,21 @@ class _TrayHostPageState extends State<TrayHostPage>
   /// 在左键 / 右键上都只 invoke Dart 回调，不会自己弹菜单，所以菜单要由这里替它弹。
   ///
   /// Linux 的 AppIndicator 会自己弹菜单，重复调用会弹两次，必须保持 return。
+  ///
+  /// Windows 还必须传 `bringAppToFront: true`（插件里对应 `SetForegroundWindow(owner)`）：
+  /// `TrackPopupMenu` 的契约是**owner 窗口必须是前台窗口**，否则菜单弹出来了却收不到
+  /// 键盘/鼠标消息，点菜单外面、按 Esc 都不会关（本机实测：默认值 false 时菜单
+  /// 永远不消失）。这个参数只对 Windows 生效，macOS 传它是 no-op，所以只给 Windows 开。
   void _popUpTrayMenu() {
     if (Platform.isLinux) return;
-    unawaited(trayManager.popUpContextMenu());
+    unawaited(
+      trayManager.popUpContextMenu(
+        // 参数被标 deprecated（插件说以后可能移除），但本地副本的 Windows 实现
+        // 只在这里读它，去掉它菜单就会卡住不关；等上游换实现时再跟。
+        // ignore: deprecated_member_use
+        bringAppToFront: Platform.isWindows,
+      ),
+    );
   }
 
   @override
