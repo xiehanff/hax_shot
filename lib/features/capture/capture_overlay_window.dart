@@ -75,6 +75,73 @@ final class CaptureOverlayPlacement {
       '${clientRect.right.toInt()},${clientRect.bottom.toInt()}) dpi=$dpi';
 }
 
+/// `WM_DPICHANGED` 之后原生重新钉回浮层失败时的一次结构化事件（Windows，§14.4）。
+///
+/// 浮层可能停在 OS 建议的中间 rect（错误的屏幕 / 尺寸），这时原生会把 overlay 的
+/// 物理契约标成失效并主动推这条事件：调用方必须写诊断并走失败面板，不允许继续在
+/// 一个坐标已经不可信的浮层上框选（评审 2）。
+final class CaptureOverlayRepinFailure {
+  const CaptureOverlayRepinFailure({
+    required this.win32Error,
+    required this.message,
+    required this.targetErrorCode,
+    required this.overlayRect,
+  });
+
+  /// `SetWindowPos` 失败后的 Win32 错误码；0 表示系统没有给出错误码。
+  final int win32Error;
+
+  /// 原生给出的可读原因。
+  final String message;
+
+  /// §8.4 错误码：DPI 变化时读冻结元数据的结果（0 = 目标还在）。
+  final int targetErrorCode;
+
+  /// 原生本来要把窗口钉回的目标 rcMonitor（物理像素）。
+  final Rect overlayRect;
+
+  /// 解析原生事件参数；形状不对时退化成一条带说明的失败，不抛异常
+  ///（异常抛出 method channel 的 handler 只会变成未捕获异步错误，页面收不到）。
+  static CaptureOverlayRepinFailure parse(Object? payload) {
+    if (payload is! Map) {
+      return const CaptureOverlayRepinFailure(
+        win32Error: 0,
+        message: '原生浮层重钉失败（事件没有附带参数）',
+        targetErrorCode: 0,
+        overlayRect: Rect.zero,
+      );
+    }
+    final Object? rect = payload['overlayRect'];
+    return CaptureOverlayRepinFailure(
+      win32Error: _readInt(payload['win32Error']),
+      message: payload['message'] is String
+          ? payload['message'] as String
+          : '原生浮层重钉失败（事件缺少原因）',
+      targetErrorCode: _readInt(payload['targetErrorCode']),
+      overlayRect: rect is Map
+          ? Rect.fromLTRB(
+              _readInt(rect['left']).toDouble(),
+              _readInt(rect['top']).toDouble(),
+              _readInt(rect['right']).toDouble(),
+              _readInt(rect['bottom']).toDouble(),
+            )
+          : Rect.zero,
+    );
+  }
+
+  static int _readInt(Object? value) => value is int
+      ? value
+      : value is double && value == value.roundToDouble()
+      ? value.toInt()
+      : 0;
+
+  @override
+  String toString() =>
+      'win32_error=$win32Error target_error_code=$targetErrorCode '
+      'target_rect=(${overlayRect.left.toInt()},${overlayRect.top.toInt()},'
+      '${overlayRect.right.toInt()},${overlayRect.bottom.toInt()}) $message';
+}
+
 /// `becomeOverlay` 失败时的可读错误：带原生错误码（§8.4，例如 5 = TARGET_STALE）。
 ///
 /// 与 [NativeBridgeException] 分开：这个只代表“浮层没摆好”，调用方必须走失败面板，
@@ -117,12 +184,30 @@ final class CaptureOverlayWindow {
   CaptureOverlayWindow({MethodChannel? channel, bool? enabled})
     : _channel = channel ?? const MethodChannel('hax_shot/capture_window'),
       _enabled =
-          enabled ?? ((Platform.isMacOS || Platform.isWindows) && !kIsWeb);
+          enabled ?? ((Platform.isMacOS || Platform.isWindows) && !kIsWeb) {
+    if (_usesWindowsOverlay) {
+      // 原生在 WM_DPICHANGED 重钉失败时会主动推事件（§14.4）：物理契约失效不能
+      // 只留在原生状态里，必须让页面能写诊断并进失败面板。
+      _channel.setMethodCallHandler(_handleNativeCall);
+    }
+  }
 
   static final instance = CaptureOverlayWindow();
 
   final MethodChannel _channel;
   final bool _enabled;
+
+  /// 原生 `overlayRepinFailed` 事件的接收端。
+  ///
+  /// 单实例捕获进程同一时刻只有一个页面在用浮层，所以用可覆盖的回调而不是
+  /// Stream；页面 dispose / 进入 AI 面板时清空。
+  void Function(CaptureOverlayRepinFailure failure)? onRepinFailed;
+
+  Future<Object?> _handleNativeCall(MethodCall call) async {
+    if (call.method != 'overlayRepinFailed') return null;
+    onRepinFailed?.call(CaptureOverlayRepinFailure.parse(call.arguments));
+    return null;
+  }
 
   /// Windows：浮层摆位由原生桥完成（参数与返回值见 §14.8）。
   ///

@@ -61,6 +61,15 @@ const INVALID_ARGUMENT: i32 = 6;
 /// 单屏物理尺寸上限（§9.3）：超过直接失败，不静默截断。
 const MAX_DIMENSION: i32 = 32768;
 
+/// 单帧像素总数上限（§9.3）：[`MAX_DIMENSION`] 只管单轴，两个轴都到上限时 32bpp
+/// 像素缓冲区是 4 GiB；这里按总像素再封一次顶，任何 GDI 调用之前就拒绝。
+/// 64M 像素（≈256 MiB @32bpp）远高于 8K（7680x4320 ≈ 33M 像素），不是正常显示器。
+const MAX_FRAME_PIXELS: usize = 64 * 1024 * 1024;
+
+/// 单帧字节上限（32bpp），与 [`MAX_FRAME_PIXELS`] 等价；按字节再显式检查一次，
+/// 保证任何分配点（`vec![0u8; buffer_len]`）之前都已经验过总量。
+const MAX_FRAME_BYTES: usize = MAX_FRAME_PIXELS * 4;
+
 /// 没有 macOS 的屏幕录制授权流程，抓屏始终被系统允许。
 pub(crate) fn screen_capture_authorized_impl() -> u32 {
     1
@@ -94,7 +103,19 @@ pub(crate) fn cursor_display_impl() -> u32 {
 pub(crate) fn capture_screen_impl() -> Result<PathBuf, (i32, String)> {
     let requested = requested_display_id();
     let (monitor, source) = resolve_target_monitor(requested)?;
-    let size = frame_size(monitor.width(), monitor.height()).map_err(|(code, message)| {
+    // rcMonitor 的宽高只算一次：选屏、metadata、冻结都用这一份 checked 结果（§9.3）。
+    let (width, height) = monitor.size().ok_or_else(|| {
+        (
+            NO_TARGET,
+            format!(
+                "backend=gdi requested={requested} source={} display_id={} rect={} rcMonitor 的宽高无法用 i32 表达或不是正数",
+                source.label(),
+                monitor.display_id,
+                monitor.rect_label()
+            ),
+        )
+    })?;
+    let size = frame_size(width, height).map_err(|(code, message)| {
         (
             code,
             format!(
@@ -181,10 +202,24 @@ pub(crate) fn target_monitor_impl(requested: u32, out: *mut HaxShotTargetMonitor
         Ok((monitor, _source)) => {
             // 只查询，没有本次抓屏：generation 用当前进度（= 最近一次成功抓屏的代际号），
             // 诊断位保持 0。
+            let Some(metadata) = monitor.metadata(current_generation(), 0) else {
+                // rcMonitor 的宽高塞不进 i32 / 不是正数：这不是可用的抓屏目标，
+                // 按 NO_TARGET 处理（与“拿不到显示器”同一语义），并留下可读原因。
+                set_last_error(format!(
+                    "hax_shot_target_monitor(requested={requested}) 失败：display_id={} 的 rcMonitor {} 无法用有效的 i32 宽高表达",
+                    monitor.display_id,
+                    monitor.rect_label()
+                ));
+                // SAFETY: out 非空；失败也写一份 valid=0 的元数据，调用方可以统一读结构体。
+                unsafe {
+                    std::ptr::write(out, invalid_metadata(NO_TARGET));
+                }
+                return NO_TARGET;
+            };
             clear_last_error();
             // SAFETY: out 非空（上面已判断），调用方按 ABI 分配了完整结构体。
             unsafe {
-                std::ptr::write(out, monitor.metadata(current_generation(), 0));
+                std::ptr::write(out, metadata);
             }
             OK
         }
@@ -270,6 +305,22 @@ pub(crate) fn last_capture_target_impl(out: *mut HaxShotTargetMonitor) -> i32 {
     }
 
     clear_last_error();
+    // 冻结时已经过 frame_size 校验，这里的 checked 只是保证 ABI 数字与 rect 一致：
+    // 塞不进 i32 时宁可报 TARGET_STALE，也不能给出 wrap 后的宽高（§9.3）。
+    let (Some(width), Some(height)) = (
+        checked_axis(frozen.right, frozen.left),
+        checked_axis(frozen.bottom, frozen.top),
+    ) else {
+        set_last_error(format!(
+            "冻结的抓屏目标 rect ({},{},{},{}) 的宽高无法用 i32 表达",
+            frozen.left, frozen.top, frozen.right, frozen.bottom
+        ));
+        // SAFETY: out 非空。
+        unsafe {
+            std::ptr::write(out, invalid_metadata(TARGET_STALE));
+        }
+        return TARGET_STALE;
+    };
     // SAFETY: out 非空。
     unsafe {
         std::ptr::write(
@@ -283,8 +334,8 @@ pub(crate) fn last_capture_target_impl(out: *mut HaxShotTargetMonitor) -> i32 {
                 top: frozen.top,
                 right: frozen.right,
                 bottom: frozen.bottom,
-                width: frozen.right - frozen.left,
-                height: frozen.bottom - frozen.top,
+                width,
+                height,
                 dpi: frozen.dpi,
                 generation: frozen.generation,
             },
@@ -311,13 +362,20 @@ struct MonitorEntry {
     primary: bool,
 }
 
-impl MonitorEntry {
-    fn width(&self) -> i32 {
-        self.rect.right - self.rect.left
-    }
+/// `right - left` / `bottom - top`：先用 `i64` 相减再 checked 转 `i32`（§9.3）。
+///
+/// `RECT` 的坐标是有符号 `LONG`，直接做 `i32` 相减在 debug 下会 panic、release 下
+/// 会 wrap；选屏、metadata、冻结三处必须共用这一份结果，不能各算各的。
+fn checked_axis(right: i32, left: i32) -> Option<i32> {
+    i32::try_from(i64::from(right) - i64::from(left)).ok()
+}
 
-    fn height(&self) -> i32 {
-        self.rect.bottom - self.rect.top
+impl MonitorEntry {
+    /// rcMonitor 的宽高；任一轴塞不进 `i32` 或不是正数就返回 None。
+    fn size(&self) -> Option<(i32, i32)> {
+        let width = checked_axis(self.rect.right, self.rect.left)?;
+        let height = checked_axis(self.rect.bottom, self.rect.top)?;
+        (width > 0 && height > 0).then_some((width, height))
     }
 
     fn rect_label(&self) -> String {
@@ -327,8 +385,10 @@ impl MonitorEntry {
         )
     }
 
-    fn metadata(&self, generation: u64, reserved: u32) -> HaxShotTargetMonitor {
-        HaxShotTargetMonitor {
+    /// ABI 元数据；rcMonitor 的宽高塞不进 `i32` 时返回 None，由调用方决定怎么报错。
+    fn metadata(&self, generation: u64, reserved: u32) -> Option<HaxShotTargetMonitor> {
+        let (width, height) = self.size()?;
+        Some(HaxShotTargetMonitor {
             valid: 1,
             error_code: 0,
             display_id: self.display_id,
@@ -337,11 +397,11 @@ impl MonitorEntry {
             top: self.rect.top,
             right: self.rect.right,
             bottom: self.rect.bottom,
-            width: self.width(),
-            height: self.height(),
+            width,
+            height,
             dpi: self.dpi,
             generation,
-        }
+        })
     }
 }
 
@@ -634,12 +694,33 @@ fn frame_size(width: i32, height: i32) -> Result<FrameSize, (i32, String)> {
         .map_err(|_| (-1, format!("width {width} does not fit into usize")))?;
     let height_usize = usize::try_from(height)
         .map_err(|_| (-1, format!("height {height} does not fit into usize")))?;
+    // 总量上限必须在**任何** GDI 调用 / 分配之前检查（§9.3）：单轴上限挡不住
+    // “32768x32768 → 4 GiB”这种极端组合。
+    let pixel_count = width_usize
+        .checked_mul(height_usize)
+        .ok_or_else(|| (-1, format!("pixel count overflow for {width}x{height}")))?;
+    if pixel_count > MAX_FRAME_PIXELS {
+        return Err((
+            -1,
+            format!(
+                "monitor size {width}x{height} needs {pixel_count} pixels, over the {MAX_FRAME_PIXELS} pixel frame limit"
+            ),
+        ));
+    }
     let stride = width_usize
         .checked_mul(4)
         .ok_or_else(|| (-1, format!("stride overflow for width {width}")))?;
     let buffer_len = stride
         .checked_mul(height_usize)
         .ok_or_else(|| (-1, format!("buffer size overflow for {width}x{height}")))?;
+    if buffer_len > MAX_FRAME_BYTES {
+        return Err((
+            -1,
+            format!(
+                "monitor size {width}x{height} needs {buffer_len} bytes, over the {MAX_FRAME_BYTES} byte frame limit"
+            ),
+        ));
+    }
 
     Ok(FrameSize {
         width,
@@ -748,22 +829,44 @@ impl Bitmap {
     }
 
     /// 把位图从 DC 里选回旧对象；`GetDIBits` 之前必须调用（§9.1 的硬约束）。
-    fn unselect(&mut self) {
-        if let Some((dc, previous)) = self.selected_in.take() {
-            // SAFETY: dc / previous 都是 SelectObject 之前的有效句柄。
-            unsafe {
-                SelectObject(dc, previous);
-            }
+    ///
+    /// 只有 `SelectObject` 成功才清掉 `selected_in`：失败时位图**仍在 DC 里选着**，
+    /// 状态必须保留，让调用方中止 `GetDIBits`、让 Drop 还有机会重试（评审 3）。
+    fn unselect(&mut self) -> Result<(), (i32, String)> {
+        let Some((dc, previous)) = self.selected_in else {
+            return Ok(());
+        };
+        // SAFETY: dc / previous 都是 SelectObject 之前的有效句柄。
+        // 注意 `SelectObject` 没有「失败时设置 last error」的文档契约，所以只报操作名，
+        // 不声称系统错误码（§9.7）。
+        let replaced = unsafe { SelectObject(dc, previous) };
+        if replaced.0.is_null() || replaced.0 as isize == -1 {
+            return Err((
+                -1,
+                "SelectObject failed to restore the previous GDI object; the capture bitmap is still selected in the DC"
+                    .to_owned(),
+            ));
         }
+        self.selected_in = None;
+        Ok(())
     }
 }
 
 impl Drop for Bitmap {
     fn drop(&mut self) {
-        self.unselect();
-        // SAFETY: handle 由 CreateCompatibleBitmap 创建、已经从 DC 里选回，只删一次。
-        unsafe {
-            let _ = DeleteObject(self.handle.into());
+        match self.unselect() {
+            Ok(()) => {
+                // SAFETY: handle 由 CreateCompatibleBitmap 创建、已经从 DC 里选回，
+                // 只删一次。
+                unsafe {
+                    let _ = DeleteObject(self.handle.into());
+                }
+            }
+            Err(_) => {
+                // 还没解除选择：`DeleteObject` 可能删掉 DC 正在使用的对象，导致 DC
+                // 持有悬空句柄（GDI 泄漏 / 后续绘制失败）。这里宁可漏掉一个 GDI
+                // 对象，也不把“没解除选择”当成已解除（评审 3）。
+            }
         }
     }
 }
@@ -804,8 +907,12 @@ fn capture_frame(monitor: &MonitorEntry, size: &FrameSize) -> Result<CapturedFra
         ));
     }
 
-    // ★ GetDIBits 要求位图不被任何 DC 选中：先选回旧对象（Drop 里还会兜一次，幂等）。
-    bitmap.unselect();
+    // ★ GetDIBits 要求位图不被任何 DC 选中：先选回旧对象。解除选择失败必须中止，
+    // 不能带着“位图还选在 DC 里”的状态去 GetDIBits（评审 3）。Drop 里还会兜一次，
+    // 但那时如果仍失败，就不会删这个位图。
+    bitmap
+        .unselect()
+        .map_err(|(_code, message)| (-1, message))?;
 
     let mut info = BITMAPINFO::default();
     info.bmiHeader = BITMAPINFOHEADER {

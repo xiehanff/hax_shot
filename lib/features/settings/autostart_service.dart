@@ -322,6 +322,12 @@ final class _RegistryApi {
   /// 值的类型：`REG_SZ`。
   static const int regSz = 1;
 
+  /// `REG_SZ` 的读取上限：64 KiB（32767 个 UTF-16 code unit + 终止 NUL）。
+  ///
+  /// 足够装下 Windows 允许的最长路径，但能挡住损坏 / 恶意值里的巨大 `size`：
+  /// 不设上限时 `calloc(bytes)` 会直接按注册表声明的字节数分配（评审 4）。
+  static const int _maxRegStringBytes = 64 * 1024;
+
   final _RegCreateKeyExWDart _regCreateKeyExW;
   final _RegOpenKeyExWDart _regOpenKeyExW;
   final _RegSetValueExWDart _regSetValueExW;
@@ -412,6 +418,14 @@ final class _RegistryApi {
   }
 
   /// 读一个 `REG_SZ` 值；值不存在返回 null。
+  ///
+  /// 注册表返回的 `REG_SZ` **不保证**带结尾 NUL，也不保证长度可信（用户、策略软件
+  /// 或损坏的值都可能写出无终止 NUL 的字节）。所以这里：
+  ///
+  /// - 拒绝奇数字节数与超过 [_maxRegStringBytes] 的值（不是合法的 `REG_SZ`）；
+  /// - 多分配一个 UTF-16 code unit，保证缓冲区末尾一定是 NUL；
+  /// - 按实际字节数**有界**读取，手工扫描终止 NUL 后才转换——绝不调用无界的
+  ///   `toDartString()`（它会越过分配区一直扫到内存里的第一个 NUL）。
   String? queryString(Pointer<Void> key, String name) {
     final Pointer<Utf16> wideName = name.toNativeUtf16();
     final Pointer<Uint32> type = calloc<Uint32>();
@@ -441,7 +455,19 @@ final class _RegistryApi {
 
       final int bytes = size.value;
       if (bytes == 0) return '';
-      final Pointer<Uint8> buffer = calloc<Uint8>(bytes);
+      if (bytes.isOdd) {
+        throw WindowsAutostartException(
+          'RegQueryValueExW($name) 返回奇数字节数 $bytes，不是合法的 REG_SZ，拒绝读取',
+        );
+      }
+      if (bytes > _maxRegStringBytes) {
+        throw WindowsAutostartException(
+          'RegQueryValueExW($name) 的值有 $bytes 字节，超过 $_maxRegStringBytes 字节上限，拒绝读取',
+        );
+      }
+
+      // 多一个 UTF-16 code unit：即使数据本身没有终止 NUL，分配区末尾也一定是 0。
+      final Pointer<Uint8> buffer = calloc<Uint8>(bytes + 2);
       try {
         status = _regQueryValueExW(
           key.address,
@@ -457,7 +483,20 @@ final class _RegistryApi {
             status: status,
           );
         }
-        return buffer.cast<Utf16>().toDartString();
+
+        // 第二次调用后 `size` 是实际写入的字节数；仍以第一次问到的 `bytes` 为硬上限，
+        // 不信任驱动 / 注册表状态被并发改写后给出的更大值。
+        final int written = size.value > bytes ? bytes : size.value;
+        final int unitCount = written ~/ 2;
+        // 用固定宽度的 Uint16 索引：`Pointer<Utf16>` 不支持 `[]`，而 Uint16 与
+        // UTF-16 code unit 的位模式一致。
+        final Pointer<Uint16> units = buffer.cast<Uint16>();
+        int length = 0;
+        while (length < unitCount && units[length] != 0) {
+          length++;
+        }
+        // `length` 已按 unitCount 封顶，转换不会扫描到分配区之外（评审 4）。
+        return units.cast<Utf16>().toDartString(length: length);
       } finally {
         calloc.free(buffer);
       }

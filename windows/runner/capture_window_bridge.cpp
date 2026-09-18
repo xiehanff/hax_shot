@@ -238,7 +238,21 @@ void CaptureWindowBridge::HandleMessageAfterDefault(HWND window,
         ("hax_shot: overlay target lost during DPI change: " + error + "\n")
             .c_str());
   }
-  RepinOverlay();
+
+  // 重钉失败时**不得**继续声称 overlay 的物理契约成立（§14.4 / 评审 2）：
+  // 记录结构化失败，并通过 `overlayRepinFailed` 事件交给 Dart 决策。
+  std::string repin_error;
+  DWORD repin_win32_error = ERROR_SUCCESS;
+  if (RepinOverlay(&repin_error, &repin_win32_error)) {
+    overlay_contract_valid_ = true;
+    repin_error_message_.clear();
+    repin_win32_error_ = ERROR_SUCCESS;
+    return;
+  }
+  overlay_contract_valid_ = false;
+  repin_error_message_ = repin_error;
+  repin_win32_error_ = repin_win32_error;
+  NotifyRepinFailure(repin_error, repin_win32_error);
 }
 
 void CaptureWindowBridge::HandleMethodCall(
@@ -307,6 +321,19 @@ void CaptureWindowBridge::BecomeOverlay(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   // 幂等：重复调用直接返回当前状态，不重新快照（否则会丢掉进入前的窗口状态）。
   if (overlay_active_) {
+    // 上一次 DPI 变化后重钉失败：物理契约已经失效，不能再用一个“看着成功”的
+    // clientRect 回应（§14.4 / 评审 2）。
+    if (!overlay_contract_valid_) {
+      const std::string detail =
+          repin_error_message_.empty()
+              ? std::string("没有记录到重钉失败原因（可能是回滚也失败）")
+              : repin_error_message_;
+      result->Error(
+          std::to_string(kMonitorStale),
+          "浮层在 DPI 变化后未能重新钉回目标 rcMonitor，物理契约已失效：" +
+              detail);
+      return;
+    }
     result->Success(BuildStatePayload());
     return;
   }
@@ -383,6 +410,9 @@ void CaptureWindowBridge::BecomeOverlay(
   overlay_rect_ = {monitor.left, monitor.top, monitor.right, monitor.bottom};
   // 从这里开始 WM_NCCALCSIZE 归 bridge 管，直到快照恢复成功（§14.5）。
   overlay_active_ = true;
+  overlay_contract_valid_ = false;
+  repin_error_message_.clear();
+  repin_win32_error_ = ERROR_SUCCESS;
 
   if (!ApplyOverlayPlacement(&error)) {
     std::string rollback_error;
@@ -419,11 +449,14 @@ void CaptureWindowBridge::ExitOverlay(
   }
 
   overlay_active_ = false;
+  overlay_contract_valid_ = false;
   snapshot_ = WindowSnapshot();
   target_ = HaxShotTargetMonitor();
   overlay_rect_ = {0, 0, 0, 0};
   target_error_code_ = 0;
   target_error_message_.clear();
+  repin_error_message_.clear();
+  repin_win32_error_ = ERROR_SUCCESS;
   result->Success();
 }
 
@@ -497,6 +530,8 @@ bool CaptureWindowBridge::ApplyOverlayPlacement(std::string* error) {
              std::to_string(overlay_rect_.top) + ")";
     return false;
   }
+  // 回读全部通过：这一刻物理契约成立。
+  overlay_contract_valid_ = true;
   return true;
 }
 
@@ -570,15 +605,84 @@ bool CaptureWindowBridge::RestoreSnapshot(std::string* error) {
   return restored;
 }
 
-void CaptureWindowBridge::RepinOverlay() {
-  if (window_ == nullptr || ::IsWindow(window_) == FALSE ||
-      !snapshot_.valid) {
+bool CaptureWindowBridge::RepinOverlay(std::string* error, DWORD* win32_error) {
+  *win32_error = ERROR_SUCCESS;
+  if (window_ == nullptr || ::IsWindow(window_) == FALSE) {
+    *error = "窗口句柄已经失效，无法重新钉回目标 rcMonitor";
+    return false;
+  }
+  if (!snapshot_.valid) {
+    *error = "没有 overlay 快照，无法重新钉回目标 rcMonitor";
+    return false;
+  }
+
+  const int width = overlay_rect_.right - overlay_rect_.left;
+  const int height = overlay_rect_.bottom - overlay_rect_.top;
+  // 有限重试（最多 3 次、间隔 20ms）：重钉失败大多是瞬时的窗口状态变化，但绝不
+  // 允许无限重试；每次失败都取真实的 Win32 错误码（§14.4 / 评审 2）。
+  constexpr int kMaxAttempts = 3;
+  constexpr DWORD kRetryDelayMs = 20;
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    ::SetLastError(ERROR_SUCCESS);
+    if (::SetWindowPos(window_, HWND_TOPMOST, overlay_rect_.left,
+                       overlay_rect_.top, width, height,
+                       SWP_NOACTIVATE | SWP_NOOWNERZORDER |
+                           SWP_FRAMECHANGED) != FALSE) {
+      if (attempt > 1) {
+        ::OutputDebugStringA(
+            ("hax_shot: overlay repinned after " + std::to_string(attempt) +
+             " attempts\n")
+                .c_str());
+      }
+      return true;
+    }
+    *win32_error = ::GetLastError();
+    if (attempt < kMaxAttempts) {
+      ::Sleep(kRetryDelayMs);
+    }
+  }
+
+  *error = "重新钉回目标 rcMonitor 失败：SetWindowPos 连续 " +
+           std::to_string(kMaxAttempts) + " 次返回失败（Win32 错误 " +
+           std::to_string(*win32_error) +
+           "），浮层可能停在错误的屏幕或尺寸上";
+  return false;
+}
+
+void CaptureWindowBridge::NotifyRepinFailure(const std::string& message,
+                                             DWORD win32_error) {
+  // 结构化失败证据的 native 半边：调试器输出 + 下面交给 Dart 的事件；
+  // Dart 侧会把它写成 `overlay_repin_failed` 诊断日志。
+  ::OutputDebugStringA(
+      ("hax_shot: overlay repin failed: " + message + "\n").c_str());
+  if (!channel_) {
     return;
   }
-  ::SetWindowPos(window_, HWND_TOPMOST, overlay_rect_.left, overlay_rect_.top,
-                 overlay_rect_.right - overlay_rect_.left,
-                 overlay_rect_.bottom - overlay_rect_.top,
-                 SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+  flutter::EncodableMap payload;
+  payload[flutter::EncodableValue("win32Error")] =
+      flutter::EncodableValue(static_cast<int64_t>(win32_error));
+  payload[flutter::EncodableValue("message")] =
+      flutter::EncodableValue(message);
+  payload[flutter::EncodableValue("targetErrorCode")] =
+      flutter::EncodableValue(static_cast<int64_t>(target_error_code_));
+  payload[flutter::EncodableValue("overlayRect")] =
+      flutter::EncodableValue(BuildOverlayRectPayload());
+  channel_->InvokeMethod("overlayRepinFailed",
+                         std::make_unique<flutter::EncodableValue>(payload));
+}
+
+flutter::EncodableMap CaptureWindowBridge::BuildOverlayRectPayload() const {
+  flutter::EncodableMap rect;
+  rect[flutter::EncodableValue("left")] =
+      flutter::EncodableValue(static_cast<int64_t>(overlay_rect_.left));
+  rect[flutter::EncodableValue("top")] =
+      flutter::EncodableValue(static_cast<int64_t>(overlay_rect_.top));
+  rect[flutter::EncodableValue("right")] =
+      flutter::EncodableValue(static_cast<int64_t>(overlay_rect_.right));
+  rect[flutter::EncodableValue("bottom")] =
+      flutter::EncodableValue(static_cast<int64_t>(overlay_rect_.bottom));
+  return rect;
 }
 
 flutter::EncodableMap CaptureWindowBridge::BuildStatePayload() const {

@@ -158,14 +158,17 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       // 窗口已从 `.screenSaver` 浮层退成普通面板，不再占用捕获独占权；此后用户
       // 可以再次按快捷键开启新的截图，而当前 AI 会话继续保留。
       SingleInstanceGuard.releaseCapture();
+      // Windows 的浮层不混用插件全屏/层级/最大化：exitOverlay 已经把 style / rect /
+      // topmost 恢复成进入前的快照，再跑这三个写入会把桥刚恢复好的状态再改一遍
+      //（§14.5 / 评审 7）。注意 `setAlwaysOnTop(false)` 与 `unmaximize()` 同样会无条件
+      // 写 HWND（清 WS_EX_TOPMOST / 改窗口 rect），不是 Windows 上的必要步骤：
+      // 后面 `_configureAiWindow()` 会按 AI 面板尺寸重新 setSize/center。
+      // macOS / Linux 维持原语义。
       if (!Platform.isWindows) {
-        // Windows 的浮层不混用插件全屏：exitOverlay 已经把 style / rect / topmost
-        // 恢复成进入前的快照，再跑一次 setFullScreen(false) 会把桥刚恢复好的 style
-        // 再改一遍（§14.5）。macOS / Linux 维持原语义。
         await windowManager.setFullScreen(false);
+        await windowManager.setAlwaysOnTop(false);
+        await windowManager.unmaximize();
       }
-      await windowManager.setAlwaysOnTop(false);
-      await windowManager.unmaximize();
 
       if (!mounted) return;
       // Replace the wide capture toolbar before resizing. On GTK the current

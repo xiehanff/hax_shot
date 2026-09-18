@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../native/native_bridge.dart';
+import '../diagnostics/diagnostic_events.dart';
+import '../diagnostics/diagnostic_log.dart';
 import '../settings/screen_capture_permission.dart';
 import '../window/window_visibility.dart';
 
@@ -133,21 +135,38 @@ class CapturePermissionFlow extends ChangeNotifier {
 
   /// 把抓屏用的小窗口显示出来并聚焦。
   ///
-  /// 两步各自兜底：引导页与失败路径都不能把异常抛给调用方，这些调用点多来自
-  /// postFrameCallback / 定时器，抛出去就是未捕获异步异常。
+  /// 返回 false 表示窗口**显示失败**：此时已经 [quit] 结束捕获进程（否则会留下
+  /// 一个“隐藏 + 持锁”的进程，用户表现为按快捷键没反应），调用方不要再做任何
+  /// 依赖窗口可见的事（评审 6）。两步各自兜底：引导页与失败路径都不能把异常抛给
+  /// 调用方，这些调用点多来自 postFrameCallback / 定时器，抛出去就是未捕获异步异常。
   ///
-  /// 这里不往页面要回调：它就是两次全局 window_manager 调用，不依赖页面任何状态。
-  Future<void> revealWindow() async {
+  /// 聚焦失败只降级为 warning：窗口已经显示了，用户点一下就能看到。
+  ///
+  /// 这里不往页面要回调：它就是两次全局 window_manager 调用 + 注入的结束动作，
+  /// 不依赖页面任何状态。
+  Future<bool> revealWindow() async {
     try {
       await showWindow();
     } on Object catch (error) {
-      debugPrint('显示窗口失败：$error');
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.windowReadyFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.windowRevealFailed,
+        message: '显示失败面板 / 引导页失败，结束捕获进程：$error',
+      );
+      quit();
+      return false;
     }
     try {
       await windowManager.focus();
     } on Object catch (error) {
-      debugPrint('聚焦窗口失败：$error');
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.windowReadyFailed,
+        level: LogLevel.warning,
+        message: '聚焦失败（已降级）：$error',
+      );
     }
+    return true;
   }
 
   /// 原生库查不到授权状态时的失败说明（安全查询返回 null）。

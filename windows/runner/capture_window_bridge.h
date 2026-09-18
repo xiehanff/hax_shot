@@ -90,7 +90,16 @@ class CaptureWindowBridge {
   /// 按快照恢复 style / exStyle / rect / topmost，并回读校验。
   bool RestoreSnapshot(std::string* error);
   /// 把窗口重新钉回 overlay_rect_（WM_DPICHANGED 之后调用）。
-  void RepinOverlay();
+  ///
+  /// 检查 `SetWindowPos` 返回值与 Win32 错误码，失败时有限重试（最多 3 次）；
+  /// 仍失败则把带操作名的原因写进 `error`、把真实错误码写进 `win32_error` 并返回
+  /// false。调用方负责把物理契约标成失效并通知 Dart（§14.4 / 评审 2）。
+  bool RepinOverlay(std::string* error, DWORD* win32_error);
+  /// 重钉失败时通过 `hax_shot/capture_window` 通道主动通知 Dart
+  /// （`overlayRepinFailed`）：浮层可能停在错误屏幕上，不能静默。
+  void NotifyRepinFailure(const std::string& message, DWORD win32_error);
+  /// 目标 rcMonitor 的 map（形状与 §14.8 的 `clientRect` 一致）。
+  flutter::EncodableMap BuildOverlayRectPayload() const;
   /// 组装 §14.8 的返回值：displayId / generation / clientRect / dpi。
   flutter::EncodableMap BuildStatePayload() const;
 
@@ -111,6 +120,14 @@ class CaptureWindowBridge {
   /// WM_DPICHANGED 时目标已经消失的错误态（§14.4 第 3 步）；只记录，不撕掉浮层。
   int32_t target_error_code_ = 0;
   std::string target_error_message_;
+
+  /// overlay 的物理契约（窗口 rect / 客户区 / 原点都等于目标 rcMonitor）当前是否
+  /// 成立。进入 overlay 时置位，DPI 重钉失败时清掉：此后 `becomeOverlay` 幂等分支
+  /// 不允许再返回一个“看着成功”的摆位结果（§14.4 / 评审 2）。
+  bool overlay_contract_valid_ = false;
+  /// 最近一次 DPI 重钉失败的可读原因与 Win32 错误码（通知 Dart / 幂等分支用）。
+  std::string repin_error_message_;
+  DWORD repin_win32_error_ = 0;
 };
 
 #endif  // RUNNER_CAPTURE_WINDOW_BRIDGE_H_

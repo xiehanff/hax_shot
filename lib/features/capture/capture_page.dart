@@ -86,6 +86,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     _annotation = TextAnnotationState(_session, () => _flow.showMessage(null));
     _flow.addListener(_handleFlowChanged);
     _annotation.addListener(_handleAnnotationChanged);
+    // 原生在 WM_DPICHANGED 后重钉失败时会推 `overlayRepinFailed`（Windows，§14.4）：
+    // 物理契约失效不能只留在原生状态里。
+    CaptureOverlayWindow.instance.onRepinFailed = _handleOverlayRepinFailed;
     WidgetsBinding.instance.addPostFrameCallback((_) => _capture());
   }
 
@@ -111,6 +114,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _flow.removeListener(_handleFlowChanged);
     _annotation.removeListener(_handleAnnotationChanged);
+    CaptureOverlayWindow.instance.onRepinFailed = null;
     _flow.dispose();
     _annotation.dispose();
     _image?.dispose();
@@ -202,7 +206,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         message: 'native code=${error.code} ${error.message}',
       );
       _flow.enterFailure(error);
-      await _flow.revealWindow();
+      await _revealFailurePanel();
     } on Object catch (error) {
       if (!mounted) return;
       // 其它失败也留在小窗口里说明情况，别让用户卡在全屏黑屏上。
@@ -214,8 +218,36 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         message: '$error',
       );
       _flow.enterFailure(error);
-      await _flow.revealWindow();
+      await _revealFailurePanel();
     }
+  }
+
+  /// 显示失败面板；显示失败时直接结束进程释放捕获锁（评审 6）。
+  ///
+  /// [CapturePermissionFlow.revealWindow] 内部已经在显示失败时调 `quit()`，这里
+  /// 再硬退出一次做确定性兜底：`windowManager.close()` 的收尾链依赖窗口能正常
+  /// 关闭，而显示失败时不能假设这一点。
+  Future<void> _revealFailurePanel() async {
+    if (await _flow.revealWindow()) return;
+    await _process.exitProcess();
+  }
+
+  /// 浮层已经显示后，原生在 DPI 变化时重新钉回目标 rcMonitor 失败（§14.4 / 评审 2）。
+  ///
+  /// 此时浮层可能停在错误的屏幕或尺寸上，框选坐标不再可信：与 `becomeOverlay`
+  /// 失败走同一条失败面板路径（不 fallback、不释放捕获锁），并把原生错误码
+  /// 写进诊断日志。
+  void _handleOverlayRepinFailed(CaptureOverlayRepinFailure failure) {
+    if (!mounted) return;
+    _ackRequest(
+      CaptureRequestChannel.stateStartupFailed,
+      DiagnosticEvent.overlayRepinFailed,
+      level: LogLevel.error,
+      errorCode: DiagnosticErrorCode.overlayRepinFailed,
+      message: '$failure',
+    );
+    _flow.enterFailure(failure);
+    unawaited(_revealFailurePanel());
   }
 
   /// 把原生**冻结**的目标显示器元数据写进诊断日志（Windows；其它平台没有这套 ABI）。

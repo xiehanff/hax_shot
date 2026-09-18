@@ -1969,7 +1969,10 @@ GetDIBits(screen_dc, bitmap, 0, h, buffer, &bmi, DIB_RGB_COLORS)
 写的时候不能踩的坑：
 
 - `CreateCompatibleBitmap` 用刚建的 memory DC 会得到 1×1 单色位图；
-- `GetDIBits` 时位图**不能**还被任何 DC 选中（所以先选回旧对象；`Bitmap::drop` 再兜一次）；
+- `GetDIBits` 时位图**不能**还被任何 DC 选中（所以先选回旧对象）；`SelectObject` 的返回值必须
+  检查——只有成功才把 `Bitmap.selected_in` 清掉，失败就中止 `GetDIBits` 并返回带操作名的错误；
+  `Bitmap::drop` 只在解除选择**成功**后才 `DeleteObject`（失败宁可漏一个 GDI 对象，也不删一个
+  仍被 DC 选中的位图，否则 DC 会持有悬空句柄）；
 - `left/top` 用 `rcMonitor` 的物理坐标，允许为负，**不** clamp、也不裁成“主屏起点为 0”；
 - 行方向用 top-down（`biHeight = -height`），Flutter 侧不再翻转；验收看的是“图不是上下
   颠倒的”：拿屏幕 DC 的 `GetPixel(0,0)` / `GetPixel(0,h-1)` 和 PNG 同位置比，本机 4/4
@@ -1979,7 +1982,12 @@ GetDIBits(screen_dc, bitmap, 0, h, buffer, &bmi, DIB_RGB_COLORS)
   同时确认系统没有默默改掉我们自己填的 `biSize / biWidth / biHeight / biBitCount /
   biCompression`；
 - 任何 Win32 调用之前先校验：`0 < w,h <= 32768`、`stride = w * 4`、`stride * h` 都用
-  `checked_mul`；超过上限直接失败，不静默截断；
+  `checked_mul`；超过上限直接失败，不静默截断。单轴上限挡不住极端组合（32768×32768 的
+  32bpp 像素缓冲区是 4 GiB），所以再按总量封顶：`MAX_FRAME_PIXELS = 64M`、
+  `MAX_FRAME_BYTES = 256 MiB`（正常 8K 7680×4320 只有 ≈126 MiB，不受影响）；
+- `rcMonitor` 的宽高（`right - left` / `bottom - top`）用 `i64` 相减再 `i32::try_from`
+  （`checked_axis`），选屏 / metadata / 冻结共用 `MonitorEntry::size()` 这一份结果：
+  `i32` 直接相减在 debug 会 panic、release 会 wrap；
 - PNG 写盘失败要删掉半成品（0 字节或半截 PNG），删失败不能掩盖主错误。
 
 错误按每个 API 自己的契约取（不要一律 `GetLastError`）：
@@ -1987,7 +1995,7 @@ GetDIBits(screen_dc, bitmap, 0, h, buffer, &bmi, DIB_RGB_COLORS)
 | API | 失败时取什么 |
 | --- | --- |
 | `EnumDisplayMonitors` / `GetMonitorInfoW` / `GetCursorPos` / `BitBlt` | 文档承诺 set last error，失败后**立刻**读 |
-| `GetDC` / `CreateCompatibleDC` / `CreateCompatibleBitmap` / `SelectObject` | 只承诺返回空句柄，不说 set last error → 记操作名 + 自有错误码 |
+| `GetDC` / `CreateCompatibleDC` / `CreateCompatibleBitmap` / `SelectObject` | 只承诺返回空句柄，不说 set last error → 记操作名 + 自有错误码（`SelectObject` 失败时位图可能仍在 DC 里，必须中止后续步骤） |
 | `GetDIBits` | 返回值是扫描行数 → 记返回值与期望高度，不声称是系统错误 |
 | `GetDpiForMonitor` | `HRESULT` → 失败就把 dpi 填 0 |
 
@@ -2076,9 +2084,10 @@ HDR / 受保护内容、独占全屏。多屏相关的代码路径（`source=req
   （不缩 8 像素、不加 Win10 顶部那 1 像素）；恢复快照期间这个拦截会临时关掉，
   否则面板态拿不到插件该给的 inset；
 - `WM_DPICHANGED` 不吞：先让插件与 `Win32Window` 用 OS 建议的 rect 走完（Flutter 才会拿到
-  新 DPR），收尾时 bridge 再把窗口钉回冻结元数据的 rcMonitor。若此时冻结元数据已经过期，
-  就保持原 overlay rect、把错误码记在桥里（不撕掉浮层）——这个错误态没有 Dart 可读的出口，
-  只能看 debugger 输出，属于已知限制；
+  新 DPR），收尾时 bridge 再把窗口钉回冻结元数据的 rcMonitor。重钉 `SetWindowPos` 会检查返回值
+  与 Win32 错误、最多重试 3 次（间隔 20ms）；仍失败就把物理契约标成失效并主动推
+  `overlayRepinFailed` 给 Dart（见下面的事件表），**不再**只留在 debugger 输出里。若此时冻结
+  元数据已经过期，就保持原 overlay rect、把错误码一起放进事件 payload（不撕掉浮层）；
 - `WM_SIZE` 不拦，继续走 `Win32Window` 把 Flutter child 铺满客户区。
 
 #### channel 协议（Windows）
@@ -2089,7 +2098,15 @@ HDR / 受保护内容、独占全屏。多屏相关的代码路径（`source=req
 // native → Dart（成功）
 {"displayId": …, "generation": …, "clientRect": {"left":0,"top":0,"right":3840,"bottom":2160}, "dpi": 144}
 // 失败：FlutterError(code, message)，code 用 18.10 的错误码（0..7）
+// native → Dart 事件（WM_DPICHANGED 重钉失败，物理契约失效）
+{"win32Error": 0, "message": "重新钉回目标 rcMonitor 失败：…", "targetErrorCode": 0,
+ "overlayRect": {"left":0,"top":0,"right":3840,"bottom":2160}}
 ```
+
+- `overlayRepinFailed` 是桥主动 `InvokeMethod` 的事件（与快捷键桥的 `triggered` 同一约定）。
+  Dart 侧 `capture_overlay_window.dart` 解析成 `CaptureOverlayRepinFailure`，`capture_page.dart`
+  写 `overlay_repin_failed` / `OVERLAY_REPIN_FAILED` 并进失败面板；契约失效后
+  `becomeOverlay` 的幂等分支会返回 `TARGET_STALE(5)`，不再返回一个“看着成功”的摆位结果；
 
 - `displayId`/`generation` 用 `TryGetLongValue()` 取：runner 带 `_HAS_EXCEPTIONS=0`，
   `std::get<int>` 类型不匹配时不是抛异常而直接终止进程；
@@ -2110,7 +2127,10 @@ HDR / 受保护内容、独占全屏。多屏相关的代码路径（`source=req
   → focus()`（focus 失败只记日志、不阻断），返回值交给页面记契约;
 - `capture_page.dart`：`CaptureOverlayException` 进失败面板（可重试 / 可关闭），
   并写 `overlay_become_failed`；失败不释放捕获锁（锁只在进程真的退出时释放）；
-- `lib/app.dart`：Windows 跳过 `setFullScreen(false)`（桥已经在 `exitOverlay` 里恢复过 style）；
+- `lib/app.dart`：Windows 跳过 `setFullScreen(false)` / `setAlwaysOnTop(false)` /
+  `unmaximize()` 三个写入：桥已经在 `exitOverlay` 里按快照恢复过 style / rect / topmost，
+  再跑一遍会二次改状态（`setAlwaysOnTop(false)` 无条件清 `WS_EX_TOPMOST`、`unmaximize()` 会动
+  窗口 rect）；后续 `_configureAiWindow()` 会按 AI 面板尺寸重新 `setSize/center`；
 - `window_visibility.dart`：只有 macOS 调 `setOpacity(1)`——Windows 的 `setOpacity` 会无条件
   给窗口加 `WS_EX_LAYERED`，浮层不能是分层窗口。
 
@@ -2122,6 +2142,8 @@ overlay_ready        becomeOverlay + showWindow + focus 都完成；同一条日
                      client=… rcMonitor=… png=… dpi=… viewport=… logical=… dpr=…
                      layout_scale=… contract_ok=…（false 时是 warning）
 overlay_become_failed level=error + error_code=OVERLAY_BECOME_FAILED + message 里的 native code
+overlay_repin_failed  level=error + error_code=OVERLAY_REPIN_FAILED：WM_DPICHANGED 后重钉失败，
+                     message 里有 win32_error 与目标 rect；页面进失败面板（不 fallback、不释放锁）
 ```
 
 `contract_ok=false` 时先查 bridge（`GetClientRect` / `WM_NCCALCSIZE` / DPI），**不要**给选区
@@ -2215,7 +2237,14 @@ Invalid argument(s): Illegal argument in isolate message: (object is a DynamicLi
   这时返回 false 并写一条 `autostart_stale_value` 警告；`setEnabled(true)` 写完**回读校验**，
   不一致就抛错不报成功；`setEnabled(false)` 只删 `HaxShot` 这一个值（幂等，值不存在也算成功）；
 - 系统“任务管理器 → 启动”页的禁用状态存在 `StartupApproved`，应用**不去改**它，
-  只在设置页文案里提示用户去任务管理器恢复。
+  只在设置页文案里提示用户去任务管理器恢复；
+- `queryString()` 读 `REG_SZ` 必须有界：`REG_SZ` 不保证带终止 NUL、长度也不可信
+  （用户 / 策略软件 / 损坏的值都可能写出无终止 NUL 的字节）。现在拒绝奇数字节数与
+  > 64 KiB 的值，多分配一个 UTF-16 unit 保证缓冲区末尾是 NUL，按 `size ~/ 2` 手工扫描
+  终止 NUL 后用 `toDartString(length:)` 转换——**禁止**无界的 `toDartString()`（它会越过
+  `calloc` 分配区一直扫到内存里第一个 NUL）。`NtSetValueKey` 能写出真正无 NUL 的 `REG_SZ`，
+  仓库外脚本用「页末 + PAGE_NOACCESS」验证过：修前在 `Utf16Pointer._toUnknownLengthString`
+  上 0xC0000005，修后正常截断。
 
 #### 保存路径与文案
 
@@ -2390,3 +2419,40 @@ README 与首次启动欢迎页各给一句提示，不要再往代码里加“�
 
 看日志时注意：日志是 UTF-8，Windows PowerShell 读取要带 `-Encoding UTF8`（命令见 18.17），
 否则中文 `message` 字段会显示成乱码。
+
+### 18.19 快捷键桥的消息路由与失败面板显示失败（对抗性评审修复）
+
+`hax_shot_code_review_luna.md` 里两条不在 18.11/18.14/18.15 范围内的失败路径，改动如下。
+
+#### `WM_HOTKEY` 路由：注销后不能再触发
+
+`windows_shortcut_bridge.cpp` 的 `HandleMessage` 现在要求四个条件**同时**成立才 `Fire()`：
+
+```text
+message == WM_HOTKEY && wparam == kHotKeyId && window == window_ && registered_
+```
+
+- 只认 `message + wparam` 不够：`UnregisterHotKey` **不会**清掉已经排进消息队列的
+  `WM_HOTKEY`。用户刚删除 / 改绑快捷键时，队列里那条旧消息仍会被派发到这里；不检查
+  `registered_` 就会凭空启动一次截图。本机用真实消息队列验证过：`RegisterHotKey` →
+  `PostMessage(WM_HOTKEY)` → `UnregisterHotKey`（返回 TRUE）→ `PeekMessage` 仍能取到该消息；
+  旧路由 fires=1，新路由 fires=0；
+- 加 `window == window_` 是因为 `wParam` 只有 id，同一个 HWND 上别的组件（或消息被投给
+  子窗口）也可能用同一个 id，不能替别人消费消息；
+- `Fire()` 里再判一次 `registered_` 做兜底；钩子已经保证“注册失败 / 注销 / 析构后不会再回
+  调 Dart”；
+- Dart 侧（`windows_shortcut_service.dart` 的 `WindowsShortcutBridge.unregister()`）在调原生
+  **之前**先把 `_onTriggered` 摘掉：native → Dart 的 `triggered` 是异步投递的，用户点“删除”
+  时可能还有一条已发出的触发消息在路上；注销失败再把回调恢复（系统里可能还注册着，
+  不能变成“按了没反应”）。`register()` 失败也清回调。
+
+#### 失败面板显示失败不能留下“隐藏 + 持锁”进程
+
+`capture_permission_flow.dart` 的 `revealWindow()` 改为返回 `bool`：
+
+- `showWindow()` 失败（低频但一旦发生用户就完全看不到面板）→ 写
+  `window_ready_failed` / `WINDOW_REVEAL_FAILED`，并调注入的 `quit()` 结束捕获进程；
+  `capture_page.dart` 的 `_revealFailurePanel()` 再 `exitProcess()` 硬退出兜底——否则会留下
+  一个隐藏且持有捕获锁的进程，表现为“按快捷键没反应”；
+- `windowManager.focus()` 失败只降级为 `window_ready_failed` warning：窗口已经显示了，
+  不影响用户看到面板。

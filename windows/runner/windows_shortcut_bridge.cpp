@@ -93,8 +93,18 @@ std::optional<LRESULT> WindowsShortcutBridge::HandleMessage(
     UINT message,
     WPARAM wparam,
     LPARAM lparam) noexcept {
-  // 只认自己的 id：其它插件的 WM_HOTKEY（各自的 id）一律放行（§23）。
-  if (message == WM_HOTKEY && wparam == static_cast<WPARAM>(kHotKeyId)) {
+  // 三个条件缺一不可（§23）：
+  //
+  // 1) message / wparam：这是我们注册过的那个 id；
+  // 2) window == window_：消息属于本窗口（同一个 HWND 上别的组件也可能用同一个 id，
+  //    广播/子窗口消息不能算数）；
+  // 3) registered_：**现在确实还注册着**。`UnregisterHotKey` 不会清掉已经排进消息
+  //    队列的 WM_HOTKEY，而“删除 / 改绑快捷键”后这条旧消息仍会被派发到这里；
+  //    不检查 registered_ 就会在用户刚清掉快捷键时凭空启动一次截图。
+  //
+  // 其余消息（其它插件的 WM_HOTKEY、非本窗口的消息）一律放行。
+  if (message == WM_HOTKEY && wparam == static_cast<WPARAM>(kHotKeyId) &&
+      window == window_ && registered_) {
     Fire();
     return 0;
   }
@@ -268,6 +278,11 @@ bool WindowsShortcutBridge::UnregisterInternal(DWORD* error_code,
 }
 
 void WindowsShortcutBridge::Fire() {
+  // 兜底：只有“确实注册着”才允许回调。正常情况下 `HandleMessage` 已经过滤过，
+  // 这里再判一次，保证注销 / 析构 / 注册失败后不可能再触发（§23）。
+  if (!registered_) {
+    return;
+  }
   // 不走这里起截图进程（§21）：只回调 Dart，由 Dart 的 CaptureLauncher 统一
   // 生成 requestId、写 ACK、记日志，保持触发链只有一条。
   if (channel_) {

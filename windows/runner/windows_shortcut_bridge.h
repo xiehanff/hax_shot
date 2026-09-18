@@ -48,8 +48,12 @@ class WindowsShortcutBridge {
   WindowsShortcutBridge& operator=(const WindowsShortcutBridge&) = delete;
 
   /// 插件 / Flutter 之前的钩子：**只**处理自己的 `WM_HOTKEY`
-  /// （`wParam == kHotKeyId`），其余消息一律返回 `std::nullopt` 放行（§23）。
+  /// （`wParam == kHotKeyId`、消息属于本窗口、且 `registered_` 为 true），
+  /// 其余消息一律返回 `std::nullopt` 放行（§23）。
   /// 其它插件注册的热键有它们自己的 id，不会被这里吃掉。
+  ///
+  /// `registered_` 必须参与判定：`UnregisterHotKey` 不会清掉已排队的 `WM_HOTKEY`，
+  /// 用户刚删除 / 改绑快捷键时队列里仍有旧消息，不能让它触发一次截图。
   std::optional<LRESULT> HandleMessage(HWND window,
                                        UINT message,
                                        WPARAM wparam,
@@ -74,6 +78,8 @@ class WindowsShortcutBridge {
   bool UnregisterInternal(DWORD* error_code, std::string* message);
 
   /// 通知 Dart：快捷键被按下（不在这里起截图进程）。
+  ///
+  /// 只在 `registered_` 为 true 时回调：注销 / 注册失败后任何残留消息都不能算数。
   void Fire();
 
   HWND window_ = nullptr;

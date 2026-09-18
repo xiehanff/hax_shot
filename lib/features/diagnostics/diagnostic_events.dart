@@ -60,6 +60,13 @@ abstract final class DiagnosticEvent {
   /// 不释放捕获锁（§15.2/§17）。
   static const overlayBecomeFailed = 'overlay_become_failed';
 
+  /// 浮层已经显示后，原生在 `WM_DPICHANGED` 重钉失败：物理契约不再成立，
+  /// 页面必须走失败面板（§14.4 / 评审 2）。
+  static const overlayRepinFailed = 'overlay_repin_failed';
+
+  /// 失败面板 / 引导页的窗口**显示**失败（错误码用 [DiagnosticErrorCode.windowRevealFailed]）：
+  /// 窗口显示不出来就不能留下一个隐藏且持锁的捕获进程（评审 6）。
+  ///复用已有的 [windowReadyFailed] 事件名，不再新增事件。
   static const captureFinished = 'capture_finished';
 
   // 目标显示器元数据（Windows，见 rust/src/windows.rs）。
@@ -102,6 +109,8 @@ abstract final class DiagnosticErrorCode {
   static const captureStartupFailed = 'CAPTURE_STARTUP_FAILED';
   static const capturePermissionDenied = 'CAPTURE_PERMISSION_DENIED';
   static const overlayBecomeFailed = 'OVERLAY_BECOME_FAILED';
+  static const overlayRepinFailed = 'OVERLAY_REPIN_FAILED';
+  static const windowRevealFailed = 'WINDOW_REVEAL_FAILED';
 
   static const trayInitFailed = 'TRAY_INIT_FAILED';
   static const windowInitFailed = 'WINDOW_INIT_FAILED';

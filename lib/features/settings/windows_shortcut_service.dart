@@ -47,17 +47,36 @@ final class WindowsShortcutBridge {
       'register',
       {'keyCode': virtualKeyCode, 'modifiers': modifiers},
     );
-    return _parse(result);
+    final parsed = _parse(result);
+    if (!parsed.ok) {
+      // 注册失败时原生不会投递 triggered（`RegisterHotKey` 没成功），但桥上不能继续
+      // 挂着一个已经无效的回调：留着它没有任何用处，清掉更符合“没注册就没有触发”（§23）。
+      _onTriggered = null;
+    }
+    return parsed;
   }
 
   Future<ShortcutNativeResult> unregister() async {
+    // 先把回调摘掉再调原生：native -> Dart 的 `triggered` 是异步投递的，用户刚点
+    // “删除快捷键”时队列里可能还有一条已发出的触发消息。注销成功后它必须变成
+    // 无操作，否则用户删了快捷键仍会启动一次截图（§23）。
+    final void Function()? previous = _onTriggered;
+    _onTriggered = null;
     final result = await _channel.invokeMapMethod<Object?, Object?>(
       'unregister',
     );
-    return _parse(result);
+    final parsed = _parse(result);
+    if (!parsed.ok) {
+      // 注销失败说明系统里可能还注册着：恢复回调，避免“按了没反应”的二次伤害。
+      _onTriggered = previous;
+    }
+    return parsed;
   }
 
   /// 每个进程只允许一个 handler；重复设置只是覆盖回调。
+  ///
+  /// handler 本身不解绑：解绑后再注册要重建 handler，而回调的有效性由
+  /// `_onTriggered` 控制（注销/失败时置空，注册时重新赋值），见 [unregister]。
   void _attach() {
     if (_attached) return;
     _attached = true;
