@@ -1743,4 +1743,94 @@ hax_shot.exe  flutter_windows.dll
 **唯独没有 `hax_shot_native.dll`**：`windows/CMakeLists.txt` 从来没接过 cargo。
 这就是 Phase 1 要补的第一件事（见 18.3）。插件 DLL 都在，说明 Windows 侧 C++ 工具链没问题。
 
-### 18.3 Phase 1 的 Windows 构建规则（踩过的坑）：待 Phase 1 完成后补写。
+Phase 1 收尾的 `fvm flutter build windows --release` 退出码 0，`build/windows/x64/runner/Release/` 里
+能看到 `hax_shot.exe`、`hax_shot_native.dll`、`flutter_windows.dll`、全部插件 DLL 与
+`data/app.so` + `data/icudtl.dat` + `data/flutter_assets/`。“构建成功”不等于 DLL 能加载，
+真正的判定标准见 18.7。
+
+### 18.3 Phase 1 的 Windows 构建规则（踩过的坑）
+
+`windows/CMakeLists.txt` 里新增了唯一的 Rust 规则（对应 `linux/CMakeLists.txt` 的那段，
+但**不要照抄它的环境假设**）：
+
+- `RUST_TARGET_DIR` 显式写成 `rust/target`，并给 cargo 传 `--target-dir`；不依赖外部环境变量，
+  也不给整个构建设置全局 `CARGO_TARGET_DIR`（`super_native_extensions` 走 cargokit 自己管
+  构建目录，抢同一目录会互相污染）；
+- MVP 统一用 `--release`：Debug / Profile / Release 三种 Flutter 配置都装同一份 release DLL，
+  bundle 里只有一个稳定产物；
+- **不传 `--target`**：本机与 CI 的 host 就是 `x86_64-pc-windows-msvc`，产物在 `<target-dir>/release/`。
+  以后一旦加 `--target <triple>`，cargo 命令行与 `RUST_LIBRARY` 路径必须同时变成
+  `<target-dir>/<triple>/release/`，改一处会静默复制旧 DLL；
+- 安装用 `install(FILES ... DESTINATION "${CMAKE_INSTALL_PREFIX}")`，而且这段**必须写在文件末尾的
+  安装区之后**：`CMAKE_INSTALL_PREFIX` 在那个文件里被强制成 `$<TARGET_FILE_DIR:hax_shot>`
+  （= 当前配置的 bundle），放在前面会装到 CMake 的默认前缀去；
+- `runner` 目标加 `add_dependencies(${BINARY_NAME} hax_shot_native)`（CMake 会生成
+  `hax_shot_native.vcxproj` 的 ProjectReference），保证 DLL 先于打包；
+- `find_program(CARGO_EXECUTABLE ... HINTS "$ENV{CARGO_HOME}/bin" "$ENV{USERPROFILE}/.cargo/bin")`：
+  不把 `HOME` 当 Windows 前提（本机 `HOME` 恰好存在，但不能假定）；
+- 依赖追踪的 `DEPENDS` 含 `rust/src/*`、`Cargo.toml`、`Cargo.lock`，`COMMAND` 用独立参数 + `VERBATIM`。
+
+### 18.4 Runner 源文件必须是 UTF-8（C4819）
+
+`windows/runner/*.cpp` 里加中文注释后，MSVC 报
+`warning C4819: 该文件包含不能在当前代码页(936)中表示的字符`，而 `apply_standard_settings()`
+开了 `/WX`，于是直接变成编译错误、`flutter build windows` 失败。修法不是删注释，而是在
+`windows/runner/CMakeLists.txt` 里给 runner 目标加
+`target_compile_options(${BINARY_NAME} PRIVATE "/utf-8")`。
+
+**不要**把 `/utf-8` 放进 `windows/CMakeLists.txt` 的 `apply_standard_settings()`：那个函数
+插件目标也在用，编译选项会外溢到 vendored 插件的 C++ 源码。以后新增
+`capture_window_bridge.cpp` / `windows_shortcut_bridge.cpp` 时注释照写中文，选项已经就位。
+
+`windows/runner/CMakeLists.txt` 用的是**显式源文件列表**（不是 GLOB）：新源文件必须加进
+`add_executable()`，否则就是“代码写了但没编进去”。
+
+### 18.5 窗口可见性：只有 Dart 是 owner
+
+`windows/runner/flutter_window.cpp` **不再**注册 `SetNextFrameCallback(Show)`、也不调
+`ForceRedraw()`：Win32 模板用 `WS_OVERLAPPEDWINDOW`（不带 `WS_VISIBLE`）创建窗口，本来就不可见，
+只要不主动 `Show()`，宿主与 `--capture` 子进程都不会先闪一帧 1280x720 的默认窗口。
+显示/隐藏一律走 Dart 的 `window_manager`（`lib/features/window/window_visibility.dart`），
+`main.dart` 在 `waitUntilReadyToShow` 之后立即 `hide()`。
+
+不要改成“不创建窗口”：`main.cpp` 的窗口创建与消息循环保持现状，窗口隐藏着也可以
+接收 `window_manager` 的消息；托盘宿主的圆角/透明底色（`RoundedWindow` + `ClipRRect`）也
+依赖窗口已经存在。
+
+### 18.6 托盘左右键：Windows 必须自己弹菜单
+
+本地 vendored 的 `packages/tray_manager/windows/tray_manager_plugin.cpp`（`pubspec.yaml` 的
+`dependency_overrides` 指向它）在 `WM_LBUTTONUP` / `WM_RBUTTONUP` 上**只 invoke Dart 回调**，
+不会自己弹菜单；菜单要另调 `PopUpContextMenu` → `TrackPopupMenu`。所以 `lib/app.dart` 的
+`_popUpTrayMenu()` 对 Linux `return`（AppIndicator 自己弹，重复调用会弹两次），
+macOS 与 Windows 都走 `trayManager.popUpContextMenu()`。
+
+### 18.7 DLL 加载：exe 旁绝对路径 + 分层诊断
+
+`lib/native/native_bridge.dart` 的候选顺序：
+
+```text
+macOS  → Contents/Frameworks/hax_shot_native.dylib → exe 旁 → 裸名
+Windows→ <exe 目录>\hax_shot_native.dll（绝对路径优先）→ 裸名
+Linux  → <exe 目录>/lib/libhax_shot_native.so → exe 旁 → 裸名
+```
+
+exe 目录用 `File(Platform.resolvedExecutable).parent.path`，与 `DartProject(L"data")` 解析
+`data/` 的锚点一致。失败时抛出的错误**汇总所有候选**（每条候选路径 + 各自真实错误），
+分三层：候选文件不存在 / 文件在但加载失败（缺依赖 DLL，带系统错误原文）/ 加载成功但
+符号缺失（带成功的 DLL 路径与缺失的符号名）。
+
+Windows 上 Rust DLL 是**动态加载**的（`DynamicLibrary.open`），不是静态导入：静态导入一旦
+失败进程根本起不来，Dart 侧的分层诊断就没机会跑。验 DLL 也不要看“托盘出来了”——
+`NativeBridge.instance` 是惰性 static，宿主启动不一定碰它；真实触发点是
+`_displayArguments()`（读光标显示器）与 `--capture` 的抓屏路径。
+
+### 18.8 Phase 1 结束时仍未实现的 Windows 分支（已知，不是回归）
+
+- `lib/features/settings/shortcut_service.dart` 的平台选择只有 macOS 与“其它（= GNOME）”：
+  Windows 上会去跑 `gsettings`，于是启动链的 `welcome_init_failed`（`ProcessException`），
+  **首次启动的欢迎页不会弹**。托盘菜单、托盘图标不受影响（`tray_init_success`）。真正的
+  修法是 Phase 4 的显式三平台选择（Windows 走 RegisterHotKey + 原生桥）；
+- Rust 侧全是 placeholder：抓屏返回 `-1` + “Windows capture backend is not implemented yet”，
+  剪贴板同理，`hax_shot_cursor_display` 返回 0，两个元数据导出返回 `7`（NOT_IMPLEMENTED）。
+  所以“立即截屏”会停在可读的失败面板，这是预期行为。
