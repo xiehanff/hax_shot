@@ -1,12 +1,14 @@
 //! Hax Shot 原生层：Flutter 通过 `dart:ffi` 只看到下面这几个 C ABI 函数。
 //!
-//! 平台实现分别放在 `linux` 和 `macos` 模块里，Flutter 侧看不到
-//! Mutter / PipeWire / CoreGraphics 这些平台细节。
+//! 平台实现分别放在 `linux`、`macos` 和 `windows` 模块里，Flutter 侧看不到
+//! Mutter / PipeWire / CoreGraphics / GDI 这些平台细节。
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 use std::cell::Cell;
 use std::cmp::min;
@@ -48,6 +50,9 @@ fn write_bytes_to_buffer(bytes: &[u8], buffer: *mut u8, capacity: usize) -> usiz
     bytes.len() + 1
 }
 
+// Phase 1 的 Windows 模块还没有抓屏实现，这个共享 helper 暂时只被 linux/macos 使用；
+// Phase 2 的 `windows::capture_screen_impl` 会用它写临时 PNG。
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn unique_temp_path() -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,6 +71,11 @@ use linux::{
 use macos::{
     capture_screen_impl, copy_png_impl, cursor_display_impl, request_screen_capture_access_impl,
     screen_capture_authorized_impl, target_display_id_impl,
+};
+#[cfg(target_os = "windows")]
+use windows::{
+    capture_screen_impl, copy_png_impl, cursor_display_impl, last_capture_target_impl,
+    request_screen_capture_access_impl, screen_capture_authorized_impl, target_monitor_impl,
 };
 
 /// Whether the app may capture the screen right now.
@@ -110,6 +120,48 @@ pub extern "C" fn hax_shot_cursor_display() -> u32 {
 #[no_mangle]
 pub extern "C" fn hax_shot_target_display(requested: u32) -> u32 {
     target_display_id_impl(requested)
+}
+
+/// Windows 目标显示器的冻结元数据。
+///
+/// `hax_shot_target_monitor` 与 `hax_shot_last_capture_target` 共享这一份布局：
+/// rcMonitor 用**物理像素**（允许为负，副屏可以在主屏左边），`display_id` 是
+/// `MONITORINFOEXW.szDevice` 的 FNV-1a 32 位结果，`0` 保留给“未指定”。
+///
+/// Rust 是这些字段的唯一来源，C++ / Dart 只消费，不允许自己枚举显示器或重算 hash。
+/// 具体错误码（0 = ok、1 = NO_TARGET、…、7 = NOT_IMPLEMENTED）见
+/// `docs/development-guide.md` 的 Windows 一节。
+#[repr(C)]
+pub struct HaxShotTargetMonitor {
+    pub valid: u32,
+    pub error_code: u32,
+    pub display_id: u32,
+    pub reserved: u32,
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub width: i32,
+    pub height: i32,
+    pub dpi: u32,
+    pub generation: u64,
+}
+
+/// 只查询当前拓扑下本次截图会选中的显示器（requested → 光标 → 主屏），不抓屏。
+///
+/// 诊断 / 预检用，**不用于摆浮层**：浮层必须用 [`hax_shot_last_capture_target`] 冻结的
+/// 那一份，否则用户在抓屏与摆窗之间换屏时会对不上。返回值与 `error_code` 同一套。
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn hax_shot_target_monitor(requested: u32, out: *mut HaxShotTargetMonitor) -> i32 {
+    target_monitor_impl(requested, out)
+}
+
+/// 返回本进程最近一次成功抓屏冻结的目标元数据。
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn hax_shot_last_capture_target(out: *mut HaxShotTargetMonitor) -> i32 {
+    last_capture_target_impl(out)
 }
 
 /// Capture one frame of the target display and write it to a temporary PNG.

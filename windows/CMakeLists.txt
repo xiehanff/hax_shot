@@ -106,3 +106,47 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# === Rust native library (Windows) ===
+#
+# 结构与 linux/CMakeLists.txt 的那段一致，但不能照抄它的环境假设：
+#   * Windows 是多配置生成器：Debug / Profile / Release 都装同一份 release DLL（MVP 选择）；
+#   * 不假定 HOME 存在，也不给整个构建设置 CARGO_TARGET_DIR（super_native_extensions 的
+#     cargokit 自己管构建目录，抢同一目录会互相污染）；
+#   * 不传 --target。以后如果加了 --target <triple>，cargo 命令行和下面的 RUST_LIBRARY
+#     路径必须同时改成 ${RUST_TARGET_DIR}/<triple>/release/，改一处会静默复制旧 DLL。
+#
+# install 必须放在上面 CMAKE_INSTALL_PREFIX 被初始化之后，否则 DLL 会装到默认前缀
+# （它在这个文件里被强制成 $<TARGET_FILE_DIR:hax_shot> = 当前配置的 bundle 目录）。
+set(RUST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../rust")
+set(RUST_PROFILE "release")
+set(RUST_TARGET_DIR "${RUST_DIR}/target")
+set(RUST_LIBRARY "${RUST_TARGET_DIR}/${RUST_PROFILE}/hax_shot_native.dll")
+
+find_program(CARGO_EXECUTABLE NAMES cargo
+  HINTS "$ENV{CARGO_HOME}/bin" "$ENV{USERPROFILE}/.cargo/bin")
+if(NOT CARGO_EXECUTABLE)
+  message(FATAL_ERROR "Cargo was not found. Install Rust with rustup first.")
+endif()
+
+file(GLOB_RECURSE RUST_SOURCES CONFIGURE_DEPENDS
+  "${RUST_DIR}/src/*"
+  "${RUST_DIR}/Cargo.toml"
+  "${RUST_DIR}/Cargo.lock"
+)
+add_custom_command(
+  OUTPUT "${RUST_LIBRARY}"
+  COMMAND "${CARGO_EXECUTABLE}" build
+          --manifest-path "${RUST_DIR}/Cargo.toml"
+          --target-dir "${RUST_TARGET_DIR}"
+          --release
+  WORKING_DIRECTORY "${RUST_DIR}"
+  DEPENDS ${RUST_SOURCES}
+  COMMENT "Building HaxShot Rust native library (Windows)"
+  VERBATIM
+)
+add_custom_target(hax_shot_native ALL DEPENDS "${RUST_LIBRARY}")
+add_dependencies(${BINARY_NAME} hax_shot_native)
+
+install(FILES "${RUST_LIBRARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
