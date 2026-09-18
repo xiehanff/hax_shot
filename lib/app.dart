@@ -739,10 +739,14 @@ class _TrayHostPageState extends State<TrayHostPage>
 
   /// macOS 的 tray_manager 在 `setContextMenu` 里只是把菜单存起来，菜单只在
   /// `popUpContextMenu()` 里才挂到 status item 上（菜单关掉后又摘下来），所以必须
-  /// 自己处理图标点击，否则点菜单栏图标什么都不发生。Linux 的 AppIndicator 会
-  /// 自己弹菜单，不能重复调用。
+  /// 自己处理图标点击，否则点菜单栏图标什么都不发生。
+  ///
+  /// Windows 的本地 tray_manager（`packages/tray_manager/windows/tray_manager_plugin.cpp`）
+  /// 在左键 / 右键上都只 invoke Dart 回调，不会自己弹菜单，所以菜单要由这里替它弹。
+  ///
+  /// Linux 的 AppIndicator 会自己弹菜单，重复调用会弹两次，必须保持 return。
   void _popUpTrayMenu() {
-    if (!Platform.isMacOS) return;
+    if (Platform.isLinux) return;
     unawaited(trayManager.popUpContextMenu());
   }
 
