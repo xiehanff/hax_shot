@@ -540,11 +540,18 @@ class _TrayHostPageState extends State<TrayHostPage>
   ///
   /// 所以这里不是“试一次就放弃”，而是排一个梯度补做。重启进程当然也能恢复（新进程一定
   /// 正常），但为了一个偶发失效去杀掉用户的托盘宿主太重，梯度重注册的成本可以忽略。
+  ///
+  /// Windows 只做“resumed 后重注册一次”（§28）：那条补做梯度是专门给 Carbon
+  /// 实测行为写的，Windows 上没有任何实测支持；而且隐藏的托盘宿主**不保证**每次睡眠
+  /// 都收到 `resumed`，所以这里不是“睡眠恢复的完整保证”。真失效了再另开 native
+  /// session/power 事件桥，不在本轮提前上（托盘图标的重建已经有 tray_manager 自己的
+  /// WM_POWERBROADCAST 逻辑，不要再造一套）。
   Future<void> _recoverShortcut(String event) async {
-    if (!Platform.isMacOS) return;
+    if (!Platform.isMacOS && !Platform.isWindows) return;
     _diag.log(event);
     await _reactivateShortcut();
 
+    if (!Platform.isMacOS) return;
     if (!_isWakeLikeEvent(event)) return;
     for (final Duration delay in _wakeReactivateRetryDelays) {
       await Future<void>.delayed(delay);
@@ -590,7 +597,10 @@ class _TrayHostPageState extends State<TrayHostPage>
 
   /// 显示欢迎页。调试入口也会调它，但不会写“已看过”标记。
   Future<void> _presentFirstRunGuide() async {
-    final binding = await shortcutService.readBinding();
+    // Windows 首次启动只注册默认值、不写偏好（§24.3），所以偏好读不到时要回退到
+    // 真正注册着的那个组合，否则欢迎页会告诉用户“未设置”而快捷键其实可用。
+    final binding =
+        await shortcutService.readBinding() ?? shortcutService.activeBinding;
     if (!mounted) return;
 
     setState(() {

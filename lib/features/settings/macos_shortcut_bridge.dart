@@ -1,35 +1,14 @@
 import 'package:flutter/services.dart';
 
-/// 一次原生注册/注销的结果，带**真实**的 Carbon OSStatus。
-///
-/// 这正是 `hotkey_manager_macos` 拿不到的东西：它的 Swift 端无条件 `result(true)`，
-/// 所以 Dart 侧分不清「Carbon 注册成功」和「静默失败」。这里把 OSStatus 原样带回来。
-final class ShortcutNativeResult {
-  const ShortcutNativeResult({
-    required this.ok,
-    required this.osStatus,
-    this.message,
-  });
-
-  /// 原生调用是否成功（OSStatus == noErr）。
-  final bool ok;
-
-  /// `RegisterEventHotKey` / `UnregisterEventHotKey` 的原始返回值，0 表示成功。
-  final int osStatus;
-
-  /// 原生侧给出的可读原因（会进诊断日志）。
-  final String? message;
-
-  @override
-  String toString() => ok
-      ? 'ok(osStatus=0)'
-      : 'OSStatus $osStatus${message == null ? '' : '：$message'}';
-}
+import 'shortcut_registration.dart';
 
 /// macOS 全局快捷键原生桥（`macos/Runner/ShortcutBridge.swift`）。
 ///
 /// 只负责三件事：register / unregister 透传 OSStatus，以及把按键触发转成回调。
 /// 注册状态机、改绑事务、回滚都在 [MacosShortcutService] 里，不在这里。
+///
+/// [ShortcutNativeResult] / [ShortcutNativeException] 两个结果类型已经搬到
+/// `shortcut_registration.dart`：Windows 桥复用同一份解析与日志字段（§21）。
 final class MacosShortcutBridge {
   MacosShortcutBridge({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel(channelName);
@@ -94,19 +73,4 @@ final class MacosShortcutBridge {
       message: message is String ? message : null,
     );
   }
-}
-
-/// 原生注册/注销失败。带上 OSStatus 和可读原因，供日志与设置页展示。
-final class ShortcutNativeException implements Exception {
-  const ShortcutNativeException(this.action, this.result);
-
-  final String action;
-  final ShortcutNativeResult result;
-
-  int get osStatus => result.osStatus;
-
-  @override
-  String toString() =>
-      '$action失败（${result.message ?? 'Carbon 拒绝了这个组合'}，'
-      'OSStatus ${result.osStatus}）';
 }

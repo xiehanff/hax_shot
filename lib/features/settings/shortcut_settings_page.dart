@@ -115,15 +115,29 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
       return '系统当前响应 ${bindingDisplayLabel(active)}，'
           '配置里存的是 ${bindingDisplayLabel(configured)}';
     }
+    if (active != null && configured == null) {
+      // Windows 首次启动是“注册了默认值但没写偏好”（§24.3）：屏幕上真的响应的就是
+      // active 那个组合，只写一句状态会让用户以为快捷键没生效。
+      return '系统当前响应 ${bindingDisplayLabel(active)}（内置默认值，还没保存到配置）';
+    }
     if (Platform.isMacOS) {
       return '当前注册状态（Carbon 是否接受了这个组合；'
           '失败时会带 OSStatus 记进诊断日志）';
     }
+    if (Platform.isWindows) {
+      // Windows 不写 OSStatus：它的原生错误码是 GetLastError()，文案不要拿
+      // macOS 的说法套用户（§27）。
+      return '当前注册状态（Windows 是否接受了这个组合；'
+          '失败时会带 Win32 错误码记进诊断日志）';
+    }
     return '当前注册状态';
   }
 
-  String get _modifierHint =>
-      Platform.isMacOS ? '⌘、⌥、⌃ 或 ⇧' : 'Alt、Ctrl 或 Super';
+  String get _modifierHint {
+    if (Platform.isMacOS) return '⌘、⌥、⌃ 或 ⇧';
+    if (Platform.isWindows) return 'Ctrl、Alt、Shift 或 Win';
+    return 'Alt、Ctrl 或 Super';
+  }
 
   String get _autostartSubtitle =>
       Platform.isMacOS ? '登录后自动显示菜单栏图标' : '登录 GNOME 后自动显示托盘图标';
@@ -181,6 +195,13 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
     return KeyEventResult.handled;
   }
 
+  /// 设置页显示的“当前快捷键”。
+  ///
+  /// 优先用偏好里的值；偏好里没有时回退到**系统现在真的注册着的**那个组合——
+  /// Windows 首次启动只注册默认值、不写偏好（§24.3），只显示偏好会让用户看到
+  /// “未设置”而实际按下 Alt+Shift+Z 能截图，也让他没法把默认值删掉。
+  String? get _displayBinding => _binding ?? shortcutService.activeBinding;
+
   Future<void> _saveBinding(String binding, String label) async {
     setState(() {
       _saving = true;
@@ -224,7 +245,7 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
   }
 
   Future<void> _deleteBinding() async {
-    if (_saving || _binding == null) return;
+    if (_saving || _displayBinding == null) return;
     setState(() {
       _saving = true;
       _message = '正在删除快捷键…';
@@ -384,12 +405,12 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
                         title: Text(
                           _loading
                               ? '读取中…'
-                              : _binding == null
+                              : _displayBinding == null
                               ? '未设置'
-                              : bindingDisplayLabel(_binding!),
+                              : bindingDisplayLabel(_displayBinding!),
                         ),
                         subtitle: const Text('当前快捷键'),
-                        trailing: _binding == null
+                        trailing: _displayBinding == null
                             ? null
                             : IconButton(
                                 tooltip: '删除快捷键',
@@ -488,13 +509,21 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 }
 
 enum _ShortcutModifier {
-  control('<Control>', 'Ctrl'),
-  alt('<Alt>', 'Alt'),
-  shift('<Shift>', 'Shift'),
-  superKey('<Super>', 'Super');
+  control('<Control>'),
+  alt('<Alt>'),
+  shift('<Shift>'),
+  superKey('<Super>');
 
-  const _ShortcutModifier(this.gsettings, this.label);
+  const _ShortcutModifier(this.gsettings);
 
   final String gsettings;
-  final String label;
+
+  /// 录制时的即时标签（§27）：macOS 上是 Super 的键在 Windows 上叫 Win，
+  /// Linux 上仍然叫 Super。
+  String get label => switch (this) {
+    _ShortcutModifier.control => 'Ctrl',
+    _ShortcutModifier.alt => 'Alt',
+    _ShortcutModifier.shift => 'Shift',
+    _ShortcutModifier.superKey => Platform.isWindows ? 'Win' : 'Super',
+  };
 }

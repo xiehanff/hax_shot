@@ -79,6 +79,110 @@ int? carbonKeyCodeFromHotKey(HotKey hotKey) {
   return null;
 }
 
+/// 绑定字符串 → Windows 虚拟键码（`VK_*`）。
+///
+/// 只支持 [windowsVirtualKeyCode] 里**显式写死**的范围
+/// （§25.1）：A–Z / 0–9 / F1–F24 / 常用命名键 / US 布局上未 shift 的符号。
+///
+/// 刻意不推推：
+/// - 不用 `LogicalKeyboardKey.keyId`：那是 Flutter 自己的位编码，不是 VK；
+/// - 不用 `usbHidUsage`：USB HID usage 与 VK 只在字母数字上碰巧接近，符号完全对不上；
+/// - 更不用 macOS 的 Carbon 键码（`kVK_*`）。
+///
+/// 返回 null 表示不在范围内（含 F12：系统永远保留给调试器），调用方必须把它当
+/// “注册失败”并给出 [windowsVirtualKeyRejection] 的可读原因，不能静默跳过。
+/// 另外：这个函数只负责**主键**；至少一个修饰键的要求由
+/// [hotKeyFromBinding]（解析失败返回 null）继续保证，不在这里放松。
+int? windowsVirtualKeyCode(String binding) {
+  final token = _bindingKeyToken(binding);
+  if (token == null) return null;
+
+  if (token.length == 1) {
+    final code = token.codeUnitAt(0);
+    if (code >= 0x61 && code <= 0x7a) {
+      return 0x41 + (code - 0x61);
+    }
+    if (code >= 0x30 && code <= 0x39) {
+      return code; // 0x30 + 数字
+    }
+    return _windowsSymbolKeys[token];
+  }
+
+  final named = _windowsNamedKeys[token];
+  if (named != null) return named;
+
+  return _windowsFunctionKeyCode(token);
+}
+
+/// [windowsVirtualKeyCode] 返回 null 时，给用户看的可读原因。
+String windowsVirtualKeyRejection(String binding) {
+  final token = _bindingKeyToken(binding);
+  if (token == 'f12') {
+    return 'F12 由系统保留给调试器，Windows 上不能注册为全局快捷键';
+  }
+  return 'Windows 第一版只支持 A–Z、0–9、F1–F24（不含 F12）、常用命名键，'
+      '以及在 US 布局上不需要 Shift 的符号；不支持的绑定：$binding';
+}
+
+/// `F1`..`F24` → `VK_F*`。F12 返回 null（系统保留，§22/§25.2）。
+int? _windowsFunctionKeyCode(String token) {
+  final lower = token.toLowerCase();
+  if (lower.length < 2 || !lower.startsWith('f')) return null;
+  final index = int.tryParse(lower.substring(1));
+  if (index == null || index < 1 || index > 24) return null;
+  if (index == 12) return null;
+  return 0x70 + (index - 1);
+}
+
+/// 绑定串的主键 token（小写），例如 `<Alt><Shift>z` → `z`。
+String? _bindingKeyToken(String binding) {
+  var rest = binding.trim();
+  if (rest.isEmpty) return null;
+  while (rest.startsWith('<')) {
+    final end = rest.indexOf('>');
+    if (end < 0) return null;
+    rest = rest.substring(end + 1).trim();
+  }
+  if (rest.isEmpty) return null;
+  return rest.toLowerCase();
+}
+
+/// US 布局上未 shift 的 11 个符号（与上面 [_symbols] 的字符集一一对应）。
+///
+/// 非 US 布局（例如德语 z/y 互换、需要 AltGr 的符号）本轮不做：只用
+/// `VkKeyScanExW` 处理它们还必须带上高字节的额外修饰键，不能只取低字节（§25.2）。
+const _windowsSymbolKeys = <String, int>{
+  '-': 0xBD,
+  '=': 0xBB,
+  '[': 0xDB,
+  ']': 0xDD,
+  r'\': 0xDC,
+  ';': 0xBA,
+  "'": 0xDE,
+  ',': 0xBC,
+  '.': 0xBE,
+  '/': 0xBF,
+  '`': 0xC0,
+};
+
+const _windowsNamedKeys = <String, int>{
+  'space': 0x20,
+  'return': 0x0D,
+  'enter': 0x0D,
+  'tab': 0x09,
+  'backspace': 0x08,
+  'insert': 0x2D,
+  'delete': 0x2E,
+  'home': 0x24,
+  'end': 0x23,
+  'page_up': 0x21,
+  'page_down': 0x22,
+  'up': 0x26,
+  'down': 0x28,
+  'left': 0x25,
+  'right': 0x27,
+};
+
 /// [HotKey] 的修饰键 → 原生桥认识的字符串（`alt` / `control` / `shift` / `meta`）。
 List<String> modifierNamesFromHotKey(HotKey hotKey) => <String>[
   for (final HotKeyModifier modifier

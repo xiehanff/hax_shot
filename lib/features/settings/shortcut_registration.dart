@@ -64,3 +64,50 @@ final class ShortcutActivationFailure extends ShortcutActivationResult {
   final String? restoredBinding;
   final bool rollbackFailed;
 }
+
+/// 一次原生注册/注销的结果，带**真实**的原生错误码。
+///
+/// 这正是 `hotkey_manager_*` 拿不到的东西：它的原生端在 register 里无条件
+/// `result(true)`，所以 Dart 侧分不清「系统注册成功」和「静默失败」。这里把
+/// 原生返回值原样带回来。
+///
+/// [osStatus] 字段名沿用的是 macOS 桥的协议（§21：Windows 复用同一形状，
+/// 不改字段名）：macOS 放 Carbon 的 `OSStatus`，Windows 放 `GetLastError()`
+/// 或桥自有 code（0 表示成功）。
+final class ShortcutNativeResult {
+  const ShortcutNativeResult({
+    required this.ok,
+    required this.osStatus,
+    this.message,
+  });
+
+  /// 原生调用是否成功。
+  final bool ok;
+
+  /// 原生返回值，0 表示成功（macOS：OSStatus；Windows：Win32 错误码）。
+  final int osStatus;
+
+  /// 原生侧给出的可读原因（会进诊断日志）。
+  final String? message;
+
+  @override
+  String toString() => ok
+      ? 'ok(osStatus=0)'
+      : '原生错误码 $osStatus${message == null ? '' : '：$message'}';
+}
+
+/// 原生注册/注销失败。带上原生错误码和可读原因，供日志与设置页展示。
+final class ShortcutNativeException implements Exception {
+  const ShortcutNativeException(this.action, this.result);
+
+  final String action;
+  final ShortcutNativeResult result;
+
+  /// 日志里的 `nativeCode`（§56.2）：macOS 是 Carbon OSStatus，Windows 是 Win32 错误码。
+  int get osStatus => result.osStatus;
+
+  @override
+  String toString() =>
+      '$action失败（${result.message ?? '系统拒绝了这个组合'}，'
+      '原生错误码 ${result.osStatus}）';
+}
