@@ -1600,16 +1600,12 @@ macOS：
 - 还没有 macOS 的 CI 构建任务，本地验证使用 `fvm flutter build macos`；
 - 不支持跨显示器框选：一次截图只覆盖目标显示器，选区不能跨越两块屏。
 
-Windows（未实现）：
+Windows（进行中，清单见 [18. Windows 平台适配](#18-windows-平台适配进行中)）：
 
-仓库里只有 Flutter 的模板脚手架（`windows/`，含 `app_icon.ico`）、`assets/icons/hax_shot.ico`
-与 `pubspec.yaml` 的 `.ico` 资源声明，以及几处平台分支（`lib/app.dart` 的 trayIconAsset、
-`single_instance_guard.dart` 的 `%LOCALAPPDATA%`、`local_image_attachment_loader.dart` 的
-`toFilePath(windows:)`）；Rust 后端（`rust/src/lib.rs` 只编 linux/macos，`Cargo.toml` 只有这
-两个 target 的依赖）、Windows 构建规则、`NativeBridge` 的 `.dll` 查找都缺，
-`flutter build windows` 不可用。历史上 `c7a65ec` 的提交信息写过“新增 Windows 支持”，与
-实际不符，以本节为准；要真正支持需另立项目，先定抓屏 API（BitBlt/PrintWindow vs DXGI）
-与多显示器/窗口时序方案。
+`flutter build windows` 能出 `hax_shot.exe`，Rust 侧是 placeholder（抓屏/剪贴板返回可读错误），
+窗口完全由 Dart 控制可见性，托盘左右键走本地 `packages/tray_manager`。仍未实现：真正的
+GDI 抓屏与目标显示器元数据、剪贴板、全局快捷键、多显示器浮层与自启动。历史上 `c7a65ec`
+的提交信息写过“新增 Windows 支持”，与当时实际不符。
 
 两个平台共同：
 
@@ -1710,3 +1706,41 @@ new 出来、`dispose()` 里 `_aiController?.dispose()`），**不走 GetX regis
 
 最要紧的一条：**保持 Mutter ScreenCast 的调用顺序，不要替换成 Screenshot Portal**
 （Portal 会播放快门声/闪光，产品不接受，见 §4）。
+
+## 18. Windows 平台适配（进行中）
+
+Windows 适配按 Phase 推进，本节记录**已经实测过的事实**，以及 3 个平台共享文件上不允许
+破坏的边界。每个 Phase 的产物与验收都在这节里追加，不另建文档。
+
+### 18.1 本机工具链（2026-09-19 实测）
+
+| 组件 | 版本 / 路径 |
+| --- | --- |
+| OS | Windows 11 `10.0.22631`（x64） |
+| Flutter | 3.44.8 stable，由 fvm 管理（仓库 `.fvmrc`）；本机命令一律 `fvm flutter ...` |
+| Dart | 3.12.2 |
+| Rust | rustc 1.97.1 / cargo 1.97.1，`C:\Users\chink\.cargo\bin\cargo.exe` 在 PATH 里 |
+| Visual Studio | VS2022 Community（`C:\Program Files\Microsoft Visual Studio\2022\Community`，含 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`） |
+| Windows SDK | 10.0.22621.0、10.0.26100.0 |
+
+实物条件：单显示器 `\\.\DISPLAY1`，2560x1440，**100% 缩放**，工作区 2560x1392（底部任务栏）。
+本机**没有副屏、也不是混合 DPI**，所以「副屏在主屏左边（负坐标）」「两块屏缩放不同」
+这两类场景本机测不了，只能标“待验”。
+
+`windows/runner/runner.exe.manifest` 已声明 `PerMonitorV2`，不需要改 DPI awareness。
+
+### 18.2 基线构建结论（Phase 0）
+
+`fvm flutter build windows --debug` 退出码 0（69.7s），产物在 `build/windows/x64/runner/Debug/`：
+
+```text
+hax_shot.exe  flutter_windows.dll
+插件 DLL：tray_manager / window_manager / hotkey_manager_windows /
+         screen_retriever_windows / super_native_extensions / desktop_drop /
+         file_selector_windows / url_launcher_windows / irondash_engine_context
+```
+
+**唯独没有 `hax_shot_native.dll`**：`windows/CMakeLists.txt` 从来没接过 cargo。
+这就是 Phase 1 要补的第一件事（见 18.3）。插件 DLL 都在，说明 Windows 侧 C++ 工具链没问题。
+
+### 18.3 Phase 1 的 Windows 构建规则（踩过的坑）：待 Phase 1 完成后补写。
