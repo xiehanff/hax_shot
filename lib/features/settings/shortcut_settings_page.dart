@@ -135,12 +135,22 @@ class _ShortcutSettingsPageState extends State<ShortcutSettingsPage> {
 
   String get _modifierHint {
     if (Platform.isMacOS) return '⌘、⌥、⌃ 或 ⇧';
-    if (Platform.isWindows) return 'Ctrl、Alt、Shift 或 Win';
+    if (Platform.isWindows) return 'Alt、Ctrl、Win 或 Shift';
     return 'Alt、Ctrl 或 Super';
   }
 
-  String get _autostartSubtitle =>
-      Platform.isMacOS ? '登录后自动显示菜单栏图标' : '登录 GNOME 后自动显示托盘图标';
+  /// 自启动开关的说明文案（§36.2）。
+  ///
+  /// Windows 只能写 HKCU Run（§32.1）；系统“启动”页里的禁用开关存在
+  /// `StartupApproved`，应用**不去改**它，所以只能提示用户去任务管理器恢复（§32.3）。
+  String get _autostartSubtitle {
+    if (Platform.isMacOS) return '登录后自动显示菜单栏图标';
+    if (Platform.isWindows) {
+      return '登录 Windows 后自动启动 HaxShot'
+          '（若系统启动项被禁用，需到任务管理器的“启动”页恢复）';
+    }
+    return '登录 GNOME 后自动显示托盘图标';
+  }
 
   String get _exampleShortcut => Platform.isMacOS ? '⌘+⇧+Z' : 'Alt+Shift+Z';
 

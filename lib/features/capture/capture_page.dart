@@ -450,7 +450,13 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     try {
       // 先弹保存对话框（用户需要看着冻结画面选目录），选完路径立刻收起浮层，
       // 后面的编码和落盘都在浮层消失之后完成。
-      final home = Platform.environment['HOME'];
+      //
+      // Windows 不猜目录（§34）：`USERPROFILE\Pictures` 可能被 OneDrive 重定向或
+      // 根本不存在，交给系统对话框自己的默认行为最可预测；HOME 缺失时同样不强猜。
+      final String? home = Platform.environment['HOME'];
+      final String? initialDirectory = Platform.isWindows
+          ? null
+          : (home == null ? null : '$home/Pictures');
       final location = await getSaveLocation(
         acceptedTypeGroups: const [
           XTypeGroup(
@@ -459,7 +465,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
             mimeTypes: ['image/png'],
           ),
         ],
-        initialDirectory: home == null ? null : '$home/Pictures',
+        initialDirectory: initialDirectory,
         suggestedName: 'hax-shot-${_timestamp()}.png',
         confirmButtonText: '保存',
       );

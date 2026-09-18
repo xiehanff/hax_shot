@@ -31,6 +31,11 @@ class FirstRunGuide extends StatelessWidget {
   Widget build(BuildContext context) {
     final trayLocation = Platform.isMacOS ? '菜单栏右侧' : '系统托盘';
     final shortcut = shortcutLabel.isEmpty ? '未设置' : shortcutLabel;
+    // 只有 macOS 需要屏幕录制授权（§36.1）：Windows / Linux 提“权限”只会让人
+    // 去找一个不存在的开关。
+    final shortcutDetail = Platform.isMacOS
+        ? '按下即可框选屏幕区域。首次截图时 macOS 会要求屏幕录制权限。'
+        : '按下快捷键即可开始截图。';
 
     return RoundedWindow(
       child: Scaffold(
@@ -75,7 +80,7 @@ class FirstRunGuide extends StatelessWidget {
                           PanelFactRow(
                             icon: Icons.crop_free,
                             title: '截图快捷键：$shortcut',
-                            detail: '按下即可框选屏幕区域。首次截图时系统会要求授予屏幕录制权限。',
+                            detail: shortcutDetail,
                           ),
                           const PanelDivider(),
                           PanelFactRow(
