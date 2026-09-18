@@ -47,7 +47,19 @@ abstract final class DiagnosticEvent {
   static const captureLockAcquired = 'capture_lock_acquired';
   static const captureLockBusy = 'capture_lock_busy';
   static const captureStartupFailed = 'capture_startup_failed';
+
+  /// 图像已解码、可以开始交互。**不代表**窗口已经摆好：那看 [overlayReady]。
   static const captureReady = 'capture_ready';
+
+  /// 浮层真的就绪了：`becomeOverlay` 成功 + `showWindow()` + `focus()` 都完成。
+  ///
+  /// 宿主不能用 [captureReady] 推断“窗口已正确显示”（§15.3/§56.2）。
+  static const overlayReady = 'overlay_ready';
+
+  /// 进入浮层失败（带原生 code，例如 5 = TARGET_STALE）：不 fallback、不显示旧图、
+  /// 不释放捕获锁（§15.2/§17）。
+  static const overlayBecomeFailed = 'overlay_become_failed';
+
   static const captureFinished = 'capture_finished';
 
   // 目标显示器元数据（Windows，见 rust/src/windows.rs）。
@@ -75,6 +87,7 @@ abstract final class DiagnosticErrorCode {
   static const captureLockBusy = 'CAPTURE_LOCK_BUSY';
   static const captureStartupFailed = 'CAPTURE_STARTUP_FAILED';
   static const capturePermissionDenied = 'CAPTURE_PERMISSION_DENIED';
+  static const overlayBecomeFailed = 'OVERLAY_BECOME_FAILED';
 
   static const trayInitFailed = 'TRAY_INIT_FAILED';
   static const windowInitFailed = 'WINDOW_INIT_FAILED';

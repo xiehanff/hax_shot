@@ -6,6 +6,8 @@ import 'package:window_manager/window_manager.dart';
 
 import '../app/hard_exit.dart';
 import '../app/single_instance_guard.dart';
+import '../diagnostics/diagnostic_events.dart';
+import '../diagnostics/diagnostic_log.dart';
 import '../window/window_visibility.dart';
 import 'capture_overlay_window.dart';
 
@@ -17,24 +19,50 @@ class CaptureProcessLifecycle {
   CaptureProcessLifecycle({
     required this.targetDisplay,
     required this.onRelaunchError,
+    this.requestId,
   });
 
   /// 当前进程是从哪块显示器启动的，重启抓屏进程时原样带上。
   final int? targetDisplay;
 
+  /// 本次截图请求 id，只用于给浮层相关的事件补上可追的关联字段。
+  final String? requestId;
+
   /// 重启抓屏进程失败时的上报口（原来落在页面顶层的提示文案上）。
   final void Function(Object error) onRelaunchError;
+
+  final DiagnosticLogService _diag = DiagnosticLogService.instance;
 
   /// 正在关闭捕获进程（也刻意不驱动 loading UI）。
   bool _closing = false;
 
   /// 抓屏成功后启动浮层：把抓屏小窗口升格成铺满屏幕的冻结画面浮层。
   ///
-  /// 对应原来 `_capture()` 里属于「启动抓屏进程」的那段收尾；抓屏本身不在这里。
-  Future<void> showCaptureOverlay() async {
-    await CaptureOverlayWindow.instance.becomeOverlay();
+  /// 顺序固定：**becomeOverlay（只配置不显示）→ showWindow（Dart 是唯一的显示
+  /// 入口）→ focus**。becomeOverlay 抛错时向上传播，由页面走失败面板（§15.2），
+  /// 不允许在这里 catch 成 debugPrint 再继续。
+  ///
+  /// [generation] 是抓屏冻结的代际号（子进程内读 `lastCaptureTarget`），传给原生桥
+  /// 做一致性校验（§16.2）。返回值是 Windows 原生桥的摆位结果，供页面核对物理契约
+  /// （§13.5），其它平台为 null。
+  Future<CaptureOverlayPlacement?> showCaptureOverlay({int? generation}) async {
+    final placement = await CaptureOverlayWindow.instance.becomeOverlay(
+      targetDisplay: targetDisplay,
+      generation: generation,
+    );
     await showWindow();
-    await windowManager.focus();
+    try {
+      await windowManager.focus();
+    } on Object catch (error) {
+      // 拿不到焦点不影响已经摆好的浮层，但必须留下证据（不能只 debugPrint）。
+      _diag.log(
+        DiagnosticEvent.windowReadyFailed,
+        level: LogLevel.warning,
+        requestId: requestId,
+        message: '浮层聚焦失败：$error',
+      );
+    }
+    return placement;
   }
 
   /// 收起浮层，让用户不用盯着冻结画面等编码/落盘。

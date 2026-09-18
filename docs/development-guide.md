@@ -140,6 +140,20 @@ fvm flutter run -d linux -- --capture
 带“重试”的普通失败面板，而要直接 `exitProcessNow()`，由操作系统同时清掉 worker 和捕获锁；
 用户随后再次触发会得到一份全新的捕获进程。
 
+#### `capture_ready` 与 `overlay_ready` 不是一回事
+
+```text
+capture_ready   图像已解码、可以开始交互（原语义，宿主现有轮询不改）
+overlay_ready   becomeOverlay() + showWindow() + focus() 都完成，浮层真的摆好了
+```
+
+宿主**不能**用 `capture_ready` 推断“窗口已正确显示”（Windows 上 `becomeOverlay` 失败时图像
+已经有了，但浮层没摆成）。`overlay_ready` 的一条日志里同时带物理契约数据：原生
+`GetClientRect`、冻结的 rcMonitor、PNG 尺寸、Flutter 的物理/逻辑 viewport 与 dpr，
+`contract_ok=false` 时要先查窗口链路（Windows 见 [18.14](#1814-phase-3多显示器浮层与窗口所有权)），
+不要给选区加补偿边距。失败时写的是 `overlay_become_failed`（带 native code），不是
+`overlay_ready`。
+
 `linux/runner/my_application.cc` 中已经移除了旧的 `first-frame` 自动 `gtk_widget_show()`。这是故意的：如果 native first-frame 回调再次显示窗口，捕获时机就会被破坏。
 
 #### 失败态是两种，别混成一个开关
@@ -1602,9 +1616,9 @@ macOS：
 
 Windows（进行中，清单见 [18. Windows 平台适配](#18-windows-平台适配进行中)）：
 
-`flutter build windows` 能出 `hax_shot.exe`，Rust 侧是 placeholder（抓屏/剪贴板返回可读错误），
-窗口完全由 Dart 控制可见性，托盘左右键走本地 `packages/tray_manager`。仍未实现：真正的
-GDI 抓屏与目标显示器元数据、剪贴板、全局快捷键、多显示器浮层与自启动。历史上 `c7a65ec`
+`flutter build windows` 能出 `hax_shot.exe`，抓屏（GDI）、目标显示器元数据与多显示器浮层
+（`capture_window_bridge`）已经落地，窗口完全由 Dart 控制可见性，托盘左右键走本地
+`packages/tray_manager`。仍未实现：剪贴板、全局快捷键、自启动。历史上 `c7a65ec`
 的提交信息写过“新增 Windows 支持”，与当时实际不符。
 
 两个平台共同：
@@ -1723,9 +1737,22 @@ Windows 适配按 Phase 推进，本节记录**已经实测过的事实**，以�
 | Visual Studio | VS2022 Community（`C:\Program Files\Microsoft Visual Studio\2022\Community`，含 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`） |
 | Windows SDK | 10.0.22621.0、10.0.26100.0 |
 
-实物条件：单显示器 `\\.\DISPLAY1`，2560x1440，**100% 缩放**，工作区 2560x1392（底部任务栏）。
+实物条件：单显示器 `\\.\DISPLAY1`，工作区原点 (0,0)（没有左侧副屏 → 负坐标测不了）。
 本机**没有副屏、也不是混合 DPI**，所以「副屏在主屏左边（负坐标）」「两块屏缩放不同」
 这两类场景本机测不了，只能标“待验”。
+
+**分辨率必须用 PerMonitorV2 宿主量（Phase 3 更正）**：
+
+```text
+PerMonitorV2 进程（hax_shot.exe）：rcMonitor=(0,0,3840,2160)，GetDpiForMonitor=144（150% 缩放）
+非 DPI 感知宿主（Phase 2 的 dart run 脚本、默认 powershell.exe）：2560x1440 + 96 dpi（虚拟化后）
+```
+
+这两个数是同一台机器的同一个屏幕：`3840/1.5 = 2560`、`2160/1.5 = 1440`，工作区高度差
+`48` 物理像素也正好是 150% 下 32 逻辑像素的任务栏。所以 [18.13](#1813-phase-2-本机实测结论2026-09-19)
+里“2560x1440 @100%”的读数是**虚拟化视角**，不是物理分辨率。以后量显示器、量窗口 rect、
+截屏都必须用 PerMonitorV2 宿主（PowerShell 先 `SetProcessDpiAwarenessContext(-4)`），
+否则拿到的全是缩放后的坐标。
 
 `windows/runner/runner.exe.manifest` 已声明 `PerMonitorV2`，不需要改 DPI awareness。
 
@@ -2003,3 +2030,117 @@ last_capture_target() 抓屏后    ok，generation=1，display_id/rect 与抓屏
 **本机测不了、只能标“待验”**：副屏 / 多屏（含负坐标的左副屏）、混合 DPI、Windows 10、
 HDR / 受保护内容、独占全屏。多屏相关的代码路径（`source=requested` 选中副屏、
 `TARGET_STALE`）在本机无法触发。
+
+注：这份读数（2560x1440 / 96 dpi）是 **DPI 虚拟化**后的坐标，物理值是 3840x2160 / 144 dpi，
+见 18.1 的更正。
+
+### 18.14 Phase 3：多显示器浮层与窗口所有权
+
+#### 谁拥有窗口
+
+`windows/runner/capture_window_bridge.{h,cpp}` 是 overlay 态窗口属性的**唯一 owner**
+（channel 名沿用 `hax_shot/capture_window`）。所有权按状态切：
+
+| 状态 | style / rect / topmost | 非客户区消息 | 尺寸、层级、可缩放 |
+| --- | --- | --- | --- |
+| 普通面板（引导页 / 失败面板 / AI 面板 / 设置页） | `window_manager` | 插件（hidden titlebar 分支） | `window_manager` |
+| overlay（冻结画面浮层） | `CaptureWindowBridge` | bridge（只拦 `WM_NCCALCSIZE`） | bridge |
+
+- `becomeOverlay` **只配置、不显示**：切 `WS_POPUP`（保留 `WS_CLIPCHILDREN/WS_CLIPSIBLINGS`）、
+  按**冻结元数据**的 rcMonitor `SetWindowPos(HWND_TOPMOST, …)`，不带 `SWP_SHOWWINDOW`；
+  窗口保持隐藏，由 Dart 的 `showWindow()` 唯一显示。窗口当前可见时先 `SW_HIDE` 再配置；
+- `exitOverlay` 幂等：不在 overlay 态直接成功；恢复顺序 style/exStyle → rect → topmost
+  （一次 `SetWindowPos` + `SWP_FRAMECHANGED`），然后 `GetWindowLongPtr`/`GetWindowRect`
+  回读校验，失败重试一次，仍失败就报错；
+- 摆位 rect 只来自 Rust：`hax_shot_last_capture_target()` 用 exe 目录绝对路径
+  `LoadLibraryExW` + `GetProcAddress` 动态解析。C++ 里没有 `EnumDisplayMonitors` /
+  `GetMonitorInfoW` / hash。
+
+#### 消息路由（顺序不能换）
+
+`FlutterWindow::MessageHandler`：**bridge 钩子 → `HandleTopLevelWindowProc`（Flutter + 插件）
+→ `Win32Window::MessageHandler` → bridge 的 DPI 收尾**。
+
+- bridge 必须在插件**之前**：`window_manager` 的顶层消息代理处理 `WM_NCCALCSIZE` 时会在
+  hidden titlebar 分支把客户区左右/底各缩 8 像素并 `return 0`，放到它后面就永远轮不到 bridge；
+- overlay 态的 `WM_NCCALCSIZE` 直接把 `rgrc[0]` 设成目标 rcMonitor 的屏幕坐标并 `return 0`
+  （不缩 8 像素、不加 Win10 顶部那 1 像素）；恢复快照期间这个拦截会临时关掉，
+  否则面板态拿不到插件该给的 inset；
+- `WM_DPICHANGED` 不吞：先让插件与 `Win32Window` 用 OS 建议的 rect 走完（Flutter 才会拿到
+  新 DPR），收尾时 bridge 再把窗口钉回冻结元数据的 rcMonitor。若此时冻结元数据已经过期，
+  就保持原 overlay rect、把错误码记在桥里（不撕掉浮层）——这个错误态没有 Dart 可读的出口，
+  只能看 debugger 输出，属于已知限制；
+- `WM_SIZE` 不拦，继续走 `Win32Window` 把 Flutter child 铺满客户区。
+
+#### channel 协议（Windows）
+
+```json
+// Dart → native
+{"displayId": 3229624234, "generation": 1}   // 0 = 未指定 / 不校验
+// native → Dart（成功）
+{"displayId": …, "generation": …, "clientRect": {"left":0,"top":0,"right":3840,"bottom":2160}, "dpi": 144}
+// 失败：FlutterError(code, message)，code 用 18.10 的错误码（0..7）
+```
+
+- `displayId`/`generation` 用 `TryGetLongValue()` 取：runner 带 `_HAS_EXCEPTIONS=0`，
+  `std::get<int>` 类型不匹配时不是抛异常而直接终止进程；
+- 一致性校验：Dart 带的 `displayId`（`--display` 的值）与冻结的 display_id 不一致、或
+  `generation` 对不上 → `TARGET_STALE(5)`，**不**换目标、**不**退回主屏；
+- 摆位后 bridge 自己回读断言（不满足就报错并按快照回滚）：`GetWindowRect == rcMonitor`、
+  `GetClientRect == rcMonitor 尺寸`、`ClientToScreen(0,0) == rcMonitor 原点`。
+- 桥保留同名的 `enableResizablePanel`（no-op）：Windows 的普通面板本来就带 `WS_THICKFRAME`，
+  可缩放仍由 `window_manager` 负责，退出 overlay 后 bridge 不再碰窗口。
+
+#### Dart 侧
+
+- `capture_overlay_window.dart`：`_enabled` = macOS | Windows；Windows 的 `becomeOverlay`
+  走桥并把返回值解析成 `CaptureOverlayPlacement`，失败抛 `CaptureOverlayException`
+  （带 native code），**不 fallback** 到 `setFullScreen(true)`（那会造成“抓 A 屏、浮层全屏在
+  主屏”的假成功）。macOS 的 fallback 语义与 Linux 的 `setFullScreen` 不动；
+- `capture_process_lifecycle.dart`：`becomeOverlay(targetDisplay, generation) → showWindow()
+  → focus()`（focus 失败只记日志、不阻断），返回值交给页面记契约;
+- `capture_page.dart`：`CaptureOverlayException` 进失败面板（可重试 / 可关闭），
+  并写 `overlay_become_failed`；失败不释放捕获锁（锁只在进程真的退出时释放）；
+- `lib/app.dart`：Windows 跳过 `setFullScreen(false)`（桥已经在 `exitOverlay` 里恢复过 style）；
+- `window_visibility.dart`：只有 macOS 调 `setOpacity(1)`——Windows 的 `setOpacity` 会无条件
+  给窗口加 `WS_EX_LAYERED`，浮层不能是分层窗口。
+
+#### 事件与契约数据
+
+```text
+capture_ready        图像已解码、可以交互（含义不变）
+overlay_ready        becomeOverlay + showWindow + focus 都完成；同一条日志里有
+                     client=… rcMonitor=… png=… dpi=… viewport=… logical=… dpr=…
+                     layout_scale=… contract_ok=…（false 时是 warning）
+overlay_become_failed level=error + error_code=OVERLAY_BECOME_FAILED + message 里的 native code
+```
+
+`contract_ok=false` 时先查 bridge（`GetClientRect` / `WM_NCCALCSIZE` / DPI），**不要**给选区
+加补偿边距。`capture_page` 的 `_ackRequest` 现在**无条件**写日志（只在有 `--request-id` 时
+才写请求文件），这样手动 `hax_shot.exe --capture` 也不会丢掉失败原因。
+
+#### 本机实测（单屏 3840x2160 @150%）
+
+一次性 PowerShell 脚本（Win32 P/Invoke，**不进仓库**）直接起
+`hax_shot.exe --capture --display 3229624234`：
+
+```text
+PowerShell 先 SetProcessDpiAwarenessContext(-4)，否则读到的是虚拟化坐标
+cursor_display = 3229624234；target_monitor = (0,0,3840,2160) 3840x2160 dpi=144
+overlay 可见用时 ≈ 1s
+hwnd=0x2D04CA class=FLUTTER_RUNNER_WIN32_WINDOW window=(0,0,3840,2160)
+  client=(0,0,3840,2160) clientOrigin=(0,0) style=0x96000000 exstyle=0x00000008
+  → window == client == rcMonitor（偏移 0,0、尺寸差 0,0）；WS_POPUP + WS_EX_TOPMOST；
+    没有 WS_EX_LAYERED；没有 1280x720 默认窗口
+进程内日志 overlay_ready：client=(0,0,3840,2160) rcMonitor=(0,0,3840,2160) png=3840x2160
+  dpi=144 viewport=3840x2160 logical=2560x1440 dpr=1.5 layout_scale=0.6667 contract_ok=true
+结束后：可见窗口 0、临时 PNG 0、捕获锁 free、交接 ready 0
+```
+
+失败路径也自动验过一次：`--display 123456789`（合法 u32、但不在拓扑里 → Rust 按规则退回
+光标屏）→ Dart 侧 display_id 对不上 → 桥返回 `TARGET_STALE(5)` → 出现 560x480 的小窗口
+失败面板（不是全屏、不是 topmost、不是 `WS_POPUP`），日志写
+`overlay_become_failed` / `OVERLAY_BECOME_FAILED` / `native code=5`。
+
+本机测不了（**待验**）：副屏（含左侧负坐标副屏）、混合 DPI、跨屏摆浮层、拔屏触发的
+`TARGET_STALE`、`WM_DPICHANGED` 的真实触发，以及 AI 面板路径里的 `exitOverlay` 恢复。

@@ -13,6 +13,7 @@ import '../diagnostics/diagnostic_log.dart';
 import '../window/panel_chrome.dart';
 import '../window/rounded_window.dart';
 import 'annotation.dart';
+import 'capture_overlay_window.dart';
 import 'capture_permission_flow.dart';
 import 'capture_permission_guide.dart';
 import 'capture_process_lifecycle.dart';
@@ -73,6 +74,7 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _process = CaptureProcessLifecycle(
       targetDisplay: widget.targetDisplay,
+      requestId: widget.requestId,
       onRelaunchError: (error) => _flow.showMessage('重启抓屏进程失败：$error'),
     );
     _flow = CapturePermissionFlow(
@@ -149,14 +151,23 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
       setState(() => _image = frame.image);
       _flow.markCaptureSucceeded();
       // 先记冻结的目标（Windows），再回 ACK：日志里能直接对上“抓的是哪块屏”。
-      _logCaptureTarget(captureWatch.elapsedMilliseconds);
+      final target = _logCaptureTarget(captureWatch.elapsedMilliseconds);
       // 抓到画面：宿主靠这条 ACK 区分「子进程起来了但抓屏失败」和「真的可以选了」。
       _ackRequest(
         CaptureRequestChannel.stateCaptureReady,
         DiagnosticEvent.captureReady,
       );
-      // 抓到画面之后才把窗口升格成铺满屏幕的浮层。
-      await _process.showCaptureOverlay();
+      // 抓到画面之后才把窗口升格成铺满屏幕的浮层。Windows 的原生桥读的是同一份
+      // 冻结元数据；失败抛 CaptureOverlayException，由下面的分支走失败面板。
+      final placement = await _process.showCaptureOverlay(
+        generation: target?.generation,
+      );
+      if (!mounted) return;
+      // 等一帧再读 viewport：窗口已经在 becomeOverlay 里改成目标尺寸，但 Flutter
+      // 侧的视图尺寸要等这一帧才会更新到新值。
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      _logOverlayReady(placement, target);
     } on TimeoutException catch (error) {
       // Future.timeout 不能可靠取消正在执行 FFI 的 worker isolate。直接硬退出整个
       // 短生命周期捕获进程，才能保证原生调用、临时文件和捕获锁都不会继续残留。
@@ -179,6 +190,19 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
         message: error.message,
       );
       await _flow.showGuide(message: error.message);
+    } on CaptureOverlayException catch (error) {
+      // 浮层失败是独立的失败态：不 fallback 主屏全屏、不显示旧图、不进 AI 面板，
+      // 也不释放捕获锁（锁由进程持有，只有真的退出才释放）。
+      if (!mounted) return;
+      _ackRequest(
+        CaptureRequestChannel.stateStartupFailed,
+        DiagnosticEvent.overlayBecomeFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.overlayBecomeFailed,
+        message: 'native code=${error.code} ${error.message}',
+      );
+      _flow.enterFailure(error);
+      await _flow.revealWindow();
     } on Object catch (error) {
       if (!mounted) return;
       // 其它失败也留在小窗口里说明情况，别让用户卡在全屏黑屏上。
@@ -199,12 +223,14 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   /// 只读日志用途：读元数据失败不能反过来把已经成功的抓屏变成失败，所以这里自己
   /// 兜住所有错误。摆浮层用的一定是同一份冻结数据（§8.5），不会出现“抓 A 摆 B”。
   ///
+  /// 返回值给调用方用来 1) 给 `becomeOverlay` 带 generation；2) 核对物理契约。
+  ///
   /// [elapsedMilliseconds] 是 `captureScreen()` 这个 FFI 调用的墙钟耗时（含 worker
   /// isolate 的往返）；原生侧没有日志出口，所以耗时在调用边界上量。
-  void _logCaptureTarget(int elapsedMilliseconds) {
+  CaptureTargetMonitor? _logCaptureTarget(int elapsedMilliseconds) {
     try {
       final target = NativeBridge.instance.lastCaptureTarget();
-      if (target == null) return;
+      if (target == null) return null;
       DiagnosticLogService.instance.log(
         DiagnosticEvent.captureTargetResolved,
         requestId: widget.requestId,
@@ -222,12 +248,105 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
               'display_id=${target.displayId}',
         );
       }
+      return target;
     } on Object catch (error) {
       debugPrint('读取冻结的抓屏目标失败：$error');
+      return null;
     }
   }
 
+  /// 浮层就绪 + 物理契约核对（§13.5）：原生 `GetClientRect`、冻结的 rcMonitor、
+  /// PNG 尺寸、Flutter 侧的 viewport 与 dpr 写进同一条日志。
+  ///
+  /// 对不上时的修法是查窗口链路（bridge 的 GetClientRect / WM_NCCALCSIZE / DPI），
+  /// **不是**给选区加补偿边距（§13.5/§47）。这里只记录，不改任何行为。
+  void _logOverlayReady(
+    CaptureOverlayPlacement? placement,
+    CaptureTargetMonitor? target,
+  ) {
+    final view = View.of(context);
+    // physicalSize 已经是物理像素；逻辑 viewport 要自己除 dpr。
+    final Size physical = view.physicalSize;
+    final double dpr = view.devicePixelRatio;
+    final Size logical = dpr > 0 ? physical / dpr : Size.zero;
+    // ScreenshotLayout.fromViewport 收到的是逻辑 viewport，除以 PNG 的物理宽度就是
+    // 选区的缩放系数：必须 ≈ 1 / dpr（§13.5 第三条）。
+    final image = _image;
+    final double? layoutScale = image == null || image.width == 0
+        ? null
+        : logical.width / image.width;
+    final client = placement?.clientRect;
+
+    final clientLabel = client == null
+        ? 'client=unknown'
+        : 'client=(${client.left.toInt()},${client.top.toInt()},'
+              '${client.right.toInt()},${client.bottom.toInt()})';
+    final targetLabel = target == null
+        ? 'rcMonitor=unknown'
+        : 'rcMonitor=(${target.left},${target.top},${target.right},${target.bottom})';
+    final imageLabel = image == null
+        ? 'png=unknown'
+        : 'png=${image.width}x${image.height}';
+
+    // 契约（§13.5）：GetClientRect == rcMonitor == PNG == View.physicalSize，且
+    // 选区缩放系数 ≈ 1 / dpr。非 Windows 没有原生摆位数据，不当作契约失败。
+    bool contractHolds(
+      CaptureOverlayPlacement native,
+      CaptureTargetMonitor frozen,
+      ui.Image png,
+    ) {
+      final Rect clientRect = native.clientRect;
+      final bool clientOk =
+          clientRect.width.toInt() == frozen.width &&
+          clientRect.height.toInt() == frozen.height;
+      final bool viewportOk =
+          (physical.width - frozen.width).abs() <= 1 &&
+          (physical.height - frozen.height).abs() <= 1;
+      final bool pngOk =
+          png.width == frozen.width && png.height == frozen.height;
+      final bool scaleOk =
+          layoutScale != null && (layoutScale - 1 / dpr).abs() <= 0.01;
+      return clientOk && viewportOk && pngOk && scaleOk;
+    }
+
+    final bool hasNativePlacement = placement != null && target != null;
+    final bool contractOk =
+        placement != null &&
+        target != null &&
+        image != null &&
+        contractHolds(placement, target, image);
+
+    DiagnosticLogService.instance.log(
+      DiagnosticEvent.overlayReady,
+      level: hasNativePlacement && !contractOk
+          ? LogLevel.warning
+          : LogLevel.info,
+      requestId: widget.requestId,
+      message:
+          '$clientLabel $targetLabel $imageLabel dpi=${placement?.dpi} '
+          'viewport=${physical.width.round()}x${physical.height.round()} '
+          'logical=${logical.width.round()}x${logical.height.round()} dpr=$dpr '
+          'layout_scale=${layoutScale?.toStringAsFixed(4)} '
+          'contract_ok=$contractOk',
+      extra: <String, Object?>{
+        'client_width': client?.width.round(),
+        'client_height': client?.height.round(),
+        'target_width': target?.width,
+        'target_height': target?.height,
+        'viewport_width': physical.width.round(),
+        'viewport_height': physical.height.round(),
+        'device_pixel_ratio': dpr,
+        'layout_scale': layoutScale,
+        'contract_ok': contractOk,
+      },
+    );
+  }
+
   /// 把当前阶段写回请求文件（宿主在等）并记一条日志。
+  ///
+  /// 日志**无条件**写：没有 `--request-id` 的手动启动（`hax_shot.exe --capture`）也
+  /// 必须能在诊断日志里看到失败原因与浮层的 native code（§17）；请求文件只在有
+  /// requestId 时才存在。
   void _ackRequest(
     String state,
     String event, {
@@ -236,8 +355,9 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
     String? message,
   }) {
     final requestId = widget.requestId;
-    if (requestId == null) return;
-    CaptureRequestChannel.instance.writeStateSync(requestId, state);
+    if (requestId != null) {
+      CaptureRequestChannel.instance.writeStateSync(requestId, state);
+    }
     DiagnosticLogService.instance.log(
       event,
       level: level,

@@ -158,7 +158,12 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
       // 窗口已从 `.screenSaver` 浮层退成普通面板，不再占用捕获独占权；此后用户
       // 可以再次按快捷键开启新的截图，而当前 AI 会话继续保留。
       SingleInstanceGuard.releaseCapture();
-      await windowManager.setFullScreen(false);
+      if (!Platform.isWindows) {
+        // Windows 的浮层不混用插件全屏：exitOverlay 已经把 style / rect / topmost
+        // 恢复成进入前的快照，再跑一次 setFullScreen(false) 会把桥刚恢复好的 style
+        // 再改一遍（§14.5）。macOS / Linux 维持原语义。
+        await windowManager.setFullScreen(false);
+      }
       await windowManager.setAlwaysOnTop(false);
       await windowManager.unmaximize();
 
