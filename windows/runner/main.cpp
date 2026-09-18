@@ -1,5 +1,6 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <shobjidl_core.h>
 #include <windows.h>
 
 #include "flutter_window.h"
@@ -16,6 +17,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+  // 显式 AppUserModelID（任务栏分组 / 快捷方式归属用）。iOS/macOS 的 bundle id 是
+  // com.github.xiehanff.haxShot；Windows 这边只需要进程内一致，且必须在创建任何
+  // 窗口之前设置，否则先创建的窗口不会带上它。
+  ::SetCurrentProcessExplicitAppUserModelID(L"com.github.xiehanff.HaxShot");
 
   flutter::DartProject project(L"data");
 

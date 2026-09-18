@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.github.xiehanff" "\0"
-            VALUE "FileDescription", "hax_shot" "\0"
+            VALUE "FileDescription", "HaxShot" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "hax_shot" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.github.xiehanff. All rights reserved." "\0"
             VALUE "OriginalFilename", "hax_shot.exe" "\0"
-            VALUE "ProductName", "hax_shot" "\0"
+            VALUE "ProductName", "HaxShot" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
