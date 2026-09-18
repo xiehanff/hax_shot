@@ -722,7 +722,12 @@ class _TrayHostPageState extends State<TrayHostPage>
   Future<void> _openShortcutSettings() async {
     if (!mounted) return;
     setState(() => _showShortcutSettings = true);
-    await windowManager.setSize(const Size(520, 400));
+    // 设置页是 AppBar(56) + 列表(实测约 547 逻辑像素)：三张卡片加录制按钮，
+    // 520x400 会在客户区底部把「开机自启动」卡片和按钮裁掉（Windows 上还会因为
+    // 隐藏标题栏各边内缩 8~9 像素而更明显）。页面本身是 Center + shrinkWrap 布局，
+    // 本来就按“窗口比内容高”设计，所以给足高度；改内容后请按测量方法重新量一次
+    // （见 docs/development-guide.md 的 Windows 窗口尺寸一节）。
+    await windowManager.setSize(const Size(520, 620));
     await windowManager.center();
     await showWindow();
     await windowManager.focus();
