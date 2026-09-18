@@ -1,4 +1,10 @@
+import 'dart:ffi';
 import 'dart:io';
+
+import 'package:ffi/ffi.dart';
+
+import '../diagnostics/diagnostic_events.dart';
+import '../diagnostics/diagnostic_log.dart';
 
 /// 开机自启动开关的平台接口。
 abstract interface class AutostartService {
@@ -8,9 +14,14 @@ abstract interface class AutostartService {
 }
 
 /// 当前平台的开机自启动实现。
-AutostartService get autostartService => Platform.isMacOS
-    ? MacosAutostartService.instance
-    : XdgAutostartService.instance;
+///
+/// 显式三平台选择（§26/§32）：禁止“else = Linux”，否则 Windows 会写 XDG 桌面项。
+AutostartService get autostartService {
+  if (Platform.isMacOS) return MacosAutostartService.instance;
+  if (Platform.isWindows) return WindowsAutostartService.instance;
+  if (Platform.isLinux) return XdgAutostartService.instance;
+  throw UnsupportedError('不支持的桌面平台：${Platform.operatingSystem}');
+}
 
 /// Manages the user's XDG autostart entry for the tray host.
 ///
@@ -76,6 +87,501 @@ StartupNotify=false
 ''';
   }
 }
+
+/// Windows 用当前用户 HKCU Run 值实现开机自启动（§32）。
+///
+/// - 写 `Software\Microsoft\Windows\CurrentVersion\Run` 下名为 `HaxShot` 的值，
+///   数据是**带引号**的当前 exe 绝对路径（可能含空格/中文）；
+/// - 用户级、不需要管理员，不用 Startup 文件夹与 `.lnk`；
+/// - `isEnabled()` 不是“存在同名值就算开”：必须与当前 exe 路径一致（§32.2），
+///   否则 ZIP 换目录后会谎报“已开启”而实际上启到不存在的旧路径；
+/// - 写失败 / 回读不一致一律抛错，不报成功；关掉时只删自己那个值。
+final class WindowsAutostartService implements AutostartService {
+  WindowsAutostartService({String? executablePath})
+    : _executablePath = executablePath ?? Platform.resolvedExecutable;
+
+  static final instance = WindowsAutostartService();
+
+  /// 注册表值名：只认自己这一个名字（不碰 Run 下其它项）。
+  static const String valueName = 'HaxShot';
+
+  /// HKCU 下的 Run 键路径。
+  static const String runKeyPath =
+      r'Software\Microsoft\Windows\CurrentVersion\Run';
+
+  final String _executablePath;
+
+  /// 真正写进注册表的数据：带引号的 exe 绝对路径。
+  String get _quotedExecutablePath => '"$_executablePath"';
+
+  @override
+  Future<bool> isEnabled() async {
+    final String? value = _readValue();
+    if (value == null) return false;
+    if (_pointsAtCurrentExecutable(value)) return true;
+
+    // 值在、但不是当前 exe（例如 ZIP 换了目录）：按“没启用”处理，
+    // 但日志里要说清楚，否则用户只会看到开关自己关掉而不知道为什么。
+    DiagnosticLogService.instance.log(
+      DiagnosticEvent.autostartStaleValue,
+      level: LogLevel.warning,
+      message: 'HKCU Run 的 $valueName 指向 $value，不是当前 exe $_executablePath',
+      extra: <String, Object?>{
+        'registry_value': value,
+        'executable': _executablePath,
+      },
+    );
+    return false;
+  }
+
+  @override
+  Future<void> setEnabled(bool enabled) async {
+    if (enabled) {
+      _writeValue(_quotedExecutablePath);
+
+      // 写成功不代表写对了：回读一次，不是当前 exe 就当作失败报出去（§32.2）。
+      final String? readBack = _readValue();
+      if (readBack == null || !_pointsAtCurrentExecutable(readBack)) {
+        const String message = 'HKCU Run 写入后回读不一致';
+        DiagnosticLogService.instance.log(
+          DiagnosticEvent.autostartWriteFailed,
+          level: LogLevel.error,
+          errorCode: DiagnosticErrorCode.autostartFailed,
+          message: '$message：读回 $readBack，期望 $_quotedExecutablePath',
+        );
+        throw WindowsAutostartException('$message（读回 $readBack）');
+      }
+
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.autostartWriteSuccess,
+        message: 'HKCU Run 已写入 $valueName=$readBack',
+      );
+      return;
+    }
+
+    _deleteValue();
+    DiagnosticLogService.instance.log(
+      DiagnosticEvent.autostartRemoveSuccess,
+      message: 'HKCU Run 已删除 $valueName',
+    );
+  }
+
+  /// 值数据是否就是当前 exe。
+  ///
+  /// 比较时去掉引号、忽略大小写：Windows 路径大小写不敏感，历史上/手工写进去的
+  /// 项也不一定带引号。“值与当前 exe 路径一致”这个语义不变。
+  bool _pointsAtCurrentExecutable(String value) =>
+      _normalize(value) == _normalize(_executablePath);
+
+  static String _normalize(String value) =>
+      value.replaceAll('"', '').toLowerCase();
+
+  /// 读 Run 下的 `HaxShot` 值；值或键不存在返回 null，其它错误抛异常。
+  String? _readValue() {
+    final api = _RegistryApi.instance;
+    final key = api.openKey(
+      _RegistryApi.hkeyCurrentUser,
+      runKeyPath,
+      _RegistryApi.keyQueryValue,
+    );
+    if (key == null) {
+      // 键不存在（极罕见：Run 键被删过）= 没启用，不是错误。
+      return null;
+    }
+
+    try {
+      return api.queryString(key, valueName);
+    } on WindowsAutostartException catch (error) {
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.autostartReadFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.autostartFailed,
+        message: '读取 HKCU Run 的 $valueName 失败：${error.message}',
+        extra: <String, Object?>{'lstatus': error.status},
+      );
+      rethrow;
+    } finally {
+      api.closeKey(key);
+    }
+  }
+
+  /// 写 Run 下的 `HaxShot` 值；任何非 ERROR_SUCCESS 都抛异常。
+  void _writeValue(String value) {
+    final api = _RegistryApi.instance;
+    final key = api.createKey(
+      _RegistryApi.hkeyCurrentUser,
+      runKeyPath,
+      _RegistryApi.keySetValue,
+    );
+    try {
+      api.setString(key, valueName, value);
+    } on WindowsAutostartException catch (error) {
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.autostartWriteFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.autostartFailed,
+        message: '写入 HKCU Run 的 $valueName 失败：${error.message}',
+        extra: <String, Object?>{'lstatus': error.status},
+      );
+      rethrow;
+    } finally {
+      api.closeKey(key);
+    }
+  }
+
+  /// 删 Run 下的 `HaxShot` 值；值本来就不存在也算成功（幂等）。
+  void _deleteValue() {
+    final api = _RegistryApi.instance;
+    final key = api.openKey(
+      _RegistryApi.hkeyCurrentUser,
+      runKeyPath,
+      _RegistryApi.keySetValue,
+    );
+    if (key == null) return;
+
+    try {
+      api.deleteValue(key, valueName);
+    } on WindowsAutostartException catch (error) {
+      DiagnosticLogService.instance.log(
+        DiagnosticEvent.autostartWriteFailed,
+        level: LogLevel.error,
+        errorCode: DiagnosticErrorCode.autostartFailed,
+        message: '删除 HKCU Run 的 $valueName 失败：${error.message}',
+        extra: <String, Object?>{'lstatus': error.status},
+      );
+      rethrow;
+    } finally {
+      api.closeKey(key);
+    }
+  }
+}
+
+/// Windows 注册表操作失败。
+///
+/// [status] 是注册表 API 直接返回的 LSTATUS：不再去读陈旧的 `GetLastError`（§9.7）。
+final class WindowsAutostartException implements Exception {
+  const WindowsAutostartException(this.message, {this.status});
+
+  final String message;
+  final int? status;
+
+  @override
+  String toString() => message;
+}
+
+/// advapi32.dll 的最小注册表封装（只服务开机自启动）。
+///
+/// 直接用 FFI 而不是走 `reg.exe`：注册表 API 自己就返回 LSTATUS，
+/// 失败原因（拒绝访问 / 键不存在）能原样写进日志；子进程退出码要另做映射，
+/// 反而多一层不可靠的信息。
+final class _RegistryApi {
+  _RegistryApi._(DynamicLibrary library)
+    : _regCreateKeyExW = library
+          .lookupFunction<_RegCreateKeyExWNative, _RegCreateKeyExWDart>(
+            'RegCreateKeyExW',
+          ),
+      _regOpenKeyExW = library
+          .lookupFunction<_RegOpenKeyExWNative, _RegOpenKeyExWDart>(
+            'RegOpenKeyExW',
+          ),
+      _regSetValueExW = library
+          .lookupFunction<_RegSetValueExWNative, _RegSetValueExWDart>(
+            'RegSetValueExW',
+          ),
+      _regQueryValueExW = library
+          .lookupFunction<_RegQueryValueExWNative, _RegQueryValueExWDart>(
+            'RegQueryValueExW',
+          ),
+      _regDeleteValueW = library
+          .lookupFunction<_RegDeleteValueWNative, _RegDeleteValueWDart>(
+            'RegDeleteValueW',
+          ),
+      _regCloseKey = library
+          .lookupFunction<_RegCloseKeyNative, _RegCloseKeyDart>('RegCloseKey');
+
+  /// 只有真的走 Windows 分支时才会加载 advapi32（macOS/Linux 进不来）。
+  static _RegistryApi? _instance;
+
+  static _RegistryApi get instance =>
+      _instance ??= _RegistryApi._(DynamicLibrary.open('advapi32.dll'));
+
+  /// `HKEY_CURRENT_USER`：winreg.h 里是 `((HKEY)(ULONG_PTR)((LONG)0x80000001))`，
+  /// 64 位进程里必须按**符号扩展**后的值传（0xFFFFFFFF80000001 = -2147483647），
+  /// 否则系统不认这个预定义句柄。
+  static const int hkeyCurrentUser = 0xFFFFFFFF80000001;
+
+  /// `KEY_QUERY_VALUE` / `KEY_SET_VALUE`：够读/写 `HaxShot` 一个值就行。
+  static const int keyQueryValue = 0x0001;
+  static const int keySetValue = 0x0002;
+
+  static const int errorSuccess = 0;
+  static const int errorFileNotFound = 2;
+  static const int errorAccessDenied = 5;
+  static const int errorMoreData = 234;
+
+  /// 值的类型：`REG_SZ`。
+  static const int regSz = 1;
+
+  final _RegCreateKeyExWDart _regCreateKeyExW;
+  final _RegOpenKeyExWDart _regOpenKeyExW;
+  final _RegSetValueExWDart _regSetValueExW;
+  final _RegQueryValueExWDart _regQueryValueExW;
+  final _RegDeleteValueWDart _regDeleteValueW;
+  final _RegCloseKeyDart _regCloseKey;
+
+  /// 打开已存在的键；键不存在返回 null，其它 LSTATUS 抛异常。
+  Pointer<Void>? openKey(int root, String subKey, int access) {
+    final Pointer<Utf16> path = subKey.toNativeUtf16();
+    final Pointer<IntPtr> handle = calloc<IntPtr>();
+    try {
+      final int status = _regOpenKeyExW(root, path, 0, access, handle);
+      if (status == errorSuccess) {
+        return Pointer<Void>.fromAddress(handle.value);
+      }
+      if (status == errorFileNotFound) {
+        return null;
+      }
+      throw WindowsAutostartException(
+        'RegOpenKeyExW(HKCU\\$subKey) 失败：${_describeLstatus(status)}',
+        status: status,
+      );
+    } finally {
+      calloc.free(handle);
+      malloc.free(path);
+    }
+  }
+
+  /// 打开/创建键（`Run` 键正常情况下已存在，但不存在时也不要报错）。
+  Pointer<Void> createKey(int root, String subKey, int access) {
+    final Pointer<Utf16> path = subKey.toNativeUtf16();
+    final Pointer<Utf16> className = ''.toNativeUtf16();
+    final Pointer<IntPtr> handle = calloc<IntPtr>();
+    final Pointer<Uint32> disposition = calloc<Uint32>();
+    try {
+      final int status = _regCreateKeyExW(
+        root,
+        path,
+        0,
+        className,
+        0,
+        access | keyQueryValue,
+        nullptr,
+        handle,
+        disposition,
+      );
+      if (status != errorSuccess) {
+        throw WindowsAutostartException(
+          'RegCreateKeyExW(HKCU\\$subKey) 失败：${_describeLstatus(status)}',
+          status: status,
+        );
+      }
+      return Pointer<Void>.fromAddress(handle.value);
+    } finally {
+      calloc.free(disposition);
+      calloc.free(handle);
+      malloc.free(className);
+      malloc.free(path);
+    }
+  }
+
+  /// 写一个 `REG_SZ` 值（UTF-16 + 结尾 NUL）。
+  void setString(Pointer<Void> key, String name, String value) {
+    final Pointer<Utf16> wideName = name.toNativeUtf16();
+    final Pointer<Utf16> wideValue = value.toNativeUtf16();
+    // REG_SZ 的字节数包含结尾的 NUL。
+    final int byteLength = (value.length + 1) * 2;
+    try {
+      final int status = _regSetValueExW(
+        key.address,
+        wideName,
+        0,
+        regSz,
+        wideValue.cast<Uint8>(),
+        byteLength,
+      );
+      if (status != errorSuccess) {
+        throw WindowsAutostartException(
+          'RegSetValueExW($name) 失败：${_describeLstatus(status)}',
+          status: status,
+        );
+      }
+    } finally {
+      malloc.free(wideValue);
+      malloc.free(wideName);
+    }
+  }
+
+  /// 读一个 `REG_SZ` 值；值不存在返回 null。
+  String? queryString(Pointer<Void> key, String name) {
+    final Pointer<Utf16> wideName = name.toNativeUtf16();
+    final Pointer<Uint32> type = calloc<Uint32>();
+    final Pointer<Uint32> size = calloc<Uint32>();
+    try {
+      // 第一次只问长度与类型（lpData = NULL）。
+      int status = _regQueryValueExW(
+        key.address,
+        wideName,
+        nullptr,
+        type,
+        nullptr,
+        size,
+      );
+      if (status == errorFileNotFound) return null;
+      if (status != errorSuccess) {
+        throw WindowsAutostartException(
+          'RegQueryValueExW($name) 取长度失败：${_describeLstatus(status)}',
+          status: status,
+        );
+      }
+      if (type.value != regSz) {
+        throw WindowsAutostartException(
+          'RegQueryValueExW($name) 的类型是 ${type.value}，不是 REG_SZ',
+        );
+      }
+
+      final int bytes = size.value;
+      if (bytes == 0) return '';
+      final Pointer<Uint8> buffer = calloc<Uint8>(bytes);
+      try {
+        status = _regQueryValueExW(
+          key.address,
+          wideName,
+          nullptr,
+          type,
+          buffer,
+          size,
+        );
+        if (status != errorSuccess) {
+          throw WindowsAutostartException(
+            'RegQueryValueExW($name) 读数据失败：${_describeLstatus(status)}',
+            status: status,
+          );
+        }
+        return buffer.cast<Utf16>().toDartString();
+      } finally {
+        calloc.free(buffer);
+      }
+    } finally {
+      calloc.free(size);
+      calloc.free(type);
+      malloc.free(wideName);
+    }
+  }
+
+  /// 删一个值；值本来就不存在也算成功。
+  void deleteValue(Pointer<Void> key, String name) {
+    final Pointer<Utf16> wideName = name.toNativeUtf16();
+    try {
+      final int status = _regDeleteValueW(key.address, wideName);
+      if (status == errorSuccess || status == errorFileNotFound) return;
+      throw WindowsAutostartException(
+        'RegDeleteValueW($name) 失败：${_describeLstatus(status)}',
+        status: status,
+      );
+    } finally {
+      malloc.free(wideName);
+    }
+  }
+
+  /// 关掉键；失败只影响后续操作，这里不抛（调用方的主错误更重要）。
+  void closeKey(Pointer<Void> key) {
+    _regCloseKey(key.address);
+  }
+
+  /// LSTATUS → 可读文案；只列已知的几个，其余直写数字。
+  static String _describeLstatus(int status) => switch (status) {
+    errorAccessDenied => 'LSTATUS 5（拒绝访问）',
+    errorMoreData => 'LSTATUS 234（缓冲区不足）',
+    _ => 'LSTATUS $status',
+  };
+}
+
+typedef _RegCreateKeyExWNative =
+    Int32 Function(
+      IntPtr hKey,
+      Pointer<Utf16> subKey,
+      Uint32 reserved,
+      Pointer<Utf16> className,
+      Uint32 options,
+      Uint32 access,
+      Pointer<Void> securityAttributes,
+      Pointer<IntPtr> result,
+      Pointer<Uint32> disposition,
+    );
+typedef _RegCreateKeyExWDart =
+    int Function(
+      int hKey,
+      Pointer<Utf16> subKey,
+      int reserved,
+      Pointer<Utf16> className,
+      int options,
+      int access,
+      Pointer<Void> securityAttributes,
+      Pointer<IntPtr> result,
+      Pointer<Uint32> disposition,
+    );
+
+typedef _RegOpenKeyExWNative =
+    Int32 Function(
+      IntPtr hKey,
+      Pointer<Utf16> subKey,
+      Uint32 options,
+      Uint32 access,
+      Pointer<IntPtr> result,
+    );
+typedef _RegOpenKeyExWDart =
+    int Function(
+      int hKey,
+      Pointer<Utf16> subKey,
+      int options,
+      int access,
+      Pointer<IntPtr> result,
+    );
+
+typedef _RegSetValueExWNative =
+    Int32 Function(
+      IntPtr hKey,
+      Pointer<Utf16> valueName,
+      Uint32 reserved,
+      Uint32 type,
+      Pointer<Uint8> data,
+      Uint32 dataLength,
+    );
+typedef _RegSetValueExWDart =
+    int Function(
+      int hKey,
+      Pointer<Utf16> valueName,
+      int reserved,
+      int type,
+      Pointer<Uint8> data,
+      int dataLength,
+    );
+
+typedef _RegQueryValueExWNative =
+    Int32 Function(
+      IntPtr hKey,
+      Pointer<Utf16> valueName,
+      Pointer<Uint32> reserved,
+      Pointer<Uint32> type,
+      Pointer<Uint8> data,
+      Pointer<Uint32> dataLength,
+    );
+typedef _RegQueryValueExWDart =
+    int Function(
+      int hKey,
+      Pointer<Utf16> valueName,
+      Pointer<Uint32> reserved,
+      Pointer<Uint32> type,
+      Pointer<Uint8> data,
+      Pointer<Uint32> dataLength,
+    );
+
+typedef _RegDeleteValueWNative =
+    Int32 Function(IntPtr hKey, Pointer<Utf16> valueName);
+typedef _RegDeleteValueWDart = int Function(int hKey, Pointer<Utf16> valueName);
+
+typedef _RegCloseKeyNative = Int32 Function(IntPtr hKey);
+typedef _RegCloseKeyDart = int Function(int hKey);
 
 /// macOS 使用用户级 LaunchAgent 实现开机自启动。
 ///
