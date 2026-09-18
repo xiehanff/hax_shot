@@ -2363,3 +2363,23 @@ Get-Content $log -Encoding UTF8 |
 - `%LOCALAPPDATA%` 缺失时日志 / 锁 / ACK 三处都会退到 `HOME`/当前目录，非标准环境会带出
   工作目录依赖（`single_instance_guard.dart`、`capture_request_channel.dart`、
   `diagnostic_log.dart` 一致）。
+
+### 18.18 托盘图标“看不见”不是没注册（Windows 11 溢出菜单）
+
+判断“图标真的注册上了”不能只看 `tray_init_success`：那只是插件调用没有抛异常。
+真正的判据是原生 `Shell_NotifyIconGetRect` **返回非 0**——图标在托盘区域里有一个 rect。
+
+本机实测（Win11 22631、单屏 3840x2160，现象是用户报“托盘没有图标、点不到菜单”）：
+
+```text
+Shell_NotifyIconGetRect → rect=(3390,2088)-(3438,2160)   ← 图标已注册，在屏幕右下角
+HKCU\Control Panel\NotifyIconSettings 里有该 exe 的记录，IsPromoted 为空（未被提升）
+对比截图：应用未运行时任务栏没有 `^`，应用运行中 `^` 出现（图标就在它内部）
+```
+
+结论：Windows 11 默认把新程序的图标收进“显示隐藏的图标”溢出菜单。**程序无法自行把图标
+提升到任务栏**（系统不提供这种 API），只能由用户点 `^` 后把图标拖到任务栏固定。所以只在
+README 与首次启动欢迎页各给一句提示，不要再往代码里加“自动弹出/自动提升”之类的尝试。
+
+看日志时注意：日志是 UTF-8，Windows PowerShell 读取要带 `-Encoding UTF8`（命令见 18.17），
+否则中文 `message` 字段会显示成乱码。

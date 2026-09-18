@@ -36,6 +36,11 @@ class FirstRunGuide extends StatelessWidget {
     final shortcutDetail = Platform.isMacOS
         ? '按下即可框选屏幕区域。首次截图时 macOS 会要求屏幕录制权限。'
         : '按下快捷键即可开始截图。';
+    // Windows 11 默认把新程序的托盘图标收进任务栏 `^` 的溢出菜单，而程序没有 API 能把
+    // 自己提升出来（只能用户拖出来固定），所以这一行多一句提示。详见 development-guide 18.18。
+    final trayDetail = Platform.isWindows
+        ? '点它可以看到“立即截屏 / 设置 / 退出”。看不到图标时，点任务栏的 ^ 把它拖出来固定。'
+        : '点它可以看到“立即截屏 / 设置 / 退出”。';
 
     return RoundedWindow(
       child: Scaffold(
@@ -86,7 +91,7 @@ class FirstRunGuide extends StatelessWidget {
                           PanelFactRow(
                             icon: Icons.menu_open,
                             title: '$trayLocation的图标',
-                            detail: '点它可以看到“立即截屏 / 设置 / 退出”。',
+                            detail: trayDetail,
                           ),
                         ],
                       ),
