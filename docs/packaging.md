@@ -506,8 +506,11 @@ setup.exe 和 ZIP 里的 exe / dll 都没有代码签名，**首次运行 Window
   打 ZIP + 安装包并上传，可以先验这条链路）；
 - Inno Setup 在 runner 上装的是 choco 的 `innosetup` 包（比 winget 省事：不需要确认、不弹
   交互，runner 本身就是管理员）。脚本会按标准安装目录 / PATH 自己找到 `ISCC.exe`；
-- **ZIP 这一路还没有被真实跑过**（本地验过 `package_windows_zip.ps1` 本身；tag 前的干跑还没
-  执行）；安装包这一路本机跑通了完整闭环（见第 2 节的实际输出），但同样没跑过 CI。
+- **Windows 这一路在 CI 上已实跑通过**：干跑 `35446553623`（只产 artifact，`Publish GitHub Release: skipped`）
+  与正式发布 `35446986811`（tag `v1.6.0`）都成功，Windows job 真实打出了 ZIP 与安装包。
+  首次跑通前踩到的坑：Windows 适配把欢迎页文案改成平台分支后，`test/first_run_guide_test.dart`
+  还在断言旧句子，`verify.yml` 的 Linux / macOS 两个 job 各挂 1 个测试——**改了面向用户的文案就要
+  顺手看有没有测试在断言它**。
 
 ### 8. 干净机器验证（发布前必须做一次）
 
@@ -643,9 +646,8 @@ git push origin v1.6.0
 
 每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
 
-> `windows` 这一路（构建 → ZIP → 安装包 → 上传）的配置已经就位，但还没有真实跑过一次：首次
-> tag 发布前先按上面的「干跑（不发布）」手动跑一遍。两个产物的内容清单、CRT 策略与安装行为见
-> [Windows：安装包与 ZIP 包](#windows安装包与-zip-包)。
+> `windows` 这一路（构建 → ZIP → 安装包 → 上传）已在 tag `v1.6.0` 上真实跑通（run `35446986811`）。
+> 两个产物的内容清单、CRT 策略与安装行为见 [Windows：安装包与 ZIP 包](#windows安装包与-zip-包)。
 
 Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
 （Linux、macOS 与 Windows 三个 job），tag 应该指向已经过检查的 commit。

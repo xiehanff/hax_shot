@@ -1594,7 +1594,7 @@ version: 1.4.8+1  →  git push origin v1.4.8
 Windows x64 ZIP、Debian/Ubuntu DEB 和 Fedora RPM；四个平台 job 全部成功后才汇总上传到对应的
 GitHub Release（`release.needs` 里带着 `windows`，不存在“Windows 产物还没好就把 Release 发
 出去”的窗口期）。不要为普通开发 commit 创建 `v*` tag；改打包链路要先 `gh workflow run
-release.yml` 干跑——Windows 这一路**还没有真实跑过一次**，首次 tag 发布前尤其需要。macOS
+release.yml` 干跑（Windows 这一路已于 v1.6.0 跑通：干跑 `35446553623`、正式发布 `35446986811`）。macOS
 签名策略是“要么签+公证，要么叫 `-unsigned` 并在 Release 正文加警告”，证书和凭据 secret 见 [`packaging.md` 的发布一节](./packaging.md#发布tag版本约定与ci)。
 
 ## 14. 已知限制和未完成项
