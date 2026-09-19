@@ -266,7 +266,7 @@ jobs:
           retention-days: 30
 
   windows:
-    name: Windows (ZIP)
+    name: Windows (ZIP + installer)
     needs: preflight
     # Runner 是 windows-latest（x64）；Windows 版只发 x64，与 packaging.md 的产物命名一致。
     runs-on: windows-latest
@@ -312,25 +312,46 @@ jobs:
           pwsh -NoProfile -File scripts/package_windows_zip.ps1
           if ($LASTEXITCODE -ne 0) { throw 'package_windows_zip.ps1 failed' }
 
-      # ZIP 名里的版本只来自 pubspec：这里按同一份 pubspec 算出期望文件名再核对一次，
+      # runner 上没有 Inno Setup，先装一个（choco 比 winget 省事：不需要确认、不弹交互，
+      # runner 本身就是管理员）。脚本会自己按标准安装目录 / PATH 找到 ISCC.exe。
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'choco install innosetup failed' }
+
+      # 安装包复用 ZIP 那一步已经构建好的同一个 bundle（-Bundle 跳过 flutter build，
+      # 不重复构建），保证 ZIP 和 setup.exe 出自同一份产物。这个脚本自己的门禁：
+      # 补 app-local CRT、bundle 必需项、ISCC 退出码、产物存在，任何一项不满足都 throw。
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/build_windows_installer.ps1 -Bundle build/windows/x64/runner/Release
+          if ($LASTEXITCODE -ne 0) { throw 'build_windows_installer.ps1 failed' }
+
+      # ZIP / 安装包名里的版本只来自 pubspec：这里按同一份 pubspec 算出期望文件名再核对一次，
       # 保证 artifact 和 tag 校验用的是同一个版本号（不硬编码版本）。
-      - name: Verify Windows ZIP
+      - name: Verify Windows packages
         shell: pwsh
         run: |
           $match = Select-String -Path pubspec.yaml -Pattern '^version:\s*(.+)$' |
             Select-Object -First 1
           if (-not $match) { throw 'cannot read version from pubspec.yaml' }
           $version = $match.Matches.Groups[1].Value.Trim().Split('+')[0]
-          $zip = "build/windows/HaxShot-$version-windows-x64.zip"
-          if (-not (Test-Path $zip)) { throw "expected ZIP not found: $zip" }
-          $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
-          Write-Host "ZIP: $zip ($size MB)"
+          foreach ($name in @("HaxShot-$version-windows-x64.zip", "HaxShot-$version-windows-x64-setup.exe")) {
+            $path = "build/windows/$name"
+            if (-not (Test-Path $path)) { throw "expected artifact not found: $path" }
+            $size = [math]::Round((Get-Item $path).Length / 1MB, 1)
+            Write-Host "$name ($size MB)"
+          }
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: hax-shot-windows-${{ github.ref_name }}
-          path: build/windows/HaxShot-*-windows-x64.zip
+          path: |
+            build/windows/HaxShot-*-windows-x64.zip
+            build/windows/HaxShot-*-windows-x64-setup.exe
           if-no-files-found: error
           retention-days: 30
 
