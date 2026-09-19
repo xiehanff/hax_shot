@@ -1,14 +1,15 @@
 # 打包与分发
 
 一份文档覆盖四件事：**Linux 包（DEB/RPM）**、**macOS 包（DMG + 签名/公证）**、
-**Windows ZIP**、**CI 发布流程**。改打包链路前先看这里，不要新建文档。
+**Windows 包（Setup EXE + ZIP）**、**CI 发布流程**。改打包链路前先看这里，不要新建文档。
 
 产物命名（三平台一起看，tag 必须和 `pubspec.yaml` 对得上）：
 
 ```text
 pubspec 1.5.0+1  →  tag v1.5.0
   macOS   HaxShot-1.5.0-arm64.dmg（没签名/公证时必须叫 HaxShot-1.5.0-arm64-unsigned.dmg）
-  Windows HaxShot-1.5.0-windows-x64.zip
+  Windows HaxShot-1.5.0-windows-x64-setup.exe
+          HaxShot-1.5.0-windows-x64.zip
   DEB     hax-shot_1.5.0+1_amd64.deb
   RPM     hax-shot-1.5.0-1.x86_64.rpm
 ```
@@ -344,41 +345,114 @@ Gatekeeper 接受 app（spctl）
 DMG 已公证并 stapled
 ```
 
-## Windows：ZIP 包
+## Windows：安装包与 ZIP 包
 
-Windows 只发 ZIP（解压即用）：**没有安装器**（Setup EXE / MSIX 都不在计划内），也**不签名**，
-产物名 `HaxShot-<版本>-windows-x64.zip`（版本取 `pubspec.yaml` 里 `+` 前的那段）。
+Windows 发两个产物，都**不签名**（SmartScreen 提示见第 6 节），版本都取 `pubspec.yaml` 里
+`+` 前的那段：
 
-### 1. 本地打包
-
-前提：已经跑过 `flutter build windows --release`（脚本**只打包，不替你构建**），并且装了 VS 的
-「使用 C++ 的桌面开发」工作负载（要从 `VC\Redist` 取 VC 运行库）：
-
-```powershell
-flutter build windows --release
-pwsh scripts/package_windows_zip.ps1
+```text
+HaxShot-<版本>-windows-x64-setup.exe   ← Inno Setup 安装包（推荐：双击安装，用快捷方式启动）
+HaxShot-<版本>-windows-x64.zip         ← 解压即用（没有安装器，适合便携 / 自测）
 ```
 
-脚本按顺序做五件事（对应计划 §51–§52）：
+两者的内容一样：同一份 Flutter Release bundle + app-local VC 运行库，区别只在怎么落到磁盘上。
+安装包的设计写在 `packaging/hax_shot.iss`（`AppId` 是写死的 GUID、每用户安装、不弹 UAC）。
 
-1. 拷 app-local VC 运行库：优先用 `$env:VCToolsRedistDir`，否则用 vswhere 找 VS 安装目录下的
+### 1. 一条命令构建
+
+前提：
+
+- VS 的「使用 C++ 的桌面开发」工作负载（要从 `VC\Redist` 取 VC 运行库）；
+- Inno Setup 6.3+（`x64compatible` 要 6.3，托盘程序的 `CloseApplications=force` 要 5.5.4+）：
+  `winget install JRSoftware.InnoSetup` 或 `choco install innosetup`。
+
+**不需要**自己先跑 `flutter build`：不给 `-Bundle` 时脚本会自己构建（本机有 `fvm` 就用
+`fvm flutter`，CI 里没有 fvm 就用 `flutter`，与 `build_macos_dmg.sh` 的约定一致）。
+
+```powershell
+pwsh scripts/build_windows_installer.ps1     # 构建 bundle + 编译安装包（默认路径）
+pwsh scripts/package_windows_zip.ps1         # 还要 ZIP 就跑这个（它只打包，不构建）
+```
+
+产物：
+
+```text
+build\windows\HaxShot-<版本>-windows-x64-setup.exe
+build\windows\HaxShot-<版本>-windows-x64.zip
+```
+
+**改了版本号怎么办**：只要改 `pubspec.yaml` 的 `version:`，再把上面两条命令各跑一遍。版本号与
+文件名都由脚本从 pubspec 推出来，`.iss` 和脚本里都没有硬编码版本（版本对不上时
+`verify_windows_installer.ps1` 和 CI 都会直接失败）。
+
+只想重新编译安装包、不重新构建 bundle（CI 就是这么用的，保证安装包和 ZIP 出自同一份产物）：
+
+```powershell
+pwsh scripts/build_windows_installer.ps1 -Bundle build\windows\x64\runner\Release
+```
+
+脚本按顺序做五件事；必需文件清单 / 插件盘点 / CRT 定位都在 `scripts\windows_bundle.ps1`，
+**ZIP 与安装包共用同一份，不要在任何一边另抄一份**：
+
+1. `flutter build windows --release`（给了 `-Bundle` 就跳过）；
+2. 拷 app-local VC 运行库：优先用 `$env:VCToolsRedistDir`，否则用 vswhere 找 VS 安装目录下的
    `VC\Redist\MSVC\<工具集>\x64\Microsoft.VC*.CRT`，把 `msvcp140.dll` / `vcruntime140.dll` /
    `vcruntime140_1.dll` 三个 x64 文件拷进 Release 目录；
-2. 校验必需项（exe / Rust DLL / flutter_windows.dll / `data\app.so` / `data\icudtl.dat` /
-   `data\flutter_assets` / 三个 CRT），**缺任何一个直接 throw**——`Test-Path` 打印 False 不会
-   让 CI 失败，所以不能只检查不抛；
-3. 盘点插件 DLL：少于 5 个就 throw（防“只打了个 exe”），并要求 `data\flutter_assets` 非空；
-4. `Compress-Archive` 打包到 `build\windows\HaxShot-<版本>-windows-x64.zip`；ZIP 里是 Release
-   目录的**内容**，解压后第一层直接是 `hax_shot.exe`，不套一层目录；
-5. 复查 ZIP 根下确实有 `hax_shot.exe` / `hax_shot_native.dll`。
+3. 校验必需项（exe / Rust DLL / flutter_windows.dll / `data\app.so` / `data\icudtl.dat` /
+   `data\flutter_assets` / 三个 CRT），并盘点插件 DLL（少于 5 个 throw）——`Test-Path` 打印
+   False 不会让 CI 失败，所以每项缺失都真的抛异常；
+4. 编译安装包：`ISCC.exe /DAppVersion=<版本> /DSourceDir=<bundle> /DOutputDir=<输出目录>
+   packaging\hax_shot.iss`；
+5. 复查产物存在并打印路径与大小（ISCC 退出码非 0、或产物不存在，都 throw）。
 
-`-SkipCrt` 只是“本地想看 ZIP 里有什么”的调试开关，CI 与发布禁止使用（跳过之后 ZIP 在没装
-VC 运行库的机器上起不来）。
+`-SkipCrt` 只是“本地想看包里有什么”的调试开关，CI 与发布禁止使用（跳过之后包在没装 VC 运行库
+的机器上起不来）。
 
-### 2. ZIP 内容清单
+### 2. 一条命令验证（安装包闭环）
+
+```powershell
+pwsh scripts/verify_windows_installer.ps1
+```
+
+它做的是真的，不是查文件名：静默安装到 `%TEMP%\hax_shot_verify_<随机>\install` → 校验安装目录
+里的必需文件 / 插件 DLL / 三个 CRT → 启动装好的 `hax_shot.exe`，等到**这个 pid** 写出的
+`tray_init_success` → 结束进程 → 手动写上 `HKCU\...\Run\HaxShot` → 静默卸载 → 断言安装目录、
+开始菜单快捷方式、Run 值、卸载项都没了 → 删掉临时目录、把验证前用户自己的 Run 值放回去。
+
+- 通过打一行 `INSTALLER VERIFY: PASS`（可 grep）；失败打
+  `INSTALLER VERIFY: FAIL【哪一步】：原因`，退出码 1；
+- 它**不会重新编译**：`-Installer <路径>` 可以验跨机器传过来的那个 setup.exe；
+- 验证期间会短暂启动一次装好的程序（托盘会出现图标，日志会多几行）；结束时会把它关掉；
+- 本机已经装过一份 HaxShot 时脚本直接拒绝：同一个 `AppId` 再装一次会把那份的卸载信息指到临时
+  目录，跑完变成“正主卸不掉”。先卸载再验证；
+- 为什么是独立脚本而不是 `build_windows_installer.ps1 -Verify`：验证要能针对**已经存在**的
+  setup.exe 跑（CI 产物、别人给的包），不能被“顺便重新编译一遍”盖掉；而且装一遍卸一遍会动本机
+  状态，不该藏在默认构建路径里。
+
+### 3. 安装包装了什么、装到哪
+
+- **每用户安装，不弹 UAC**：`PrivilegesRequired=lowest`，默认装到
+  `%LOCALAPPDATA%\Programs\HaxShot`（向导里可以改）。托盘程序不写 HKLM、不上服务，
+  装进 Program Files 只会白白多一次提权；
+- 内容就是整个 Release bundle（`hax_shot.exe`、Rust 与插件 DLL、`data\**`）+ 三个 VC 运行库；
+- 开始菜单快捷方式必有；桌面快捷方式是向导里的**可选任务，默认不勾**；
+- 向导最后一页可以勾“运行 HaxShot”直接启动；静默安装会跳过它，不会在 CI 里弹出托盘进程；
+- 卸载（`unins000.exe`，控制面板“应用和功能”里也有一项）会删：安装目录、开始菜单快捷方式、
+  以及 `HKCU\...\Run` 下的 `HaxShot` 值（只删这一个值名，不动 Run 里其它项）。
+  **不会**删用户数据：`%LOCALAPPDATA%\hax_shot\`（日志、设置）留着；
+- `AppId` 是一次生成后写死的 GUID，升级识别靠它。改它等于换一个产品：旧版本会卸不掉，
+  控制面板里会同时出现两份；
+- **升级时程序正在运行怎么办**：`CloseApplications=force` 交给 Windows Restart Manager，
+  它会强制关掉旧实例再替换文件。必须是 `force`：托盘宿主没有可见主窗口、也不响应 WM_CLOSE，
+  只写默认的 `yes` 时静默升级会报 “Some applications could not be shut down” 并以退出码 5 中止
+  （本机 Inno 6.7.3 实测）。被关掉的实例**不**自动重启（`RestartApplications=no`），要接着用
+  就从开始菜单再起一份；
+- 卸载时如果程序还在跑，同一套 Restart Manager 逻辑会先把它关掉（托盘退出不是必须的）。
+
+### 4. ZIP 内容清单（两个产物共用）
 
 下面是本机 2026-09-19 的 `flutter build windows --release` 实际产物（**以实际产物为准**，
-不是手写的六项）：
+不是手写的六项）；安装包收的就是同一份：
 
 ```text
 hax_shot.exe
@@ -400,48 +474,64 @@ data\flutter_assets\…                   ← 整个目录
 msvcp140.dll / vcruntime140.dll / vcruntime140_1.dll   ← 打包脚本补进 bundle
 ```
 
-### 3. VC 运行库策略：app-local
+### 5. VC 运行库策略：app-local
 
 Flutter 官方 Windows 分发文档要求除了 exe/DLL/data 之外还要带 Visual C++ 运行库，所以三个
-`x64` CRT 直接放进 ZIP（而不是要求用户先装「VC++ 可再发行组件」）。
+`x64` CRT 直接打进 ZIP 和安装包（而不是要求用户先装「VC++ 可再发行组件」）。
 
 - 只发 x64（Windows 版只支持 x64）；
 - 少任何一个都 throw，不静默跳过；
-- 开发机 / CI 装了 VS **不能**证明干净用户机能跑，必须在无 VS 环境实测一次（见下面第 5 节）。
+- 开发机 / CI 装了 VS **不能**证明干净用户机能跑，必须在无 VS 环境实测一次（见第 8 节）。
 
-### 4. CI job 与 artifact 命名
+### 6. 未签名：SmartScreen 提示
+
+setup.exe 和 ZIP 里的 exe / dll 都没有代码签名，**首次运行 Windows 会弹 SmartScreen**
+（“Windows 已保护你的电脑”）：点「更多信息」→「仍要运行」。安装包自己也会带这个提示，
+装完的程序第一次启动还有一次。这是预期行为，Release 说明里别写成“无需确认”；想让提示消失
+只能买代码签名证书，当前不做。
+
+### 7. CI job 与 artifact 命名
 
 - `verify.yml` 已有 `windows` job（PR / main push）：`windows-latest`，`flutter analyze` +
   `cargo fmt --check` + `cargo check` + `flutter build windows --release` + bundle 完整性
   （同样缺文件 throw）。它**不跑测试**，也不上传 artifact；
 - `release.yml` 的 `windows` job：`needs: preflight`，`windows-latest`，超时 40 分钟。跑
   `flutter build windows --release` → `pwsh scripts/package_windows_zip.ps1` →
-  `actions/upload-artifact@v4`（name `hax-shot-windows-${{ github.ref_name }}`，与
-  `hax-shot-macos-*` 同风格，`retention-days: 30`，`if-no-files-found: error`）。上传前多一步
-  按 `pubspec.yaml` 算出期望的 ZIP 名再核对，版本号不硬编码；`release.needs` 已经带上
-  `windows`，Windows 产物没好之前不会发 Release。`workflow_dispatch` 干跑仍然只产
-  artifact、不发布（一样会打 ZIP 并上传，可以先验打包链路）；
-- **这套配置还没有被真实跑过**：本地只用假 bundle 验过 `package_windows_zip.ps1` 本身
-  （happy path + 三条失败路径），Release 干跑与真实 tag 发布都还没执行，“无 VS 机器解压即用”
-  也还没测（见下面第 5 节）。
+  `choco install innosetup` → `pwsh scripts/build_windows_installer.ps1 -Bundle
+  build/windows/x64/runner/Release`（复用 ZIP 那一步的同一份 bundle，不重复构建）→ 按
+  `pubspec.yaml` 核对 ZIP 和 setup.exe 两个文件名 → 一起上传 artifact（name 仍是
+  `hax-shot-windows-${{ github.ref_name }}`，与 `hax-shot-macos-*` 同风格，
+  `retention-days: 30`，`if-no-files-found: error`）。`release.needs` 已经带上 `windows`，
+  两个产物没好之前不会发 Release。`workflow_dispatch` 干跑仍然只产 artifact、不发布（一样会
+  打 ZIP + 安装包并上传，可以先验这条链路）；
+- Inno Setup 在 runner 上装的是 choco 的 `innosetup` 包（比 winget 省事：不需要确认、不弹
+  交互，runner 本身就是管理员）。脚本会按标准安装目录 / PATH 自己找到 `ISCC.exe`；
+- **ZIP 这一路还没有被真实跑过**（本地验过 `package_windows_zip.ps1` 本身；tag 前的干跑还没
+  执行）；安装包这一路本机跑通了完整闭环（见第 2 节的实际输出），但同样没跑过 CI。
 
-### 5. 干净机器验证（发布前必须做一次）
+### 8. 干净机器验证（发布前必须做一次）
 
-在一台**没有装 VS、也没装过 VC++ 运行库**的 Windows 上：
+在一台**没有装 VS、也没装过 VC++ 运行库**的 Windows 上，两条路各验一遍：
 
-1. 解压 `HaxShot-<版本>-windows-x64.zip` 到任意目录；
-2. 双击 `hax_shot.exe`：托盘出现图标，不报“找不到 xxx.dll”；
-3. 按 `Alt+Shift+Z` 截一次屏并复制到剪贴板。
+1. 安装包：双击 `HaxShot-<版本>-windows-x64-setup.exe`（过 SmartScreen）→ 装完从开始菜单启动，
+   托盘出现图标，不报“找不到 xxx.dll”；
+2. ZIP：解压到任意目录 → 双击 `hax_shot.exe`，同样不报缺 DLL；
+3. 两种方式都按 `Alt+Shift+Z` 截一次屏并复制到剪贴板。
 
-**没做这一步之前**，README / Release 说明里都不能写“解压即用已验证”。
+**没做这一步之前**，README / Release 说明里都不能写“已验证”。安装包的锁文件、日志、
+设置都在 `%LOCALAPPDATA%\hax_shot\`，两条路混着测不会互相踩。
 
-### 6. 升级 / 卸载 / 自启动迁移
+### 9. 升级 / 卸载 / 自启动迁移
 
-- 升级：先退出旧 host 和任何 capture 子进程，再用新 ZIP 覆盖同一目录；
-- 自启动：只写当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，
-  换目录后需要到设置里重新打开一次；系统“启动”页里的禁用开关存在 `StartupApproved`，
-  应用不去改它，被禁用了只能到任务管理器恢复；
-- 卸载：退出 → 关自启动 → 删目录；没有系统服务 / 计划任务 / 驱动需要清理。
+- 安装包升级：直接跑新版 setup.exe，别自己先退出——`CloseApplications=force` 会关掉旧实例
+  （想手动退出也可以，结果一样）。装到同一个目录就行，向导会默认填上一次的位置；
+- ZIP 升级：先退出旧 host 和任何 capture 子进程，再用新 ZIP 覆盖同一目录；换目录后要到设置里
+  重新打开一次自启动；
+- 自启动：只写当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`；
+  系统“启动”页里的禁用开关存在 `StartupApproved`，应用不去改它，被禁用了只能到任务管理器恢复；
+- 卸载：安装包装的用 `unins000.exe`（或控制面板），ZIP 装的关掉自启动再删目录即可。
+  两种方式都没有系统服务 / 计划任务 / 驱动需要清理，都不动 `%LOCALAPPDATA%\hax_shot\` 里的
+  用户数据。
 
 ## 发布：tag、版本约定与 CI
 
@@ -498,11 +588,11 @@ tag 必须与 `pubspec.yaml` 的应用版本匹配，但不包含构建号。工
 
 | `pubspec.yaml` | Git tag | Release Assets |
 |---|---|---|
-| `1.5.0+1` | `v1.5.0` | `HaxShot-1.5.0-arm64.dmg`、`HaxShot-1.5.0-windows-x64.zip`、`hax-shot_1.5.0+1_amd64.deb`、`hax-shot-1.5.0-1.x86_64.rpm` |
+| `1.5.0+1` | `v1.5.0` | `HaxShot-1.5.0-arm64.dmg`、`HaxShot-1.5.0-windows-x64-setup.exe`、`HaxShot-1.5.0-windows-x64.zip`、`hax-shot_1.5.0+1_amd64.deb`、`hax-shot-1.5.0-1.x86_64.rpm` |
 
 其中：
 
-- `1.5.0` 是应用版本，也是 DMG 名字、Windows ZIP 名字和 RPM 的 Version；
+- `1.5.0` 是应用版本，也是 DMG 名字、Windows 两个产物名字和 RPM 的 Version；
 - `+1` 是 DEB 的完整版本（`1.5.0+1`）和 Fedora RPM 的 Release；
 - RPM 在 Fedora 本机构建时会带 `.fc44`，在 CI（Ubuntu 的 rpmbuild）里没有这个发行版后缀；
 - `v1.5.0` 是 GitHub Release 的 tag 和页面名称。
@@ -548,14 +638,14 @@ git push origin v1.5.0
 | `preflight` | `ubuntu-24.04` | 校验 tag 与 `pubspec.yaml` 版本一致（会消耗 macOS 分钟数之前就失败） |
 | `linux` | `ubuntu-24.04` | 构建 Linux release bundle，再打 `--skip-build` 的 DEB 和 RPM，校验两个包都带上 `libhax_shot_native.so` |
 | `macos` | `macos-14`（arm64） | 校验 runner 架构，签名（可选）→ 公证（可选）→ 打 DMG，校验 app、Rust dylib 都是 arm64 |
-| `windows` | `windows-latest` | 构建 Windows release bundle，`package_windows_zip.ps1` 补 app-local CRT 并打 ZIP（缺文件直接 throw），再按 `pubspec.yaml` 核对 ZIP 名 |
+| `windows` | `windows-latest` | 构建 Windows release bundle，`package_windows_zip.ps1` 补 app-local CRT 并打 ZIP（缺文件直接 throw），再用同一个 bundle 编译 Inno Setup 安装包，最后按 `pubspec.yaml` 核对两个产物的文件名 |
 | `release` | `ubuntu-24.04` | 汇总三个平台的产物，创建或更新 GitHub Release |
 
 每个平台 job 还会把自己的包存一份 30 天有效的 Actions artifact，方便排查。
 
-> `windows` 这一路（构建 → ZIP → 上传）的配置已经就位，但还没有真实跑过一次：首次 tag
-> 发布前先按上面的「干跑（不发布）」手动跑一遍。ZIP 内容清单与 CRT 策略见
-> [Windows：ZIP 包](#windowszip-包)。
+> `windows` 这一路（构建 → ZIP → 安装包 → 上传）的配置已经就位，但还没有真实跑过一次：首次
+> tag 发布前先按上面的「干跑（不发布）」手动跑一遍。两个产物的内容清单、CRT 策略与安装行为见
+> [Windows：安装包与 ZIP 包](#windows安装包与-zip-包)。
 
 Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上的 `verify.yml` 负责
 （Linux、macOS 与 Windows 三个 job），tag 应该指向已经过检查的 commit。
@@ -594,10 +684,11 @@ Dart/Rust 的 analyze 和 test 不在这里重复跑：它们由 `main`/PR 上�
 在仓库的 **Releases** 页面确认：
 
 - Release tag 与 `pubspec.yaml` 版本一致，且不是 Draft；
-- Assets 里四个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
-  `HaxShot-<版本>-arm64-unsigned.dmg`）、`HaxShot-<版本>-windows-x64.zip`、
-  `hax-shot_<版本>_amd64.deb`、`hax-shot-<版本>-<release>.x86_64.rpm`（少哪一个就先看对应
-  job 是不是失败或被跳过：`windows` 缺席意味着 `release` 根本没有跑）；
+- Assets 里五个文件都在：`HaxShot-<版本>-arm64.dmg`（或未签名时的
+  `HaxShot-<版本>-arm64-unsigned.dmg`）、`HaxShot-<版本>-windows-x64-setup.exe`、
+  `HaxShot-<版本>-windows-x64.zip`、`hax-shot_<版本>_amd64.deb`、
+  `hax-shot-<版本>-<release>.x86_64.rpm`（少哪一个就先看对应 job 是不是失败或被跳过：
+  `windows` 缺席意味着 `release` 根本没有跑）；
 - 如果只有 `-unsigned` DMG，Release 正文顶部应该已经有未签名警告；
 - Release notes 由 `--generate-notes` 生成（会带上本次 tag 之前的 PR/commit 列表）。
 
@@ -616,9 +707,15 @@ sudo dnf install ./hax-shot-1.5.0-1.x86_64.rpm        # 或 sudo apt install ./h
 /usr/share/hax-shot/install-gnome-shortcut.sh
 ```
 
-验证 Windows 产物：解压 `HaxShot-<版本>-windows-x64.zip` 到固定目录，双击 `hax_shot.exe`
-（未签名，SmartScreen 提示属于预期）。这一步在**没装 VS / 没装过 VC++ 运行库**的机器上做
-才算数，见「Windows：ZIP 包」第 5 节。
+验证 Windows 产物：先跑一遍安装包的闭环验证
+
+```powershell
+pwsh scripts/verify_windows_installer.ps1 -Installer HaxShot-1.5.0-windows-x64-setup.exe
+```
+
+（打 `INSTALLER VERIFY: PASS` 才算通过），再在**没装 VS / 没装过 VC++ 运行库**的机器上实测：
+双击 setup.exe 装一遍、解压 ZIP 跑一遍（未签名，SmartScreen 提示属于预期），见
+[Windows：安装包与 ZIP 包](#windows安装包与-zip-包) 第 8 节。
 
 ### 7. 失败处理
 
@@ -628,12 +725,13 @@ sudo dnf install ./hax-shot-1.5.0-1.x86_64.rpm        # 或 sudo apt install ./h
 - **macOS 构建失败**：注意 runner 必须是 arm64，项目不支持 Intel Mac，也不做 universal；
 - **签名/公证失败**：先确认证书没过期、`MACOS_SIGN_IDENTITY` 与导入的证书完全一致；
   公证凭据错误会直接在 `notarytool store-credentials` 或 submit 阶段报错；
-- **Windows 打包失败**：本地复现 `pwsh scripts/package_windows_zip.ps1`（先 `flutter build
-  windows --release`）。脚本和 CI 走同一套代码：缺 CRT / 缺 bundle 文件 / ZIP 里多了一层
-  目录都会 throw，`-SkipCrt` 只在本地查 ZIP 内容时用，CI 与发布不能用；
+- **Windows 打包失败**：本地复现 `pwsh scripts/build_windows_installer.ps1` /
+  `pwsh scripts/package_windows_zip.ps1`。脚本和 CI 走同一套代码：缺 CRT / 缺 bundle 文件 /
+  ZIP 里多了一层目录 / ISCC 退出码非 0 / 产物不存在都会 throw。CI 上先看 `Install Inno Setup`
+  那一步（choco 装不上后面就全挂了）；本地 `-SkipCrt` 只在查包内容时用，CI 与发布不能用；
 - **Release 上传失败**：确认工作流有 `contents: write` 权限，或重跑同一个 tag 的 workflow。
 
 需要重新上传同名安装包时，修复后重跑同一个 tag 的 workflow 即可覆盖资产（见第 4 节）。
 
-一句话总结：**main push 只更新代码，`git push origin vX.Y.Z` 才构建 DMG/DEB/RPM/Windows ZIP 并发布
-GitHub Release。**
+一句话总结：**main push 只更新代码，`git push origin vX.Y.Z` 才构建 DMG/DEB/RPM/Windows
+安装包与 ZIP 并发布 GitHub Release。**

@@ -5,7 +5,8 @@
 
 - **macOS**：Apple Silicon（arm64），菜单栏应用，没有 Dock 图标；
 - **Linux**：Fedora GNOME + Wayland，只保证主显示器；
-- **Windows**：Windows 11 x64，未签名的 ZIP 包（解压即用）；Win10 / 多显示器 / 混合 DPI 尚未验证。
+- **Windows**：Windows 11 x64，提供 Setup EXE 安装包（每用户安装，不需要管理员权限）和解压即用
+  的 ZIP，两者都未签名；Win10 / 多显示器 / 混合 DPI 尚未验证。
 
 ## 下载安装
 
@@ -17,10 +18,11 @@
 | macOS（内部测试） | `HaxShot-<版本>-arm64-unsigned.dmg` | 未签名/未公证，只能自己机器上右键“打开”，别人机器会被 Gatekeeper 拦 |
 | Debian / Ubuntu | `hax-shot_<版本>_amd64.deb` | `sudo apt install ./hax-shot_<版本>_amd64.deb` |
 | Fedora | `hax-shot-<版本>-1.x86_64.rpm` | `sudo dnf install ./hax-shot-<版本>-1.x86_64.rpm` |
-| Windows | `HaxShot-<版本>-windows-x64.zip` | 解压到一个固定目录，双击 `hax_shot.exe`（没有安装器） |
+| Windows | `HaxShot-<版本>-windows-x64-setup.exe` | 双击安装，每用户安装、不需要管理员权限（见 [Windows（安装包与 ZIP 包）](#windows安装包与-zip-包)） |
+| Windows（免安装） | `HaxShot-<版本>-windows-x64.zip` | 解压到一个固定目录，双击 `hax_shot.exe` |
 
-> Windows ZIP 从包含 Windows 适配的版本开始随 Release 发布，更早的版本里没有这个资产。
-> 具体步骤见下面的 [Windows（ZIP 包）](#windowszip-包)。
+> Windows 的两个产物从包含 Windows 适配的版本开始随 Release 发布，更早的版本里没有这些资产。
+> 具体步骤见下面的 [Windows（安装包与 ZIP 包）](#windows安装包与-zip-包)。
 
 ## 第一次使用
 
@@ -41,26 +43,43 @@
 菜单栏 / 托盘图标可能被 Bartender 这类工具收进隐藏区，所以默认就留了一个不依赖图标的入口；
 可以在 **设置** 里改快捷键，也可以开关开机自启动。
 
-## Windows（ZIP 包）
+## Windows（安装包与 ZIP 包）
 
-Windows 版只有一个解压即用的 ZIP，**没有安装器**（不会出现 Setup EXE）：
+Windows 版有两种装法，内容一样（都自带 VC++ 运行库，不需要额外安装）：
+
+### 方式一：Setup EXE（推荐）
+
+1. 双击 `HaxShot-<版本>-windows-x64-setup.exe`；
+2. 默认装到 `%LOCALAPPDATA%\Programs\HaxShot`（每用户安装，**不需要管理员权限**，向导里可以
+   改成别的目录）；开始菜单里会有 HaxShot，桌面快捷方式在向导里勾选（默认不勾）；
+3. 向导最后一页可以勾「运行 HaxShot」直接启动。
+
+升级直接跑新版本的 setup.exe：旧版本还在跑的话，安装程序会先把它关掉（托盘图标消失）再替换
+文件，装完自己从开始菜单再启动一次即可。不想要了就在「设置 → 应用」里卸载，或者跑安装目录里的
+`unins000.exe`。
+
+### 方式二：ZIP（免安装）
 
 1. 把 `HaxShot-<版本>-windows-x64.zip` 解压到一个固定目录（例如 `C:\Program Files\HaxShot`
    或 `%LOCALAPPDATA%\HaxShot`），解压完应该直接看到 `hax_shot.exe`。以后升级要覆盖同一个
    目录，所以不要解压到临时目录里；
-2. 双击 `hax_shot.exe`：不会出现主窗口，只在 **托盘** 出现图标（不占任务栏）；
-3. 托盘图标 **左键或右键** 都能弹出菜单：立即截屏 / 设置 / 退出；
-4. 默认快捷键 **Alt+Shift+Z**，首次启动自动注册；也可以在托盘菜单 →「设置」里改，
+2. 双击 `hax_shot.exe`。
+
+### 启动之后
+
+1. 不会出现主窗口，只在 **托盘** 出现图标（不占任务栏）；
+2. 托盘图标 **左键或右键** 都能弹出菜单：立即截屏 / 设置 / 退出；
+3. 默认快捷键 **Alt+Shift+Z**，首次启动自动注册；也可以在托盘菜单 →「设置」里改，
    或者在那里开关开机自启动。
 
 **看不到托盘图标？** Windows 11 默认把新程序的图标收进任务栏的 `^`（“显示隐藏的图标”）
 溢出菜单里，此时应用其实已经在运行——点开 `^`，把 HaxShot 拖到任务栏上就能常驻。
 程序侧没有办法自己把图标提升出来（系统没有这个 API），这不是故障。
 
-**未签名**：ZIP 里的 exe / dll 没有代码签名，首次运行 Windows 会弹 SmartScreen
-（“Windows 已保护你的电脑”）——点「更多信息」→「仍要运行」就能启动。这是预期行为，不要把
-系统的安全防护关掉来装它。ZIP 里已经带上 VC++ 运行库，不需要额外安装（无 VS 的干净机器
-上的解压运行还没实测过）。
+**未签名**：setup.exe 和 ZIP 里的 exe / dll 都没有代码签名，首次运行 Windows 会弹 SmartScreen
+（“Windows 已保护你的电脑”）——点「更多信息」→「仍要运行」就能继续（装安装包和启动程序可能
+各弹一次）。这是预期行为，不要把系统的安全防护关掉来装它。两个包都已经带上 VC++ 运行库，
+不需要额外安装（无 VS 的干净机器上的实测还没做）。
 
 ### 日志在哪里
 
@@ -81,10 +100,15 @@ Get-Content $log -Encoding UTF8 |
 
 ### 升级与卸载
 
-- **升级**：先从托盘退出旧版本（确认任务管理器里没有 `hax_shot.exe` 残留），再把新 ZIP 解压
-  覆盖同一个目录。目录换了位置就要到设置里重新打开一次开机自启动；
-- **卸载**：托盘退出 → 设置里关掉「开机自启动」→ 删掉解压出来的目录。自启动只写当前用户的
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，没有系统服务、计划任务或驱动要清理。
+- **安装包装的**：升级直接跑新版本 setup.exe（旧实例会被自动关掉再替换文件，不用自己先退出）；
+  卸载用「设置 → 应用」里的卸载项，或安装目录里的 `unins000.exe`。卸载会删掉安装目录、开始菜单
+  快捷方式和开机自启动项；
+- **ZIP 装的**：先从托盘退出旧版本（确认任务管理器里没有 `hax_shot.exe` 残留），再把新 ZIP
+  解压覆盖同一个目录。目录换了位置就要到设置里重新打开一次开机自启动；卸载就是托盘退出 →
+  设置里关掉「开机自启动」→ 删掉解压出来的目录；
+- 两种方式的自启动都只写当前用户的
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，没有系统服务、计划任务或驱动要清理；
+  用户数据（日志、设置）都在 `%LOCALAPPDATA%\hax_shot\`，**卸载不会删**。
 
 ### Windows 目前不保证的部分
 
@@ -119,7 +143,7 @@ Get-Content $log -Encoding UTF8 |
 2. **已经有截图在等着**：屏幕上有没关掉的框选浮层时，再按快捷键不会叠第二层，先 `Esc` 关掉。
 
 还不行就看日志，一条条往下找停在哪一层（Windows 的日志路径与命令见
-[Windows（ZIP 包）](#windowszip-包)）：
+[Windows（安装包与 ZIP 包）](#windows安装包与-zip-包)）：
 
 ```bash
 LOG="$HOME/Library/Application Support/com.github.xiehanff.haxShot/logs/hax_shot.log"
@@ -148,8 +172,9 @@ Carbon 的热键不跨进程独占，别的软件占了同一个组合时可能�
   偏好设置一起清掉，用仓库里的 `scripts/uninstall_macos_app.sh`；
 - **Linux**：`sudo dnf remove hax-shot` 或 `sudo apt remove hax-shot`，再删掉 GNOME 里的自定义
   快捷键（设置 → 键盘 → 自定义快捷键）。
-- **Windows**：托盘退出 → 设置里关掉「开机自启动」→ 删掉解压出来的目录（见
-  [Windows（ZIP 包）](#windowszip-包)）。
+- **Windows**：安装包装的用「设置 → 应用」里的卸载项，或安装目录里的 `unins000.exe`；ZIP 装的
+  托盘退出 → 设置里关掉「开机自启动」→ 删掉解压出来的目录（见
+  [Windows（安装包与 ZIP 包）](#windows安装包与-zip-包)）。
 
 ## 许可证
 

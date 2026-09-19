@@ -1552,7 +1552,7 @@ pkill -x HaxShot
 
 ## 13. CI 与 GitHub Release
 
-GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `flutter build macos --release`，Windows job 负责 `flutter analyze` / `cargo fmt --check` / `cargo check` / `flutter build windows --release` + bundle 完整性检查（缺文件必须 throw，不只是打印 False）。Windows job 不跑任何测试，也不上传 artifact：ZIP 打包与上传是发布流程的事（见 [`packaging.md` 的 Windows 一节](./packaging.md#windowszip-包)）。
+GitHub Actions 配置位于 `.github/workflows/release.yml`，只在推送 `v*` tag 时运行（`workflow_dispatch` 用于不发布的干跑）。普通 `main` push 和 PR 只跑 `verify.yml`：Linux job 负责 analyze / Dart 测试 / Rust 检查 / Linux 构建，macOS job 负责 Dart 测试 / Rust 检查 / `flutter build macos --release`，Windows job 负责 `flutter analyze` / `cargo fmt --check` / `cargo check` / `flutter build windows --release` + bundle 完整性检查（缺文件必须 throw，不只是打印 False）。Windows job 不跑任何测试，也不上传 artifact：ZIP / 安装包打包与上传是发布流程的事（见 [`packaging.md` 的 Windows 一节](./packaging.md#windows安装包与-zip-包)）。
 
 macOS job 里的 `flutter test` **不能删**：`hotkey_binding_test`、`screen_capture_permission_test`
 里有只在 macOS 上跑的用例（Carbon 键码、TCC 分支），Linux job 覆盖不到。
