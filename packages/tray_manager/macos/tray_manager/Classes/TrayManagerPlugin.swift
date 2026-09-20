@@ -202,21 +202,40 @@ public class TrayManagerPlugin: NSObject, FlutterPlugin, NSMenuDelegate {
             strongSelf.channel.invokeMethod(kEventOnTrayMenuItemClick, arguments: args, result: nil)
         }
         trayMenu?.delegate = self
-        
+
+        // 菜单**常驻**挂在 status item 上，点击由 AppKit 自己处理（见 popUpContextMenu 的注释）。
+        trayIcon?.statusItem?.menu = trayMenu
+
         result(true)
     }
-    
+
+    /// 只把菜单挂上去，**绝不调用 `button.performClick`**。
+    ///
+    /// 原来的实现是 `statusItem.menu = trayMenu` + `button.performClick(trayIcon)`，而
+    /// `TrayIcon` 把 action 注册在 `.leftMouseDown` 上，也就是我们**已经在
+    /// `NSControl.mouseDown:` 自己的鼠标跟踪循环里**了。此时 `performClick` 会再开一层
+    /// 嵌套的跟踪 + 菜单模态循环，并吃掉真正的 mouseUp —— 外层跟踪永远等不到抬起，
+    /// `NSControl.mouseDown:` 不返回，**主线程永久卡死**。
+    ///
+    /// 实测（sample 采样，HaxShot 宿主跑满 4 天后复现）：主线程 2611/2611 个样本都停在
+    /// `NSStatusBarWindow sendEvent → NSControl mouseDown: → _nextEventMatchingEventMask
+    /// → CFRunLoopRunSpecific → mach_msg`。主线程一卡，Carbon 全局热键、分布式通知、
+    /// MethodChannel 全部收不到，表现就是「按快捷键没反应」，而且看起来完全不像菜单的锅。
+    ///
+    /// 菜单常驻之后，点击（左右键都算）由 AppKit 负责弹，`onTrayIconMouseDown` 不再回调
+    /// Dart；Dart 侧不需要、也不应该再手动弹菜单。
     public func popUpContextMenu(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         if (trayMenu != nil) {
             trayIcon?.statusItem?.menu = trayMenu
-            trayIcon?.statusItem?.button?.performClick(trayIcon)
         }
         result(true)
     }
-    
+
     // NSMenuDelegate
-    
+
+    /// 关掉菜单后**不要**摘掉 `statusItem.menu`：摘掉就回到「点击 → 回调 Dart → Dart 再
+    /// 手动弹」那条会把主线程卡死的路。常驻挂着的菜单由 AppKit 正常跟踪，点击菜单项照旧
+    /// 通过 `onMenuItemClick` 回给 Dart。
     public func menuDidClose(_ menu: NSMenu) {
-        trayIcon?.statusItem?.menu = nil
     }
 }

@@ -754,15 +754,14 @@ class _TrayHostPageState extends State<TrayHostPage>
     }
   }
 
-  @override
-  void onTrayIconMouseDown() => _popUpTrayMenu();
-
-  @override
-  void onTrayIconRightMouseDown() => _popUpTrayMenu();
-
-  /// macOS 的 tray_manager 在 `setContextMenu` 里只是把菜单存起来，菜单只在
-  /// `popUpContextMenu()` 里才挂到 status item 上（菜单关掉后又摘下来），所以必须
-  /// 自己处理图标点击，否则点菜单栏图标什么都不发生。
+  /// 托盘图标的点击。
+  ///
+  /// **macOS**：菜单已经在插件的 `setContextMenu` 里**常驻**挂到 status item 上，点击
+  /// （左右键都算）由 AppKit 自己处理，所以正常情况下这个回调根本不会响。插件里已经
+  /// 删掉了 `button.performClick` —— 它会在这个按钮自己的 `NSControl.mouseDown:` 跟踪
+  /// 循环里再开一层嵌套跟踪，吃掉 mouseUp 后外层永不返回，**主线程永久卡死**，热键和
+  /// 通知全部失效（详见 `packages/tray_manager` macOS 插件的 `popUpContextMenu` 注释）。
+  /// 万一这里还是被回调了，也只是把已经挂着的菜单再挂一次，不会再进嵌套循环。
   ///
   /// Windows 的本地 tray_manager（`packages/tray_manager/windows/tray_manager_plugin.cpp`）
   /// 在左键 / 右键上都只 invoke Dart 回调，不会自己弹菜单，所以菜单要由这里替它弹。
@@ -773,6 +772,12 @@ class _TrayHostPageState extends State<TrayHostPage>
   /// `TrackPopupMenu` 的契约是**owner 窗口必须是前台窗口**，否则菜单弹出来了却收不到
   /// 键盘/鼠标消息，点菜单外面、按 Esc 都不会关（本机实测：默认值 false 时菜单
   /// 永远不消失）。这个参数只对 Windows 生效，macOS 传它是 no-op，所以只给 Windows 开。
+  @override
+  void onTrayIconMouseDown() => _popUpTrayMenu();
+
+  @override
+  void onTrayIconRightMouseDown() => _popUpTrayMenu();
+
   void _popUpTrayMenu() {
     if (Platform.isLinux) return;
     unawaited(

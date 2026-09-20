@@ -205,6 +205,44 @@ SingleInstanceGuard.acquire()
 - 拿不到/写不了锁文件时**不阻止启动**，只在 stderr 留一行（退化成允许多实例）：托盘工具
   起不来比多跑一份更糟。
 
+### 3.35 macOS 的托盘菜单必须**常驻**挂载（不要 performClick）
+
+`packages/tray_manager` 是仓库 vendored 的（pubspec override），macOS 侧被改过。最要紧的一处：
+
+```swift
+// 错误（上游原版）：会在按钮自己的 mouseDown 跟踪循环里再开一层嵌套跟踪
+trayIcon?.statusItem?.menu = trayMenu
+trayIcon?.statusItem?.button?.performClick(trayIcon)
+
+// 现在：只把菜单常驻挂上去，点击由 AppKit 自己处理
+trayIcon?.statusItem?.menu = trayMenu
+```
+
+为什么：插件把按钮 action 注册在 `.leftMouseDown` 上，所以回调 Dart 时**已经在
+`NSControl.mouseDown:` 自己的鼠标跟踪循环里**了。此时 `performClick` 会再开一层嵌套的
+鼠标跟踪 + 菜单模态循环，并吃掉真正的 mouseUp —— 外层跟踪永远等不到抬起，
+`NSControl.mouseDown:` 不返回，**主线程永久卡死**。
+
+实测（sample 采样，宿主跑满 4 天后复现）：主线程 2611/2611 个样本停在
+
+```text
+NSApplication run → sendEvent → NSStatusBarWindow sendEvent
+  → NSControl mouseDown: → _nextEventMatchingEventMask → CFRunLoopRunSpecific → mach_msg
+```
+
+**主线程一卡，Carbon 全局热键、DistributedNotificationCenter、MethodChannel 全部收不到**，
+表现就是「按快捷键没反应」，而且完全不像菜单的锅——排查时看 `sample <pid>` 的主线程栈最快。
+用户那次就是「点了托盘菜单 → 截图正常弹出 → 之后再按快捷键全都没反应」。
+
+对应的两条约束：
+
+- `menuDidClose` 里**不要**再 `statusItem.menu = nil`：摘掉就回到「点击 → 回调 Dart → Dart
+  手动弹菜单」那条路。菜单常驻时点击（左右键都算）由 AppKit 负责，菜单项点击照旧通过
+  `onMenuItemClick` 回给 Dart，所以 `lib/app.dart` 那两个 `onTrayIconMouseDown` 回调
+  只是兜底，不会再进嵌套循环；
+- 改完要验证的是**两件事**：点图标菜单能弹出来（`CGWindowList` 里能看到菜单窗口），
+  以及点完再按快捷键仍然能用（`shortcut_trigger` 还能写进日志）。
+
 ### 3.4 托盘宿主的启动顺序
 
 `lib/app.dart` 的 `_initializeDesktopIntegration()`：
