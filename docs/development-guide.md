@@ -1040,6 +1040,15 @@ windowManager.setSize(_aiWindowSize)
 全屏截图浮层不受影响：`becomeOverlay()` 会把 `styleMask` 换成 `[.borderless]`，
 `.resizable` 随之丢掉。
 
+聊天窗口没有 Dock/任务栏入口，普通层级在切换应用后会被其他窗口盖住，看起来像消失。
+`_configureAiWindow()` 必须在显示前调用 `setAlwaysOnTop(true)`，正式截图入口和调试入口
+都走这里；macOS 的 `enableResizablePanel()` 同时显式设置 `hidesOnDeactivate = false`。
+Windows 对应原生 `HWND_TOPMOST`，尚未实机验证；Linux 的 GTK3 Wayland 后端未实现
+`set_keep_above`，因此仍可能被其他窗口遮住，不能把调用成功当作已置顶。
+不要通过失焦后重新 `focus()` 来维持可见，否则用户无法正常操作其他应用。
+本机验证：截图后打开 AI 聊天，再点击其他应用或用 ⌘Tab 切换，确认聊天仍可见、其他
+应用能正常输入，最后确认聊天的关闭按钮和 Esc 仍可退出。
+
 #### macOS 窗口交给 Flutter 自己管
 
 不要 macOS 原生的红黄绿按钮（它们会压在 Flutter AppBar 自己的 ✕ 上）：

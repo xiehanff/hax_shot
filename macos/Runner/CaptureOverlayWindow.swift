@@ -59,6 +59,8 @@ final class CaptureOverlayWindow {
   /// 所以插完必须紧跟一次 hideStandardWindowButtons。
   func enableResizablePanel() {
     guard let window else { return }
+    // 聊天面板切到其他应用后仍需可见，不能随应用失活自动隐藏。
+    window.hidesOnDeactivate = false
     window.styleMask.insert(.resizable)
     Self.hideStandardWindowButtons(in: window)
     window.titleVisibility = .hidden

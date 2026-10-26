@@ -120,6 +120,8 @@ class _HaxShotAppState extends State<HaxShotApp> with WindowListener {
     await windowManager.setMinimumSize(_aiWindowSize);
     await windowManager.setSize(_aiWindowSize);
     await windowManager.center();
+    // 聊天没有 Dock/任务栏入口，失焦后被其他应用盖住就很难找回；显示前固定置顶。
+    await windowManager.setAlwaysOnTop(true);
     await showWindow();
     await windowManager.focus();
   }
