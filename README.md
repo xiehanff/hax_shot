@@ -14,8 +14,7 @@
 
 | 平台 | 文件 | 安装 |
 | --- | --- | --- |
-| macOS | `HaxShot-<版本>-arm64.dmg` | 挂载后把 `HaxShot.app` 拖进“应用程序” |
-| macOS（内部测试） | `HaxShot-<版本>-arm64-unsigned.dmg` | 未签名/未公证，只能自己机器上右键“打开”，别人机器会被 Gatekeeper 拦 |
+| macOS | `HaxShot-<版本>-arm64-unsigned.dmg` | 挂载后把 `HaxShot.app` 拖进“应用程序”，**第一次打开要手动放行**，见 [macOS（DMG 安装）](#macosdmg-安装) |
 | Debian / Ubuntu | `hax-shot_<版本>_amd64.deb` | `sudo apt install ./hax-shot_<版本>_amd64.deb` |
 | Fedora | `hax-shot-<版本>-1.x86_64.rpm` | `sudo dnf install ./hax-shot-<版本>-1.x86_64.rpm` |
 | Windows | `HaxShot-<版本>-windows-x64-setup.exe` | 双击安装，每用户安装、不需要管理员权限（见 [Windows（安装包与 ZIP 包）](#windows安装包与-zip-包)） |
@@ -42,6 +41,62 @@
 
 菜单栏 / 托盘图标可能被 Bartender 这类工具收进隐藏区，所以默认就留了一个不依赖图标的入口；
 可以在 **设置** 里改快捷键，也可以开关开机自启动。
+
+## macOS（DMG 安装）
+
+当前 Release 只提供 `HaxShot-<版本>-arm64-unsigned.dmg`：ad-hoc 签名（没有 Apple 开发者证书），
+**也没有经过 Apple 公证**，且只支持 Apple Silicon。换一台从没装过这个 app 的 Mac，Gatekeeper
+会拦下第一次启动——这是预期行为，不需要关掉系统安全设置，按下面处理一次就能用。
+
+### 1. 装到“应用程序”
+
+打开 DMG，把 `HaxShot.app` 拖进“应用程序”文件夹，再推出 DMG。以后升级只替换“应用程序”里
+这一份，不要在 DMG 里直接运行——卷一卸载，那份副本就没了。
+
+### 2. 第一次打开
+
+双击 `HaxShot.app`，根据提示选一种处理：
+
+**提示“已损坏，无法打开”（ad-hoc 包最常见）**：这是下载时带的隔离标记造成的，不是文件真坏了。
+清掉隔离标记再打开：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/HaxShot.app
+```
+
+然后重新双击 `HaxShot.app`：能开就直接用；如果改成弹“无法验证开发者”，按下面的步骤放行。
+
+**提示“Apple 无法验证 HaxShot 是否包含恶意软件”**：
+
+- **macOS 15（Sequoia）及更新**：关掉提示 → 打开 **系统设置 → 隐私与安全性**，滚到最下面的
+  “安全性”，会看到 HaxShot 被拦 → 点 **“仍要打开”** → 输入登录密码或触控 ID → 再双击一次
+  HaxShot.app，在弹窗里确认“打开”；
+- **macOS 14 及更早**：在“应用程序”里对 `HaxShot.app` 点右键（或 Control+点击）→ **打开** →
+  在弹窗里再点一次 **打开**。直接双击是打不开的。
+
+macOS 15 起 Apple 去掉了“右键 → 打开”这条绕过路径，所以在 15 以上必须走“隐私与安全性”里
+的“仍要打开”。升级到新版本后如果又被拦，按同样步骤再放行一次——未签名的包无法保证
+系统会记住授权。
+
+按上面两种都处理完还是打不开，带上这两条命令的输出反馈，不要自己去改系统安全设置：
+
+```bash
+spctl -a -vvv -t exec /Applications/HaxShot.app
+codesign -dv --verbose=4 /Applications/HaxShot.app 2>&1 | head
+```
+
+### 3. 不要做的事
+
+`sudo spctl --master-disable`、关闭 SIP、装“绕过 Gatekeeper”的工具，这些都不需要。它们关掉
+的是整台机器的保护，而上面的隔离标记处理就能让这个包正常打开。
+
+### 4. 升级后要重新授权屏幕录制
+
+未签名包的“屏幕录制”授权绑在构建产物上，每个版本的产物都不同，所以升级后系统设置里那条
+旧记录可能还显示为开，新版本却不认。升级后第一次截图如果提示没权限，在那个授权说明小窗口里
+点 **“重置授权记录”**（等价于 `tccutil reset ScreenCapture com.github.xiehanff.haxShot`），
+再重新在系统设置里勾选一次即可。想让授权跨版本保留，只能换成 Developer ID 签名 + 公证的
+正式包。
 
 ## Windows（安装包与 ZIP 包）
 
@@ -138,7 +193,7 @@ Get-Content $log -Encoding UTF8 |
 先排除两个最常见的：
 
 1. **权限**：macOS 系统设置 → 隐私与安全性 → 屏幕录制，确认 HaxShot 是开的。如果开关看着是
-   开的却仍提示没权限（常见于每次重新安装后），在设置页点“重置授权记录”，或手动执行
+   开的却仍提示没权限（常见于每次重新安装后），在授权说明小窗口里点“重置授权记录”，或手动执行
    `tccutil reset ScreenCapture com.github.xiehanff.haxShot`，然后重新授权一次；
 2. **已经有截图在等着**：屏幕上有没关掉的框选浮层时，再按快捷键不会叠第二层，先 `Esc` 关掉。
 
